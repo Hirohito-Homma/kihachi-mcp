@@ -65,8 +65,8 @@
 
 - ProjectPlan からAudioRenderRequestを構築
 - Google Lyria adapterでInteractions API、MP3 decode、検証を実装
-- generate_audioを5番目のMCP Toolとして追加
-- `101 passed`、Ruff、FastMCP Tools (5)を確認済み
+- `generate_audio`をMCP Toolとして追加
+- `127 passed`、Ruff、FastMCP Tools (12)を確認済み
 
 ### ISSUE-0009 — Review Integration
 

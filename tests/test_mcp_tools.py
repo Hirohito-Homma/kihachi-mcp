@@ -4,6 +4,7 @@ from kihachi_mcp.tools import (
     generate_audio,
     generate_songspec,
     hello,
+    review_songspec,
 )
 
 
@@ -124,3 +125,11 @@ def test_generate_audio_blocks_without_google_credentials(
 
     assert result["status"] == "blocked"
     assert "API_KEY" in result["error"]
+
+
+def test_review_songspec_public_json() -> None:
+    spec = generate_songspec(genre="dub techno", length_minutes=5)
+
+    result = review_songspec(spec)
+
+    assert result == {"approved": True, "score": 1.0, "comments": []}

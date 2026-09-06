@@ -8,6 +8,7 @@
 - Typed Arrangement sections in ProjectPlan with opt-in MCP serialization
 - Plan-only AbletonProjectPlan adapter with deterministic track and locator mapping
 - ISSUE-0008 AudioRenderRequest、Google Lyria adapter、generate_audio Tool、artifact validation
+- ISSUE-0009 ReviewResult を返す `review_songspec` Tool
 
 ### Changed
 

@@ -68,6 +68,12 @@
 - generate_audioを5番目のMCP Toolとして追加
 - `101 passed`、Ruff、FastMCP Tools (5)を確認済み
 
+### ISSUE-0009 — Review Integration
+
+- 既存の Brain Review API を `review_songspec` MCP Tool として公開
+- SongSpec JSON を ReviewResult JSON へ変換
+- 外部APIなしのローカル検証を追加
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。
@@ -76,7 +82,9 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Google Lyria実機接続と成果物の運用検証
+1. Memory連携
+2. Orchestrator設計
+3. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針
 
@@ -85,6 +93,7 @@
 - `hello`
 - `generate_songspec`
 - `create_project_from_songspec`
+- `review_songspec`
 
 内部の dataclass / service は自由にリファクタしてよい。
 

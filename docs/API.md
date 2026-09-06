@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (5) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio`
+期待: Tools (6) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec`
 
 ---
 
@@ -150,3 +150,25 @@ status、task_id、artifact_path、sha256等を持つAudioRenderResult JSON。AP
 - `GEMINI_API_KEY`: 必須。Google AI APIキー。
 - `LYRIA_MODEL`: 任意。既定値は `lyria-3.5`。
 - `LYRIA_BASE_URL`: 任意。既定値はGoogle Gemini Interactions API。
+
+---
+
+## review_songspec
+
+SongSpec を ReviewService で検証し、ReviewResult を JSON で返す。外部APIやAbleton操作は行わない。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| songspec | dict | `generate_songspec` の出力JSON |
+
+### 出力
+
+```json
+{
+  "approved": true,
+  "score": 1.0,
+  "comments": []
+}
+```

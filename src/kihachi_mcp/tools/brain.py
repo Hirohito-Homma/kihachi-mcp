@@ -1,8 +1,8 @@
 from typing import Any
 
-from kihachi_mcp.services import SongService
+from kihachi_mcp.api import Brain
 
-_song_service = SongService()
+_brain = Brain()
 
 
 def generate_songspec(
@@ -12,8 +12,8 @@ def generate_songspec(
     length_minutes: float,
     mood: str,
 ) -> dict[str, Any]:
-    """Generate a SongSpec via SongService and return it as JSON."""
-    return _song_service.generate_songspec(
+    """Generate a SongSpec via Brain and return it as JSON."""
+    return _brain.generate_song(
         genre=genre,
         tempo=tempo,
         key=key,

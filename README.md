@@ -31,7 +31,7 @@ Review improves every iteration.
 | `hello` | 接続確認 |
 | `generate_songspec` | SongSpec を JSON で返す |
 | `create_project_from_songspec` | SongSpec から ProjectPlan を JSON で返す |
-| `create_ableton_plan` | ProjectPlan を Ableton 向け構造へ変換 |
+| `create_ableton_plan`, `generate_audio` | ProjectPlan を Ableton 向け構造へ変換 |
 詳細は [docs/API.md](docs/API.md)。
 
 ## 必要環境
@@ -51,7 +51,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (4) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`
+`fastmcp list` の期待値: Tools (5) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`, `generate_audio`
 
 ## Python package structure
 

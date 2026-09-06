@@ -23,7 +23,7 @@ The adapter owns the external REST lifecycle: submit, poll, download, validate e
 
 Credentials come from ACESTEP_API_KEY and optional ACESTEP_BASE_URL. They are never included in MCP arguments, JSON results, logs, or persisted plans. A submitted or progressing task is not a completed audio result.
 
-The first implementation remains additive. A future generate_audio MCP tool may expose this boundary, while the current four public tools remain unchanged. This issue defines the contract only; it does not call ACE-Step, write audio files, or execute Ableton.
+The first implementation remains additive. The additive generate_audio MCP tool exposes this boundary, while the original four public tools remain unchanged. This issue defines the contract only; it does not call ACE-Step, write audio files, or execute Ableton.
 
 ## Options Considered
 

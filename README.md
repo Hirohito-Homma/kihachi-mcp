@@ -35,7 +35,7 @@ Review improves every iteration.
 | `generate_audio` | ProjectPlan の対象トラックからGoogle Lyria音声を生成 |
 | `review_songspec` | SongSpec を検証し ReviewResult を返す |
 | `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
-| `search_memory` | ジャンル・Review品質・件数でMemoryを検索 |
+| `search_memory` | ジャンル・全文・Review品質・順位でMemoryを検索 |
 | `orchestrate_song` | 生成・Review・Memory・Project作成を一括実行 |
 
 Memoryを再起動後も保持する場合は、保存先を設定します。未設定なら従来どおりプロセス内のみです。

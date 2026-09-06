@@ -18,9 +18,13 @@ def search_memory(
     approved_only: bool = False,
     min_score: float = 0.0,
     limit: int | None = None,
+    query: str | None = None,
+    sort_by: str = "recent",
 ) -> list[dict[str, Any]]:
     """Search memory by genre and optional review quality filters."""
     return [
         entry.to_dict()
-        for entry in _brain.search_memory(genre, approved_only, min_score, limit)
+        for entry in _brain.search_memory(
+            genre, approved_only, min_score, limit, query, sort_by
+        )
     ]

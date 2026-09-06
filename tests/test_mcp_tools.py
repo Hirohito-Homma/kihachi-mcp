@@ -166,3 +166,7 @@ def test_orchestrate_song_accepts_review_failure_policy() -> None:
 
 def test_search_memory_supports_limit() -> None:
     assert len(search_memory("dub", limit=1)) == 1
+
+
+def test_search_memory_supports_text_query() -> None:
+    assert search_memory(query="dub", limit=1)[0]["genre"] == "dub techno"

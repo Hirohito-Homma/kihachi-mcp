@@ -96,9 +96,13 @@ class Brain:
         approved_only: bool = False,
         min_score: float = 0.0,
         limit: int | None = None,
+        query: str | None = None,
+        sort_by: str = "recent",
     ) -> list[MemoryEntry]:
         """Search remembered song decisions with optional quality filters."""
-        return self._memory.search(genre, approved_only, min_score, limit)
+        return self._memory.search(
+            genre, approved_only, min_score, limit, query, sort_by
+        )
 
     def orchestrate_song(
         self,

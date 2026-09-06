@@ -216,3 +216,22 @@ def test_memory_search_supports_quality_filters_and_limit() -> None:
     assert len(service.search("techno", approved_only=True)) == 1
     assert len(service.search("techno", min_score=0.8, limit=1)) == 1
     assert service.search("techno", limit=0) == []
+
+
+def test_memory_search_supports_text_query_and_score_sort() -> None:
+    from kihachi_mcp.services import MemoryService
+
+    service = MemoryService()
+    service.remember(
+        {"genre": "dub techno", "key": "D#m", "tracks": ["Kick"]},
+        {"approved": True, "score": 0.7, "comments": ["deep pad"]},
+    )
+    service.remember(
+        {"genre": "dub techno", "key": "Am", "tracks": ["Bass"]},
+        {"approved": True, "score": 0.9, "comments": []},
+    )
+
+    results = service.search(query="deep", sort_by="score")
+
+    assert len(results) == 1
+    assert results[0].songspec["key"] == "D#m"

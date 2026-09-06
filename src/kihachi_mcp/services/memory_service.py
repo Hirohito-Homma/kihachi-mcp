@@ -37,21 +37,47 @@ class MemoryService:
         approved_only: bool = False,
         min_score: float = 0.0,
         limit: int | None = None,
+        query: str | None = None,
+        sort_by: str = "recent",
     ) -> list[MemoryEntry]:
-        """Return entries filtered by genre, review quality, and result count."""
-        query = genre.strip().casefold() if genre else None
-        results = [
-            entry
-            for entry in self._entries
-            if (query is None or query in entry.genre.casefold())
-            and (
-                not approved_only
-                or (entry.review is not None and bool(entry.review.get("approved")))
+        """Filter memory and optionally rank entries by review score."""
+        genre_query = genre.strip().casefold() if genre else None
+        text_query = query.strip().casefold() if query else None
+        if sort_by not in {"recent", "score"}:
+            raise ValueError("sort_by must be 'recent' or 'score'")
+
+        def matches(entry: MemoryEntry) -> bool:
+            songspec = entry.songspec
+            searchable = " ".join(
+                [
+                    entry.genre,
+                    str(songspec.get("key", "")),
+                    " ".join(str(track) for track in songspec.get("tracks", [])),
+                    " ".join(
+                        str(comment)
+                        for comment in (entry.review or {}).get("comments", [])
+                    ),
+                ]
+            ).casefold()
+            return (
+                (genre_query is None or genre_query in entry.genre.casefold())
+                and (text_query is None or text_query in searchable)
+                and (
+                    not approved_only
+                    or (entry.review is not None and bool(entry.review.get("approved")))
+                )
+                and (
+                    entry.review is None
+                    or float(entry.review.get("score", 0)) >= min_score
+                )
             )
-            and (
-                entry.review is None or float(entry.review.get("score", 0)) >= min_score
+
+        results = [entry for entry in self._entries if matches(entry)]
+        if sort_by == "score":
+            results.sort(
+                key=lambda entry: float((entry.review or {}).get("score", 0)),
+                reverse=True,
             )
-        ]
         return results if limit is None else results[: max(0, limit)]
 
     def _load(self) -> list[MemoryEntry]:

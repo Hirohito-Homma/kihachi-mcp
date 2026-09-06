@@ -199,6 +199,8 @@ Memoryへ保存した曲をジャンルで検索する。ジャンルを省略�
 | approved_only | bool | Review合格だけに絞る。既定false |
 | min_score | float | Reviewスコアの下限。既定0 |
 | limit | int \| null | 最大件数。省略時は全件 |
+| query | str \| null | ジャンル・キー・トラック・コメントの横断検索 |
+| sort_by | str | `recent`（既定）または`score` |
 
 
 ---

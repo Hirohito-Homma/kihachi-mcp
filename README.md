@@ -31,7 +31,8 @@ Review improves every iteration.
 | `hello` | 接続確認 |
 | `generate_songspec` | SongSpec を JSON で返す |
 | `create_project_from_songspec` | SongSpec から ProjectPlan を JSON で返す |
-| `create_ableton_plan`, `generate_audio` | ProjectPlan を Ableton 向け構造へ変換 |
+| `create_ableton_plan` | ProjectPlan を Ableton 向け構造へ変換 |
+| `generate_audio` | ProjectPlan の対象トラックからGoogle Lyria音声を生成 |
 詳細は [docs/API.md](docs/API.md)。
 
 ## 必要環境
@@ -43,6 +44,13 @@ Review improves every iteration.
 uv sync --group dev
 ```
 
+`generate_audio`を使う場合は、Google AIのAPIキーを環境変数へ設定します。キーはTool入力やJSON出力へ渡しません。
+
+```bash
+export GEMINI_API_KEY="..."
+export LYRIA_MODEL="lyria-3.5"
+```
+
 ## 確認
 
 ```bash
@@ -51,7 +59,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (5) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`, `generate_audio`
+`fastmcp list` の期待値: Tools (5) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio`
 
 ## Python package structure
 

@@ -233,3 +233,12 @@ AbletonProjectPlanをLiveへ渡す前に静的検証する。Live接続・Set変
 ### 出力
 
 `ready`、`errors`、`warnings`、`plan`を含むJSON。
+
+
+---
+
+## request_live_execution
+
+Ableton Liveの変更を実行せず、承認待ちの1回分の実行要求を返す。検証エラー時は`blocked`、正常時は`approval_required`。
+
+出力は`status`、`target`、`action`、`mutation_count`、`approval_required`、`plan`、`errors`を含む。

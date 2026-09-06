@@ -7,6 +7,7 @@ from kihachi_mcp.models.ableton_plan import (
 from kihachi_mcp.models.arrangement import Arrangement
 from kihachi_mcp.models.audio_plan import AudioRenderRequest, AudioRenderResult
 from kihachi_mcp.models.genre_template import GenreTemplate
+from kihachi_mcp.models.live_execution import LiveExecutionRequest
 from kihachi_mcp.models.memory import MemoryEntry
 from kihachi_mcp.models.orchestration import OrchestrationResult
 from kihachi_mcp.models.project_plan import ProjectPlan
@@ -23,6 +24,7 @@ __all__ = [
     "AudioRenderRequest",
     "AudioRenderResult",
     "GenreTemplate",
+    "LiveExecutionRequest",
     "MemoryEntry",
     "OrchestrationResult",
     "ProjectPlan",

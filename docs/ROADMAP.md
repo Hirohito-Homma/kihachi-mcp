@@ -82,6 +82,12 @@
 - 未設定時はプロセス内、`KIHACHI_MEMORY_PATH`設定時はJSONへ原子的に永続化
 - 外部DBなしのままOrchestratorから差し替え可能な境界を確保
 
+### ISSUE-0013 — Live Execution Boundary
+
+- `request_live_execution`で承認待ちの1回分要求を作成
+- 検証エラーは`blocked`、正常時は`approval_required`
+- Live接続・変更は実行しない
+
 ### ISSUE-0012 — Ableton Integration Preparation
 
 - `prepare_ableton_handoff`でトラック重複・テンポ・Locator範囲を静的検証

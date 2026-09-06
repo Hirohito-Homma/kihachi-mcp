@@ -7,6 +7,7 @@ from kihachi_mcp.tools import (
     orchestrate_song,
     prepare_ableton_handoff,
     remember_song,
+    request_live_execution,
     review_songspec,
     search_memory,
 )
@@ -182,3 +183,14 @@ def test_prepare_ableton_handoff_public_json() -> None:
 
     assert result["ready"] is True
     assert result["errors"] == []
+
+
+def test_request_live_execution_public_json() -> None:
+    project = create_project_from_songspec(
+        generate_songspec("dub techno", length_minutes=5), include_arrangement=True
+    )
+
+    result = request_live_execution(project)
+
+    assert result["status"] == "approval_required"
+    assert result["mutation_count"] == 1

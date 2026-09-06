@@ -84,3 +84,30 @@ def test_ableton_handoff_reports_invalid_locator() -> None:
 
     assert result.ready is False
     assert "outside the project bars" in result.errors[0]
+
+
+def test_live_execution_request_requires_approval() -> None:
+    result = AbletonService().request_live_execution(_project_plan())
+
+    assert result.status == "approval_required"
+    assert result.approval_required is True
+    assert result.mutation_count == 1
+
+
+def test_live_execution_request_blocks_invalid_plan() -> None:
+    plan = _project_plan()
+    invalid = ProjectPlan(
+        project_name=plan.project_name,
+        genre=plan.genre,
+        tempo=plan.tempo,
+        key=plan.key,
+        length_minutes=plan.length_minutes,
+        bars=32,
+        tracks=plan.tracks,
+        arrangement=plan.arrangement,
+    )
+
+    result = AbletonService().request_live_execution(invalid)
+
+    assert result.status == "blocked"
+    assert result.approval_required is False

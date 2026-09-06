@@ -1,6 +1,6 @@
 from typing import Any
 
-from kihachi_mcp.models import AbletonHandoff, ProjectPlan
+from kihachi_mcp.models import AbletonHandoff, LiveExecutionRequest, ProjectPlan
 from kihachi_mcp.models.ableton_plan import (
     AbletonLocator,
     AbletonProjectPlan,
@@ -71,4 +71,19 @@ class AbletonService:
             warnings.append("project has no arrangement locators")
         return AbletonHandoff(
             ready=not errors, errors=errors, warnings=warnings, plan=plan
+        )
+
+    def request_live_execution(
+        self, project_plan: ProjectPlan | dict[str, Any]
+    ) -> LiveExecutionRequest:
+        """Create an approval-gated request without mutating Ableton Live."""
+        handoff = self.prepare_handoff(project_plan)
+        return LiveExecutionRequest(
+            status="approval_required" if handoff.ready else "blocked",
+            target="ableton_live",
+            action="apply_ableton_plan",
+            mutation_count=1,
+            approval_required=handoff.ready,
+            plan=handoff.plan,
+            errors=handoff.errors,
         )

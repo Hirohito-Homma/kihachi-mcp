@@ -1,0 +1,17 @@
+name: Melodic Techno
+default_bpm: 122
+default_key: Fm
+mood: Uplifting
+tracks:
+  - Kick
+  - Bass
+  - Arp
+  - Pad
+  - Lead
+  - FX
+arrangement:
+  intro: 32
+  build: 32
+  drop: 64
+  breakdown: 32
+  outro: 16

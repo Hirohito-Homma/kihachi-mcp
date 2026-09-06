@@ -1,0 +1,16 @@
+name: Dub Techno
+default_bpm: 110
+default_key: D#m
+mood: Deep
+tracks:
+  - Kick
+  - Bass
+  - Dub Chords
+  - Pad
+  - FX
+arrangement:
+  intro: 32
+  build: 32
+  drop: 64
+  breakdown: 16
+  outro: 16

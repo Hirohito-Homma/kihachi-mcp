@@ -1,0 +1,16 @@
+name: Tech House
+default_bpm: 124
+default_key: Am
+mood: Driving
+tracks:
+  - Kick
+  - Bass
+  - Hats
+  - Stab
+  - FX
+arrangement:
+  intro: 32
+  groove: 64
+  drop: 32
+  breakdown: 16
+  outro: 16

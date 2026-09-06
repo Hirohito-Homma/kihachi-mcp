@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=4.0.3",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -25,3 +26,11 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 src = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kihachi_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/kihachi_mcp/resources/genres/dub_techno.yaml" = "kihachi_mcp/resources/genres/dub_techno.yaml"
+"src/kihachi_mcp/resources/genres/tech_house.yaml" = "kihachi_mcp/resources/genres/tech_house.yaml"
+"src/kihachi_mcp/resources/genres/melodic_techno.yaml" = "kihachi_mcp/resources/genres/melodic_techno.yaml"

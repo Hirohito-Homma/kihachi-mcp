@@ -18,7 +18,7 @@ def test_generate_songspec_public_json_is_unchanged() -> None:
         "key": "D#m",
         "length_minutes": 5,
         "bars": 160,
-        "tracks": ["Kick", "Bass", "Dub Chords", "Lead", "FX"],
+        "tracks": ["Kick", "Bass", "Dub Chords", "Pad", "FX"],
     }
 
 
@@ -42,7 +42,7 @@ def test_create_project_from_songspec_public_json_is_unchanged() -> None:
             {"name": "Kick", "type": "MIDI", "color": "Red"},
             {"name": "Bass", "type": "MIDI", "color": "Blue"},
             {"name": "Dub Chords", "type": "MIDI", "color": "Purple"},
-            {"name": "Lead", "type": "MIDI", "color": "Green"},
+            {"name": "Pad", "type": "MIDI", "color": "Gray"},
             {"name": "FX", "type": "Audio", "color": "Gray"},
         ],
     }

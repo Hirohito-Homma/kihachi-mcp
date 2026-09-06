@@ -4,6 +4,7 @@ from kihachi_mcp.models.ableton_plan import (
     AbletonTrackPlan,
 )
 from kihachi_mcp.models.arrangement import Arrangement
+from kihachi_mcp.models.audio_plan import AudioRenderRequest, AudioRenderResult
 from kihachi_mcp.models.genre_template import GenreTemplate
 from kihachi_mcp.models.project_plan import ProjectPlan
 from kihachi_mcp.models.review_result import ReviewResult
@@ -15,6 +16,8 @@ __all__ = [
     "AbletonProjectPlan",
     "AbletonTrackPlan",
     "Arrangement",
+    "AudioRenderRequest",
+    "AudioRenderResult",
     "GenreTemplate",
     "ProjectPlan",
     "ReviewResult",

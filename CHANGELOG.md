@@ -11,12 +11,16 @@
 - Plan-only AbletonProjectPlan adapter with deterministic track and locator mapping
 - ISSUE-0008 AudioRenderRequest、Google Lyria adapter、generate_audio Tool、artifact validation
 - ISSUE-0009 ReviewResult を返す `review_songspec` Tool
+- Memory entry、JSON永続化、検索フィルターを備えた `remember_song` / `search_memory` Tools
+- Review・Memory・Project作成を統合する `orchestrate_song` Tool
+- Ableton handoff、承認ゲート、実行アダプターのLive連携境界
 
 ### Changed
 
 - SongSpec tempo, key, and tracks can now come from genre templates when omitted
 - `generate_songspec` keeps its existing arguments and JSON shape while allowing knowledge-backed inputs to be omitted
 - Brain now derives ProjectPlan arrangements from genre knowledge
+- Ableton連携は静的計画と承認済み実行境界に分離し、未設定時は実機変更を行わない
 
 ### Fixed
 

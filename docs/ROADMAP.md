@@ -82,6 +82,11 @@
 - 未設定時はプロセス内、`KIHACHI_MEMORY_PATH`設定時はJSONへ原子的に永続化
 - 外部DBなしのままOrchestratorから差し替え可能な境界を確保
 
+### ISSUE-0015 — GitHub Actions CI
+
+- push / pull requestでpytest、Ruff、FastMCP登録確認を実行
+- Lyria実機やAbleton Liveには接続しない
+
 ### ISSUE-0014 — Ableton Execution Adapter
 
 - 承認状態を検査し、`approval_required` / `blocked` / `unavailable`を区別

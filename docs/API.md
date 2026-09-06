@@ -195,7 +195,10 @@ Memoryへ保存した曲をジャンルで検索する。ジャンルを省略�
 
 | 名前 | 型 | 説明 |
 | --- | --- | --- |
-| genre | str \| null | 大文字小文字を無視した完全一致。省略可 |
+| genre | str \| null | 大文字小文字を無視した部分一致。省略可 |
+| approved_only | bool | Review合格だけに絞る。既定false |
+| min_score | float | Reviewスコアの下限。既定0 |
+| limit | int \| null | 最大件数。省略時は全件 |
 
 
 ---

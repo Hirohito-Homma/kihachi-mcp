@@ -90,9 +90,15 @@ class Brain:
         review_dict = review.to_dict() if isinstance(review, ReviewResult) else review
         return self._memory.remember(spec.to_dict(), review_dict)
 
-    def search_memory(self, genre: str | None = None) -> list[MemoryEntry]:
-        """Search remembered song decisions by genre."""
-        return self._memory.search(genre)
+    def search_memory(
+        self,
+        genre: str | None = None,
+        approved_only: bool = False,
+        min_score: float = 0.0,
+        limit: int | None = None,
+    ) -> list[MemoryEntry]:
+        """Search remembered song decisions with optional quality filters."""
+        return self._memory.search(genre, approved_only, min_score, limit)
 
     def orchestrate_song(
         self,

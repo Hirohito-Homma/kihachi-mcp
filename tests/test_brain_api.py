@@ -199,3 +199,20 @@ def test_orchestrator_can_stop_after_failed_review() -> None:
     assert result.review.approved is False
     assert result.project is None
     assert result.memory.review == result.review.to_dict()
+
+
+def test_memory_search_supports_quality_filters_and_limit() -> None:
+    from kihachi_mcp.services import MemoryService
+
+    service = MemoryService()
+    service.remember(
+        {"genre": "dub techno", "tempo": 110}, {"approved": True, "score": 0.9}
+    )
+    service.remember(
+        {"genre": "melodic techno", "tempo": 124}, {"approved": False, "score": 0.2}
+    )
+
+    assert len(service.search("techno")) == 2
+    assert len(service.search("techno", approved_only=True)) == 1
+    assert len(service.search("techno", min_score=0.8, limit=1)) == 1
+    assert service.search("techno", limit=0) == []

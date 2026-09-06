@@ -31,12 +31,28 @@ class MemoryService:
         self._save()
         return entry
 
-    def search(self, genre: str | None = None) -> list[MemoryEntry]:
-        """Return remembered entries, optionally filtered by genre."""
-        if not genre:
-            return list(self._entries)
-        query = genre.strip().casefold()
-        return [entry for entry in self._entries if entry.genre.casefold() == query]
+    def search(
+        self,
+        genre: str | None = None,
+        approved_only: bool = False,
+        min_score: float = 0.0,
+        limit: int | None = None,
+    ) -> list[MemoryEntry]:
+        """Return entries filtered by genre, review quality, and result count."""
+        query = genre.strip().casefold() if genre else None
+        results = [
+            entry
+            for entry in self._entries
+            if (query is None or query in entry.genre.casefold())
+            and (
+                not approved_only
+                or (entry.review is not None and bool(entry.review.get("approved")))
+            )
+            and (
+                entry.review is None or float(entry.review.get("score", 0)) >= min_score
+            )
+        ]
+        return results if limit is None else results[: max(0, limit)]
 
     def _load(self) -> list[MemoryEntry]:
         if self._storage_path is None or not self._storage_path.exists():

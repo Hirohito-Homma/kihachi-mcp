@@ -162,3 +162,7 @@ def test_orchestrate_song_accepts_review_failure_policy() -> None:
 
     assert result["review"]["approved"] is True
     assert result["project"] is not None
+
+
+def test_search_memory_supports_limit() -> None:
+    assert len(search_memory("dub", limit=1)) == 1

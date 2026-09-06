@@ -7,12 +7,12 @@ _brain = Brain()
 
 def generate_songspec(
     genre: str,
-    tempo: int,
-    key: str,
-    length_minutes: float,
-    mood: str,
+    tempo: int | None = None,
+    key: str | None = None,
+    length_minutes: float = 5.0,
+    mood: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a SongSpec via Brain and return it as JSON."""
+    """Generate a SongSpec via Brain, filling omitted values from knowledge."""
     return _brain.generate_song(
         genre=genre,
         tempo=tempo,

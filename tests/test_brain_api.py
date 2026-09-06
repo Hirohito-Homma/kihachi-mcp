@@ -91,3 +91,23 @@ def test_default_arrangement() -> None:
     ]
     assert isinstance(sections[0], Arrangement)
     assert sum(section.length_bars for section in sections) == 160
+
+
+def test_generate_song_falls_back_to_defaults() -> None:
+    spec = _brain().generate_song(
+        genre="dub techno",
+        tempo=0,
+        key="",
+        length_minutes=5,
+        mood="hypnotic",
+    )
+
+    assert spec.tempo == 110
+    assert spec.key == "D#m"
+
+
+def test_generate_song_can_omit_knowledge_backed_inputs() -> None:
+    spec = _brain().generate_song(genre="dub techno", length_minutes=5)
+
+    assert spec.tempo == 110
+    assert spec.key == "D#m"

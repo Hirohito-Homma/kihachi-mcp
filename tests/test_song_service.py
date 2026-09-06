@@ -176,3 +176,24 @@ def test_generate_uses_tech_house_tracks() -> None:
     )
 
     assert spec.tracks == ["Kick", "Bass", "Hats", "Stab", "FX"]
+
+
+def test_generate_falls_back_to_genre_defaults() -> None:
+    spec = SongService().generate(
+        genre="dub techno",
+        tempo=0,
+        key="  ",
+        length_minutes=5,
+        mood="hypnotic",
+    )
+
+    assert spec.tempo == 110
+    assert spec.key == "D#m"
+
+
+def test_generate_can_omit_knowledge_backed_inputs() -> None:
+    spec = SongService().generate(genre="dub techno", length_minutes=5)
+
+    assert spec.tempo == 110
+    assert spec.key == "D#m"
+    assert spec.tracks == _DUB_TRACKS

@@ -38,21 +38,25 @@ class SongService:
     def generate(
         self,
         genre: str,
-        tempo: int,
-        key: str,
-        length_minutes: float,
-        mood: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        length_minutes: float = 5.0,
+        mood: str | None = None,
     ) -> SongSpec:
-        """Generate a SongSpec using genre knowledge for tracks.
+        """Generate a SongSpec using genre knowledge for defaults and tracks.
 
         mood is accepted as creative brief context and is not stored on the spec.
         """
         _ = mood
         template = self._knowledge.genre(genre)
+        resolved_tempo = (
+            tempo if tempo is not None and tempo > 0 else template.default_bpm
+        )
+        resolved_key = key.strip() if key and key.strip() else template.default_key
         return SongSpec(
             genre=genre,
-            tempo=tempo,
-            key=key,
+            tempo=resolved_tempo,
+            key=resolved_key,
             length_minutes=length_minutes,
             bars=self.bars_from_minutes(length_minutes),
             tracks=list(template.tracks),
@@ -61,10 +65,10 @@ class SongService:
     def generate_songspec(
         self,
         genre: str,
-        tempo: int,
-        key: str,
-        length_minutes: float,
-        mood: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        length_minutes: float = 5.0,
+        mood: str | None = None,
     ) -> SongSpec:
         """Compatibility wrapper for generate()."""
         return self.generate(

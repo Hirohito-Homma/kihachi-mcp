@@ -22,6 +22,17 @@ def test_generate_songspec_public_json_is_unchanged() -> None:
     }
 
 
+def test_generate_songspec_uses_knowledge_defaults_when_omitted() -> None:
+    assert generate_songspec(genre="dub techno", length_minutes=5) == {
+        "genre": "dub techno",
+        "tempo": 110,
+        "key": "D#m",
+        "length_minutes": 5,
+        "bars": 160,
+        "tracks": ["Kick", "Bass", "Dub Chords", "Pad", "FX"],
+    }
+
+
 def test_create_project_from_songspec_public_json_is_unchanged() -> None:
     spec = generate_songspec(
         genre="dub techno",

@@ -20,10 +20,10 @@ class Brain:
     def generate_song(
         self,
         genre: str,
-        tempo: int,
-        key: str,
-        length_minutes: float,
-        mood: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        length_minutes: float = 5.0,
+        mood: str | None = None,
     ) -> SongSpec:
         """Create a SongSpec through SongService."""
         return self._songs.generate(

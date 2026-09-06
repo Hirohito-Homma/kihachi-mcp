@@ -30,17 +30,17 @@ Hello from KIHACHI MCP
 
 ## generate_songspec
 
-曲の仕様（SongSpec）を生成する。Brain → Knowledge Engine → SongService。トラックはジャンル YAML から取る。未知のジャンルはエラー。
+曲の仕様（SongSpec）を生成する。Brain → Knowledge Engine → SongService。省略したテンポとキー、およびトラックはジャンル YAML から補完する。未知のジャンルはエラー。
 
 ### 入力
 
 | 名前 | 型 | 説明 |
 | --- | --- | --- |
 | genre | str | ジャンル |
-| tempo | int | BPM |
-| key | str | キー（例: `D#m`） |
-| length_minutes | float | 尺（分） |
-| mood | str | ムード。仕様には保存されない |
+| tempo | int \| null | BPM。省略、null、0以下ならジャンル既定値 |
+| key | str \| null | キー（例: `D#m`）。省略または空文字ならジャンル既定値 |
+| length_minutes | float | 尺（分）。省略時は5分 |
+| mood | str \| null | 任意のムード。仕様には保存されない |
 
 ### 出力
 

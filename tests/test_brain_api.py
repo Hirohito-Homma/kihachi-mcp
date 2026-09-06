@@ -170,3 +170,15 @@ def test_orchestrate_song_runs_complete_workflow() -> None:
     assert result.review.approved is True
     assert result.memory.review == result.review.to_dict()
     assert len(result.project.arrangement) == 5
+
+
+def test_memory_persists_entries_to_json(tmp_path) -> None:
+    from kihachi_mcp.services import MemoryService
+
+    path = tmp_path / "memory.json"
+    spec = _brain().generate_song(genre="dub techno", length_minutes=5)
+
+    MemoryService(path).remember(spec.to_dict())
+    restored = MemoryService(path)
+
+    assert restored.search("dub techno")[0].songspec == spec.to_dict()

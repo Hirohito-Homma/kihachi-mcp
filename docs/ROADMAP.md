@@ -79,7 +79,8 @@
 
 - `MemoryEntry` と `MemoryService` を追加
 - `remember_song` / `search_memory` をMCP Toolとして公開
-- 外部DBなしのプロセス内MemoryとしてOrchestratorから差し替え可能な境界を確保
+- 未設定時はプロセス内、`KIHACHI_MEMORY_PATH`設定時はJSONへ原子的に永続化
+- 外部DBなしのままOrchestratorから差し替え可能な境界を確保
 
 ### ISSUE-0011 — Orchestrator Design
 

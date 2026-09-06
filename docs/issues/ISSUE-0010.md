@@ -14,7 +14,7 @@ Keep generated song decisions and review results available to the Brain during t
 SongSpec JSON + ReviewResult JSON -> MemoryService -> MemoryEntry JSON
 ```
 
-The default implementation is process-local and deterministic. It has no external database, file mutation, or API dependency. The service boundary can be replaced by a persistent repository in a later phase.
+The default implementation is process-local and deterministic. When `KIHACHI_MEMORY_PATH` is set, entries are loaded from and atomically saved to a JSON file. The service boundary can be replaced by another repository later.
 
 ## Public tools
 

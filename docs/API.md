@@ -178,7 +178,7 @@ SongSpec を ReviewService で検証し、ReviewResult を JSON で返す。外�
 
 ## remember_song
 
-SongSpec と任意の ReviewResult をMCPプロセス内のMemoryへ保存する。外部DBやファイルは使わず、サーバー再起動で消える。
+SongSpec と任意の ReviewResult をMemoryへ保存する。`KIHACHI_MEMORY_PATH`未設定時はプロセス内のみ、設定時はJSONファイルへ原子的に保存する。
 
 ### 入力
 

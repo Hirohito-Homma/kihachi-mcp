@@ -37,6 +37,12 @@ Review improves every iteration.
 | `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
 | `search_memory` | ジャンルでプロセス内Memoryを検索 |
 | `orchestrate_song` | 生成・Review・Memory・Project作成を一括実行 |
+
+Memoryを再起動後も保持する場合は、保存先を設定します。未設定なら従来どおりプロセス内のみです。
+
+```bash
+export KIHACHI_MEMORY_PATH="$HOME/.kihachi/memory.json"
+```
 詳細は [docs/API.md](docs/API.md)。
 
 ## 必要環境

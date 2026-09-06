@@ -51,6 +51,8 @@ export GEMINI_API_KEY="..."
 export LYRIA_MODEL="lyria-3.5"
 ```
 
+設定例は `.env.example` を参照してください。実キーを `.env.example` やGitへ保存しないでください。
+
 ## 確認
 
 ```bash

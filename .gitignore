@@ -25,3 +25,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local credentials
+.env

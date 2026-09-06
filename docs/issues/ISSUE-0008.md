@@ -2,7 +2,7 @@
 
 # Audio Tool
 
-Status: Design accepted
+Status: Done
 
 Priority: High
 
@@ -42,10 +42,10 @@ Authentication, quota, timeout, unavailable backend, invalid response, and downl
 
 ## Non-goals
 
-- No ACE-Step network call in the current issue.
-- No audio file generation or persistence in the current issue.
-- No Live API, subprocess, MIDI, or automatic clip placement.
-- No change to the existing four MCP tool names or JSON shapes.
+- No live ACE-Step credentials or production backend verification in CI.
+- No Ableton Live API, subprocess, MIDI, or automatic clip placement.
+- No automatic adoption of generated audio into an Ableton set.
+- Existing four MCP tool names and JSON shapes remain unchanged; generate_audio is additive.
 
 ## Acceptance Criteria
 

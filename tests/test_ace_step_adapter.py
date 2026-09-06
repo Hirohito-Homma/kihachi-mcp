@@ -47,3 +47,23 @@ def test_adapter_returns_verified_receipt_without_provider_secrets(
     assert output.read_bytes() == b"wav-bytes"
     assert "secret" not in str(result.to_dict())
     assert calls[0][2]["Authorization"] == "Bearer secret"
+
+
+def test_adapter_rejects_unexpected_duration(tmp_path: Path) -> None:
+    def fake_http(method: str, url: str, headers: dict[str, str], body: bytes | None):
+        if url.endswith("release_task"):
+            return 200, b'{"task_id":"task-1"}', {}
+        if url.endswith("query_result"):
+            return (
+                200,
+                b'{"status":"succeeded","audio_url":"http://127.0.0.1:8001/bass.wav","duration_seconds":12}',
+                {},
+            )
+        return 200, b"wav-bytes", {}
+
+    result = AceStepAdapter(api_key="secret", http_call=fake_http).render(
+        request(), tmp_path / "bass.wav"
+    )
+
+    assert result.status == "failed"
+    assert result.error == "audio duration does not match request"

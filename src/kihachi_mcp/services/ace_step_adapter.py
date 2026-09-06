@@ -66,6 +66,14 @@ class AceStepAdapter:
                     task_id=task_id,
                     error="audio URL is outside ACE-Step base URL",
                 )
+            duration_seconds = float(result.get("duration_seconds") or 0)
+            expected_seconds = request.length_minutes * 60
+            if duration_seconds and abs(duration_seconds - expected_seconds) > 1:
+                return AudioRenderResult(
+                    status="failed",
+                    task_id=task_id,
+                    error="audio duration does not match request",
+                )
             path = Path(output_path)
             status, body, _ = self._http_call("GET", artifact_url, {}, None)
             if status >= 400 or not body:
@@ -79,7 +87,7 @@ class AceStepAdapter:
                 status="succeeded",
                 task_id=task_id,
                 artifact_path=str(path),
-                duration_seconds=float(result.get("duration_seconds") or 0),
+                duration_seconds=duration_seconds,
                 sample_rate=int(result.get("sample_rate") or 0),
                 channels=int(result.get("channels") or 0),
                 sha256=digest,

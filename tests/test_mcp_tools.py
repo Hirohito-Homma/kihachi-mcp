@@ -4,7 +4,9 @@ from kihachi_mcp.tools import (
     generate_audio,
     generate_songspec,
     hello,
+    remember_song,
     review_songspec,
+    search_memory,
 )
 
 
@@ -133,3 +135,12 @@ def test_review_songspec_public_json() -> None:
     result = review_songspec(spec)
 
     assert result == {"approved": True, "score": 1.0, "comments": []}
+
+
+def test_memory_tools_share_process_store() -> None:
+    spec = generate_songspec(genre="dub techno", length_minutes=5)
+
+    remembered = remember_song(spec)
+
+    assert remembered["genre"] == "dub techno"
+    assert search_memory("dub techno")[-1]["songspec"] == spec

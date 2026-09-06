@@ -70,9 +70,16 @@
 
 ### ISSUE-0009 — Review Integration
 
+
 - 既存の Brain Review API を `review_songspec` MCP Tool として公開
 - SongSpec JSON を ReviewResult JSON へ変換
 - 外部APIなしのローカル検証を追加
+
+### ISSUE-0010 — Memory Integration
+
+- `MemoryEntry` と `MemoryService` を追加
+- `remember_song` / `search_memory` をMCP Toolとして公開
+- 外部DBなしのプロセス内MemoryとしてOrchestratorから差し替え可能な境界を確保
 
 ## 進行中
 
@@ -82,8 +89,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Memory連携
-2. Orchestrator設計
+1. Orchestrator設計
 3. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針

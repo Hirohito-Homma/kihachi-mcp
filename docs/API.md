@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (6) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec`
+期待: Tools (8) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory`
 
 ---
 
@@ -172,3 +172,27 @@ SongSpec を ReviewService で検証し、ReviewResult を JSON で返す。外�
   "comments": []
 }
 ```
+
+
+---
+
+## remember_song
+
+SongSpec と任意の ReviewResult をMCPプロセス内のMemoryへ保存する。外部DBやファイルは使わず、サーバー再起動で消える。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| songspec | dict | SongSpec JSON |
+| review | dict \| null | 任意のReviewResult JSON |
+
+## search_memory
+
+Memoryへ保存した曲をジャンルで検索する。ジャンルを省略すると全件を返す。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| genre | str \| null | 大文字小文字を無視した完全一致。省略可 |

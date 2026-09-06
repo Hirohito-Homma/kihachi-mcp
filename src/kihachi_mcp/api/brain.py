@@ -1,8 +1,19 @@
 from typing import Any
 
 from kihachi_mcp.knowledge import UnknownGenreError
-from kihachi_mcp.models import Arrangement, ProjectPlan, ReviewResult, SongSpec
-from kihachi_mcp.services import ProjectService, ReviewService, SongService
+from kihachi_mcp.models import (
+    Arrangement,
+    MemoryEntry,
+    ProjectPlan,
+    ReviewResult,
+    SongSpec,
+)
+from kihachi_mcp.services import (
+    MemoryService,
+    ProjectService,
+    ReviewService,
+    SongService,
+)
 
 
 class Brain:
@@ -13,10 +24,12 @@ class Brain:
         song_service: SongService | None = None,
         project_service: ProjectService | None = None,
         review_service: ReviewService | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self._songs = song_service or SongService()
         self._projects = project_service or ProjectService()
         self._reviews = review_service or ReviewService(self._songs)
+        self._memory = memory_service or MemoryService()
 
     def generate_song(
         self,
@@ -58,6 +71,24 @@ class Brain:
             else self._songs.from_dict(songspec)
         )
         return self._reviews.review_songspec(spec)
+
+    def remember_song(
+        self,
+        songspec: SongSpec | dict[str, Any],
+        review: ReviewResult | dict[str, Any] | None = None,
+    ) -> MemoryEntry:
+        """Remember a SongSpec and optional review result."""
+        spec = (
+            songspec
+            if isinstance(songspec, SongSpec)
+            else self._songs.from_dict(songspec)
+        )
+        review_dict = review.to_dict() if isinstance(review, ReviewResult) else review
+        return self._memory.remember(spec.to_dict(), review_dict)
+
+    def search_memory(self, genre: str | None = None) -> list[MemoryEntry]:
+        """Search remembered song decisions by genre."""
+        return self._memory.search(genre)
 
     def default_tracks(self, genre: str) -> list[str]:
         """Return default tracks for a genre."""

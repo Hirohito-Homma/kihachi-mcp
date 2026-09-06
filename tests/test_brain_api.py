@@ -143,3 +143,21 @@ def test_create_project_preserves_unknown_genre_compatibility() -> None:
 
     assert plan.genre == "custom"
     assert plan.arrangement == []
+
+
+def test_memory_remembers_and_searches_by_genre() -> None:
+    brain = _brain()
+    spec = brain.generate_song(genre="dub techno", length_minutes=5)
+
+    entry = brain.remember_song(spec, brain.review_song(spec))
+
+    assert entry.genre == "dub techno"
+    assert brain.search_memory("DUB TECHNO")[0].to_dict()["review"]["approved"] is True
+
+
+def test_memory_isolated_between_brains() -> None:
+    spec = _brain().generate_song(genre="dub techno", length_minutes=5)
+    first = _brain()
+    first.remember_song(spec)
+
+    assert _brain().search_memory() == []

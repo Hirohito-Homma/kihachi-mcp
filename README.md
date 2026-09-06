@@ -34,6 +34,8 @@ Review improves every iteration.
 | `create_ableton_plan` | ProjectPlan を Ableton 向け構造へ変換 |
 | `generate_audio` | ProjectPlan の対象トラックからGoogle Lyria音声を生成 |
 | `review_songspec` | SongSpec を検証し ReviewResult を返す |
+| `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
+| `search_memory` | ジャンルでプロセス内Memoryを検索 |
 詳細は [docs/API.md](docs/API.md)。
 
 ## 必要環境
@@ -62,7 +64,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (6) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec`
+`fastmcp list` の期待値: Tools (8) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory`
 
 ## Python package structure
 

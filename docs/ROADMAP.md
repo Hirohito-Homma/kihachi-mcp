@@ -63,8 +63,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. DAW Adapter — ProjectPlan を Ableton など外部ツールへ渡す
-2. Audio Tool — ACE-Step など生成系と連携する
+1. Audio Tool — ACE-Step など生成系と連携する
 
 ## 互換方針
 
@@ -79,3 +78,9 @@
 ## 長期フェーズ
 
 [VISION.md](VISION.md) の Phase 1–6。いまは Phase 1（Brain Foundation）。
+
+### ISSUE-0007 — DAW Adapter
+
+- ProjectPlan を AbletonProjectPlan へ変換
+- TrackSpec を Ableton track、Arrangement を locator へ変換
+- Live操作やMIDI生成は行わない

@@ -1,4 +1,9 @@
-from kihachi_mcp.tools import create_project_from_songspec, generate_songspec, hello
+from kihachi_mcp.tools import (
+    create_ableton_plan,
+    create_project_from_songspec,
+    generate_songspec,
+    hello,
+)
 
 
 def test_hello_is_unchanged() -> None:
@@ -74,3 +79,33 @@ def test_create_project_can_include_arrangement() -> None:
         {"name": "Breakdown", "start_bar": 129, "length_bars": 16},
         {"name": "Outro", "start_bar": 145, "length_bars": 16},
     ]
+
+
+def test_create_ableton_plan_public_json() -> None:
+    project = create_project_from_songspec(
+        generate_songspec(genre="dub techno", length_minutes=5),
+        include_arrangement=True,
+    )
+
+    assert create_ableton_plan(project) == {
+        "set_name": "Untitled",
+        "genre": "dub techno",
+        "tempo": 110,
+        "key": "D#m",
+        "length_minutes": 5,
+        "bars": 160,
+        "tracks": [
+            {"name": "Kick", "track_type": "MIDI", "color": "Red"},
+            {"name": "Bass", "track_type": "MIDI", "color": "Blue"},
+            {"name": "Dub Chords", "track_type": "MIDI", "color": "Purple"},
+            {"name": "Pad", "track_type": "MIDI", "color": "Gray"},
+            {"name": "FX", "track_type": "Audio", "color": "Gray"},
+        ],
+        "locators": [
+            {"name": "Intro", "start_bar": 1, "length_bars": 32},
+            {"name": "Build", "start_bar": 33, "length_bars": 32},
+            {"name": "Drop", "start_bar": 65, "length_bars": 64},
+            {"name": "Breakdown", "start_bar": 129, "length_bars": 16},
+            {"name": "Outro", "start_bar": 145, "length_bars": 16},
+        ],
+    }

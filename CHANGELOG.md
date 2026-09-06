@@ -6,6 +6,7 @@
 
 - Knowledge Engine with Dub Techno, Tech House, and Melodic Techno YAML
 - Typed Arrangement sections in ProjectPlan with opt-in MCP serialization
+- Plan-only AbletonProjectPlan adapter with deterministic track and locator mapping
 
 ### Changed
 

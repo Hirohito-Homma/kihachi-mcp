@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (3) — `hello` / `generate_songspec` / `create_project_from_songspec`
+期待: Tools (4) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`
 
 ---
 
@@ -100,3 +100,27 @@ SongSpec から ProjectPlan を作る。内部で `SongSpec.from_dict()` → `Pr
 1. `hello` で接続を確認する
 2. `generate_songspec` で SongSpec を得る
 3. その JSON を `create_project_from_songspec` に渡す
+
+---
+
+## create_ableton_plan
+
+ProjectPlanをAbleton向けの非実行プランへ変換する。
+Live接続、ファイル書き込み、MIDI生成は行わない。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| project_plan | dict | ProjectPlan JSON。Arrangementを含める場合はオプトイン出力を渡す |
+
+### 出力
+
+```json
+{
+  "set_name": "Untitled",
+  "tempo": 110,
+  "tracks": [{"name": "Kick", "track_type": "MIDI", "color": "Red"}],
+  "locators": [{"name": "Intro", "start_bar": 1, "length_bars": 32}]
+}
+```

@@ -377,7 +377,7 @@ without breaking modularity.
 
 # Current Brain MCP (this repository)
 
-This repo is Phase 1 Brain Foundation. Public tools remain `hello`, `generate_songspec`, and `create_project_from_songspec`. Details: [API.md](API.md).
+This repo is Phase 1 Brain Foundation. Public tools are `hello`, `generate_songspec`, `create_project_from_songspec`, and `create_ableton_plan`. The Ableton adapter is plan-only. Details: [API.md](API.md).
 
 ## Current services
 

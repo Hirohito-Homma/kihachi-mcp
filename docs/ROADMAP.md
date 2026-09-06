@@ -81,6 +81,12 @@
 - `remember_song` / `search_memory` をMCP Toolとして公開
 - 外部DBなしのプロセス内MemoryとしてOrchestratorから差し替え可能な境界を確保
 
+### ISSUE-0011 — Orchestrator Design
+
+- `generate_song` → Review → Memory → Project作成の順序を固定
+- `OrchestrationResult`で一連の結果をJSON化
+- `orchestrate_song`を追加し、既存Toolの契約は維持
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。
@@ -89,7 +95,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Orchestrator設計
+1. Google Lyria実機接続と成果物の運用検証
 3. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針

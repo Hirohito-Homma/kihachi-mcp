@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (8) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory`
+期待: Tools (9) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song
 
 ---
 
@@ -196,3 +196,18 @@ Memoryへ保存した曲をジャンルで検索する。ジャンルを省略�
 | 名前 | 型 | 説明 |
 | --- | --- | --- |
 | genre | str \| null | 大文字小文字を無視した完全一致。省略可 |
+
+
+---
+
+## orchestrate_song
+
+生成・Review・Memory保存・ProjectPlan作成を固定順序で実行する統合Tool。外部APIやAbleton操作は行わない。
+
+### 入力
+
+`generate_songspec`と同じ`genre`、`tempo`、`key`、`length_minutes`、`mood`を受け取る。
+
+### 出力
+
+`songspec`、`review`、`memory`、`project`を含むJSONを返す。`project`はArrangementを含む。

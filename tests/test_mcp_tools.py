@@ -4,6 +4,7 @@ from kihachi_mcp.tools import (
     generate_audio,
     generate_songspec,
     hello,
+    orchestrate_song,
     remember_song,
     review_songspec,
     search_memory,
@@ -144,3 +145,11 @@ def test_memory_tools_share_process_store() -> None:
 
     assert remembered["genre"] == "dub techno"
     assert search_memory("dub techno")[-1]["songspec"] == spec
+
+
+def test_orchestrate_song_public_json() -> None:
+    result = orchestrate_song("dub techno", length_minutes=5)
+
+    assert result["songspec"]["tempo"] == 110
+    assert result["review"]["approved"] is True
+    assert result["project"]["arrangement"][0]["name"] == "Intro"

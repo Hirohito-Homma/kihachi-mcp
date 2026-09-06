@@ -161,3 +161,12 @@ def test_memory_isolated_between_brains() -> None:
     first.remember_song(spec)
 
     assert _brain().search_memory() == []
+
+
+def test_orchestrate_song_runs_complete_workflow() -> None:
+    result = _brain().orchestrate_song("dub techno", length_minutes=5)
+
+    assert result.songspec.tempo == 110
+    assert result.review.approved is True
+    assert result.memory.review == result.review.to_dict()
+    assert len(result.project.arrangement) == 5

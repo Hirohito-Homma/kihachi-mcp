@@ -6,6 +6,7 @@ from kihachi_mcp.tools import (
     generate_audio,
     generate_songspec,
     hello,
+    orchestrate_song,
     remember_song,
     review_songspec,
     search_memory,
@@ -20,6 +21,7 @@ mcp.add_tool(generate_audio)
 mcp.add_tool(review_songspec)
 mcp.add_tool(remember_song)
 mcp.add_tool(search_memory)
+mcp.add_tool(orchestrate_song)
 
 
 def main() -> None:

@@ -10,6 +10,7 @@ from kihachi_mcp.models import (
 )
 from kihachi_mcp.services import (
     MemoryService,
+    Orchestrator,
     ProjectService,
     ReviewService,
     SongService,
@@ -30,6 +31,9 @@ class Brain:
         self._projects = project_service or ProjectService()
         self._reviews = review_service or ReviewService(self._songs)
         self._memory = memory_service or MemoryService()
+        self._orchestrator = Orchestrator(
+            self._songs, self._reviews, self._memory, self._projects
+        )
 
     def generate_song(
         self,
@@ -89,6 +93,23 @@ class Brain:
     def search_memory(self, genre: str | None = None) -> list[MemoryEntry]:
         """Search remembered song decisions by genre."""
         return self._memory.search(genre)
+
+    def orchestrate_song(
+        self,
+        genre: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        length_minutes: float = 5.0,
+        mood: str | None = None,
+    ):
+        """Run the complete local song-production workflow."""
+        return self._orchestrator.generate_song(
+            genre=genre,
+            tempo=tempo,
+            key=key,
+            length_minutes=length_minutes,
+            mood=mood,
+        )
 
     def default_tracks(self, genre: str) -> list[str]:
         """Return default tracks for a genre."""

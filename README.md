@@ -36,6 +36,7 @@ Review improves every iteration.
 | `review_songspec` | SongSpec を検証し ReviewResult を返す |
 | `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
 | `search_memory` | ジャンルでプロセス内Memoryを検索 |
+| `orchestrate_song` | 生成・Review・Memory・Project作成を一括実行 |
 詳細は [docs/API.md](docs/API.md)。
 
 ## 必要環境
@@ -64,7 +65,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (8) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory`
+`fastmcp list` の期待値: Tools (9) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song
 
 ## Python package structure
 

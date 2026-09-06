@@ -4,9 +4,25 @@ Current milestone
 
 Sprint 1 / ISSUE-0003 service layer
 
-# KIHACHI MCP
+# KIHACHI Brain
 
-KIHACHI MUSIC AI 用の FastMCP サーバー。曲の仕様（SongSpec）を作り、そこからプロジェクト計画（ProjectPlan）を返す。
+Brain MCP for the KIHACHI MUSIC AI Platform.
+
+KIHACHI MUSIC AI is not an AI music generator.
+
+It is an AI music production platform.
+
+The Brain creates musical plans.
+
+Ableton builds projects.
+
+ACE-Step generates audio.
+
+Memory learns from every song.
+
+Review improves every iteration.
+
+このリポジトリは Brain（FastMCP）です。SongSpec と ProjectPlan を返します。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
 
 ## 公開 Tool
 
@@ -44,15 +60,23 @@ kihachi-mcp/
 ├── server.py                 # 互換エントリ
 ├── src/kihachi_mcp/          # 実装（ADR-0001）
 │   ├── server.py
+│   ├── api/
 │   ├── models/
 │   ├── services/
 │   └── tools/
 ├── tests/
 └── docs/
+    ├── BRAIN.md
+    ├── VISION.md
+    ├── DEVELOPMENT.md
     ├── ROADMAP.md
     ├── ARCHITECTURE.md
     ├── API.md
+    ├── issues/ISSUE-0003A.md
+    ├── issues/ISSUE-0003B.md
+    ├── issues/ISSUE-0003C.md
+    ├── issues/ISSUE-0004A.md
     └── adr/0001-use-src-layout.md
 ```
 
-設計は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。src-layout の決定は [docs/adr/0001-use-src-layout.md](docs/adr/0001-use-src-layout.md)。
+開発ルールは [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。設計は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。変更履歴は [CHANGELOG.md](CHANGELOG.md)。src-layout の決定は [docs/adr/0001-use-src-layout.md](docs/adr/0001-use-src-layout.md)。

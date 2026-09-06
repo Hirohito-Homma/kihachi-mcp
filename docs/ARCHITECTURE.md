@@ -1,78 +1,405 @@
-# ARCHITECTURE
+# KIHACHI MUSIC AI
+# System Architecture
 
-KIHACHI MCP は FastMCP の薄い Tool 層と、dataclass の Domain 層、その間の Service 層で構成する。
+Version: 1.0
 
-実装は src-layout（[ADR-0001](adr/0001-use-src-layout.md)）。コードは `src/kihachi_mcp/` に置き、リポジトリ直下は互換エントリとメタデータだけにする。
+Status: Living Document
 
-## 流れ
+---
 
-```
-MCP Client
-    ↓ JSON
-kihachi_mcp.tools       引数を受け取り、Service を呼び、JSON を返す
-    ↓ dataclass
-kihachi_mcp.services    生成・変換のルールを持つ
-    ↓ dataclass
-kihachi_mcp.models      SongSpec / TrackSpec / ProjectPlan / Arrangement / ReviewResult
-```
+# Overview
 
-Tool は JSON だけを外に出す。計算は Service に置く。
+KIHACHI MUSIC AI is composed of independent MCP services.
 
-## Python package structure
+Each MCP has a single responsibility.
+
+Communication happens through shared domain models.
 
 ```
-kihachi-mcp/
-├── server.py                      # 互換エントリ。kihachi_mcp.server.main を呼ぶ
-├── pyproject.toml
-├── README.md
-├── docs/
-│   ├── ROADMAP.md
-│   ├── ARCHITECTURE.md
-│   ├── API.md
-│   └── adr/
-│       └── 0001-use-src-layout.md
-├── src/kihachi_mcp/
-│   ├── server.py                  # FastMCP 登録
-│   ├── models/
-│   ├── services/
-│   ├── tools/
-│   └── shared/
-└── tests/
+                    User
+                      │
+                      ▼
+              Orchestrator MCP
+                      │
+    ┌─────────────────┼──────────────────┐
+    ▼                 ▼                  ▼
+ Brain MCP       Memory MCP        Review MCP
+    │                 │                  │
+    ▼                 │                  ▼
+ SongSpec             │          ReviewResult
+    │                 │
+    ▼                 ▼
+ Ableton MCP     Knowledge Store
+    │
+    ▼
+ Project Builder
+    │
+    ▼
+ ACE-Step MCP
+    │
+    ▼
+ Audio
 ```
 
-実行時の import ルートは `src/`。テストは `kihachi_mcp.*` だけを参照する。
+---
 
-## レイヤー責務
+# Design Principles
 
-| 層 | 役割 | 戻り値 |
-| --- | --- | --- |
-| `kihachi_mcp.tools` | FastMCP 公開 API。Service を呼び JSON を返す | JSON (`dict`) |
-| `kihachi_mcp.services` | 業務ロジック | dataclass |
-| `kihachi_mcp.models` | データの形と `to_dict()` / `from_dict()` | dataclass |
+## Single Responsibility
 
-### Services
+Each MCP owns one responsibility.
 
-| Service | 責務 |
+Brain thinks.
+
+Ableton builds.
+
+ACE-Step creates audio.
+
+Memory remembers.
+
+Review evaluates.
+
+Orchestrator coordinates.
+
+---
+
+## Loose Coupling
+
+Modules communicate only through shared models.
+
+Never import another MCP's internal implementation.
+
+Communication occurs via public interfaces.
+
+---
+
+## Shared Domain Models
+
+All MCPs share common models.
+
+Examples
+
+- SongSpec
+- TrackSpec
+- Arrangement
+- ProjectPlan
+- ReviewResult
+
+These models define the platform language.
+
+---
+
+# Layered Architecture
+
+```
+Presentation
+    ↓
+MCP Tools
+    ↓
+Brain Facade
+    ↓
+Services
+    ↓
+Domain Models
+    ↓
+Infrastructure
+```
+
+---
+
+## Presentation Layer
+
+FastMCP tools
+
+Responsibilities
+
+- receive requests
+- validate inputs
+- call services
+- return responses
+
+Business logic is forbidden.
+
+---
+
+## Service Layer
+
+Contains application logic.
+
+Examples
+
+- SongService
+- ProjectService
+- ReviewService
+- MemoryService
+- AbletonService
+- AceStepService
+
+---
+
+## Domain Layer
+
+Contains pure data structures.
+
+No FastMCP dependency.
+
+No filesystem dependency.
+
+No network dependency.
+
+---
+
+## Infrastructure Layer
+
+Responsible for
+
+- filesystem
+- Ableton communication
+- ACE-Step execution
+- database
+- external APIs
+
+---
+
+# MCP Responsibilities
+
+## Brain MCP
+
+Produces
+
+- SongSpec
+- Arrangement
+- Track Plans
+
+Never renders audio.
+
+---
+
+## Ableton MCP
+
+Produces
+
+- Ableton Project
+- MIDI
+- Device Chains
+- Track Routing
+
+Never decides composition.
+
+---
+
+## ACE-Step MCP
+
+Produces
+
+- Audio
+- Stems
+- Samples
+
+Never edits arrangements.
+
+---
+
+## Review MCP
+
+Produces
+
+- Scores
+- Comments
+- Suggestions
+
+Never modifies projects.
+
+---
+
+## Memory MCP
+
+Stores
+
+- successful songs
+- failed songs
+- reusable knowledge
+
+---
+
+## Orchestrator MCP
+
+Coordinates every MCP.
+
+Responsibilities
+
+- workflow
+- retries
+- scheduling
+- state management
+
+---
+
+# Data Flow
+
+```
+User
+    ↓
+Brain
+    ↓
+SongSpec
+    ↓
+Ableton
+    ↓
+ProjectPlan
+    ↓
+ACE-Step
+    ↓
+Audio
+    ↓
+Review
+    ↓
+Memory
+    ↓
+Knowledge
+    ↓
+Brain
+```
+
+This feedback loop enables continuous improvement.
+
+---
+
+# Repository Layout
+
+```
+src/
+    kihachi_mcp/
+        models/
+        services/
+        tools/
+        shared/
+
+tests/
+
+docs/
+```
+
+Implementation lives under `src/kihachi_mcp/` ([ADR-0001](adr/0001-use-src-layout.md)). The repository root keeps `server.py` as a compatibility entry point.
+
+---
+
+# Coding Rules
+
+- Use dataclasses for domain models.
+- Prefer dependency injection.
+- Avoid global state.
+- Use type hints everywhere.
+- Keep functions small and focused.
+- Write unit tests before integration tests.
+
+---
+
+# Testing Strategy
+
+```
+Unit Tests
+    ↓
+Service Tests
+    ↓
+Integration Tests
+    ↓
+End-to-End Tests
+```
+
+---
+
+# Documentation Strategy
+
+Every feature requires
+
+- Issue
+- ADR (if architecture changes)
+- Tests
+- Changelog
+
+---
+
+# Future Expansion
+
+Future MCPs
+
+- MIDI Generator
+- Lyrics Generator
+- Stem Separator
+- Mastering
+- Mixing
+- Publishing
+- Streaming
+- Analytics
+
+The architecture should allow adding new MCPs without changing existing ones.
+
+---
+
+# Success Criteria
+
+The platform can
+
+Think
+
+↓
+
+Plan
+
+↓
+
+Build
+
+↓
+
+Generate
+
+↓
+
+Review
+
+↓
+
+Learn
+
+↓
+
+Improve
+
+↓
+
+Repeat
+
+without breaking modularity.
+
+---
+
+# Current Brain MCP (this repository)
+
+This repo is Phase 1 Brain Foundation. Public tools remain `hello`, `generate_songspec`, and `create_project_from_songspec`. Details: [API.md](API.md).
+
+## Current services
+
+| Service | Responsibility |
 | --- | --- |
-| `SongService` | SongSpec の生成と検証 |
-| `ProjectService` | ProjectPlan の生成とメタデータ準備 |
-| `ReviewService` | ReviewResult の生成とコメント集約 |
+| SongService | Generate, validate, defaults, bar/duration conversion |
+| ProjectService | ProjectPlan, name, output path, metadata, created_at |
+| ReviewService | Score, comments, warnings, suggestions (internal) |
 
-公開 MCP Tool は増やさない。ReviewService は内部利用のみ。
+## Current conversion rules
 
-## 変換ルール
-
-### SongSpec
+SongSpec
 
 - `bars = max(1, round(length_minutes * 32))`
-- デフォルト tracks: Kick, Bass, Dub Chords, Lead, FX
-- `mood` は入力として受け取るが、SongSpec には保存しない
+- tracks come from genre YAML via the Knowledge Engine
+- `mood` is accepted and not stored
 
-### ProjectPlan
+ProjectPlan
 
-- `project_name` は `"Untitled"`
-- SongSpec の genre / tempo / key / length_minutes / bars をコピー
-- トラック展開:
+- `project_name` is `"Untitled"`
+- copies genre / tempo / key / length_minutes / bars
+- track types and colors:
 
 | name | type | color |
 | --- | --- | --- |
@@ -82,16 +409,4 @@ kihachi-mcp/
 | Lead | MIDI | Green |
 | FX | Audio | Gray |
 
-未知のトラック名は type=`MIDI`、color=`Gray`。
-
-## 公開 API の境界
-
-`kihachi_mcp.server` が登録する Tool だけが互換対象。
-
-```python
-mcp.add_tool(hello)
-mcp.add_tool(generate_songspec)
-mcp.add_tool(create_project_from_songspec)
-```
-
-ルートの `server.py` は `kihachi_mcp.server.main` を呼ぶ互換エントリ。
+Unknown track names use type=`MIDI`, color=`Gray`.

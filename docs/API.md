@@ -30,7 +30,7 @@ Hello from KIHACHI MCP
 
 ## generate_songspec
 
-曲の仕様（SongSpec）を生成する。内部で `SongService.generate_songspec()` を呼び、dataclass を JSON にする。
+曲の仕様（SongSpec）を生成する。Brain → Knowledge Engine → SongService。トラックはジャンル YAML から取る。未知のジャンルはエラー。
 
 ### 入力
 
@@ -51,7 +51,7 @@ Hello from KIHACHI MCP
   "key": "D#m",
   "length_minutes": 5,
   "bars": 160,
-  "tracks": ["Kick", "Bass", "Dub Chords", "Lead", "FX"]
+  "tracks": ["Kick", "Bass", "Dub Chords", "Pad", "FX"]
 }
 ```
 
@@ -83,7 +83,7 @@ SongSpec から ProjectPlan を作る。内部で `SongSpec.from_dict()` → `Pr
     {"name": "Kick", "type": "MIDI", "color": "Red"},
     {"name": "Bass", "type": "MIDI", "color": "Blue"},
     {"name": "Dub Chords", "type": "MIDI", "color": "Purple"},
-    {"name": "Lead", "type": "MIDI", "color": "Green"},
+    {"name": "Pad", "type": "MIDI", "color": "Gray"},
     {"name": "FX", "type": "Audio", "color": "Gray"}
   ]
 }

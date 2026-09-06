@@ -133,6 +133,15 @@ def test_default_arrangement_scales_to_requested_bars() -> None:
     assert sum(section.length_bars for section in sections) == 80
 
 
+def test_default_arrangement_preserves_short_target_bars() -> None:
+    sections = SongService().default_arrangement("dub techno", bars=8)
+
+    assert sum(section.length_bars for section in sections) == 8
+    assert sections[0].start_bar == 1
+    assert sections[-1].start_bar + sections[-1].length_bars - 1 == 8
+    assert all(section.length_bars > 0 for section in sections)
+
+
 def test_to_dict_and_from_dict_roundtrip() -> None:
     service = SongService()
     spec = service.generate(

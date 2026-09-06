@@ -1,6 +1,7 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Self
 
+from kihachi_mcp.models.arrangement import Arrangement
 from kihachi_mcp.models.track import TrackSpec
 
 
@@ -15,6 +16,7 @@ class ProjectPlan:
     length_minutes: float
     bars: int
     tracks: list[TrackSpec]
+    arrangement: list[Arrangement] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -31,8 +33,16 @@ class ProjectPlan:
                 for track in data.get("tracks") or []
                 if isinstance(track, dict)
             ],
+            arrangement=[
+                Arrangement.from_dict(section)
+                for section in data.get("arrangement") or []
+                if isinstance(section, dict)
+            ],
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_arrangement: bool = False) -> dict[str, Any]:
         """Serialize this ProjectPlan to a JSON-compatible dict."""
-        return asdict(self)
+        data = asdict(self)
+        if not include_arrangement:
+            data.pop("arrangement")
+        return data

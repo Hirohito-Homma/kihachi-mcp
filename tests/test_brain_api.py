@@ -111,3 +111,35 @@ def test_generate_song_can_omit_knowledge_backed_inputs() -> None:
 
     assert spec.tempo == 110
     assert spec.key == "D#m"
+
+
+def test_create_project_adds_knowledge_arrangement() -> None:
+    brain = _brain()
+    spec = brain.generate_song(genre="dub techno", length_minutes=5)
+
+    plan = brain.create_project(spec)
+
+    assert [section.name for section in plan.arrangement] == [
+        "Intro",
+        "Build",
+        "Drop",
+        "Breakdown",
+        "Outro",
+    ]
+    assert sum(section.length_bars for section in plan.arrangement) == plan.bars
+
+
+def test_create_project_preserves_unknown_genre_compatibility() -> None:
+    spec = SongSpec(
+        genre="custom",
+        tempo=120,
+        key="Am",
+        length_minutes=1,
+        bars=32,
+        tracks=["Kick"],
+    )
+
+    plan = _brain().create_project(spec)
+
+    assert plan.genre == "custom"
+    assert plan.arrangement == []

@@ -1,4 +1,4 @@
-from kihachi_mcp.models import ProjectPlan, SongSpec, TrackSpec
+from kihachi_mcp.models import Arrangement, ProjectPlan, SongSpec, TrackSpec
 from kihachi_mcp.services import ProjectService
 
 
@@ -98,3 +98,14 @@ def test_prepare_project_metadata() -> None:
         "length_minutes": 5,
         "bars": 160,
     }
+
+
+def test_create_project_accepts_arrangement() -> None:
+    arrangement = [Arrangement(name="Intro", start_bar=1, length_bars=160)]
+
+    plan = ProjectService().create_project_from_songspec(
+        _sample_songspec(),
+        arrangement=arrangement,
+    )
+
+    assert plan.arrangement == arrangement

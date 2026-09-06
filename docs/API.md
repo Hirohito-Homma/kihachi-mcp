@@ -68,6 +68,7 @@ SongSpec から ProjectPlan を作る。内部で `SongSpec.from_dict()` → `Pr
 | 名前 | 型 | 説明 |
 | --- | --- | --- |
 | songspec | dict | `generate_songspec` と同じ JSON |
+| include_arrangement | bool | 省略時は false。true なら Arrangement 配列を追加 |
 
 ### 出力
 
@@ -88,6 +89,9 @@ SongSpec から ProjectPlan を作る。内部で `SongSpec.from_dict()` → `Pr
   ]
 }
 ```
+
+既定の出力形は従来どおり。`include_arrangement=true` の場合だけ、`arrangement` に name / start_bar / length_bars を持つセクション配列を追加する。
+
 
 ---
 

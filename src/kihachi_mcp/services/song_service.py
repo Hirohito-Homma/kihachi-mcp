@@ -112,21 +112,36 @@ class SongService:
 def _arrangements_from_template(
     template: GenreTemplate, bars: int | None
 ) -> list[Arrangement]:
-    """Turn a template arrangement map into ordered Arrangement sections."""
-    total = sum(template.arrangement.values())
+    """Scale typed template sections while preserving the target bar count."""
+    weights = [section.length_bars for section in template.arrangement]
+    total = sum(weights)
+    if not weights or total <= 0:
+        return []
     target = max(1, int(bars)) if bars is not None else total
-    scale = target / total if total else 1
+    lengths = [weight * target // total for weight in weights]
+    remaining = target - sum(lengths)
+    ranked = sorted(
+        range(len(weights)),
+        key=lambda index: (
+            weights[index] * target % total,
+            weights[index],
+            -index,
+        ),
+        reverse=True,
+    )
+    for index in ranked[:remaining]:
+        lengths[index] += 1
+
     sections: list[Arrangement] = []
     start = 1
-    lengths = [
-        max(1, round(length * scale)) for length in template.arrangement.values()
-    ]
-    if lengths:
-        lengths[-1] = max(1, target - sum(lengths[:-1]))
-    for name, length_bars in zip(template.arrangement, lengths, strict=True):
+    for template_section, length_bars in zip(
+        template.arrangement, lengths, strict=True
+    ):
+        if length_bars == 0:
+            continue
         sections.append(
             Arrangement(
-                name=name.replace("_", " ").title(),
+                name=template_section.name,
                 start_bar=start,
                 length_bars=length_bars,
             )

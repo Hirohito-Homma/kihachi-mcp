@@ -44,6 +44,17 @@
 - Genre YAML と Knowledge Engine を追加
 - SongService はファイルを読まない
 
+### ISSUE-0005 — Knowledge-driven Song Generation
+
+- SongSpec のテンポ、キー、トラックを Genre YAML から補完
+- 既存の引数指定と JSON 形を維持
+
+### ISSUE-0006 — Arrangement Integration
+
+- Brain が Genre YAML から Arrangement を生成
+- ProjectPlan が型付きセクションを保持
+- MCP は明示指定時だけ Arrangement を返す
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。
@@ -52,9 +63,8 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Arrangement — ProjectPlan にセクション（Intro / Drop など）を足す
-2. DAW Adapter — ProjectPlan を Ableton など外部ツールへ渡す
-3. Audio Tool — ACE-Step など生成系と連携する
+1. DAW Adapter — ProjectPlan を Ableton など外部ツールへ渡す
+2. Audio Tool — ACE-Step など生成系と連携する
 
 ## 互換方針
 

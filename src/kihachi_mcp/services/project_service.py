@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from kihachi_mcp.models import ProjectPlan, SongSpec, TrackSpec
+from kihachi_mcp.models import Arrangement, ProjectPlan, SongSpec, TrackSpec
 
 _TRACK_COLORS: dict[str, str] = {
     "Kick": "Red",
@@ -48,13 +48,13 @@ class ProjectService:
         }
 
     def create_project_from_songspec(
-        self, songspec: SongSpec | dict[str, Any]
+        self,
+        songspec: SongSpec | dict[str, Any],
+        arrangement: list[Arrangement] | None = None,
     ) -> ProjectPlan:
         """Expand a SongSpec into a typed, colored ProjectPlan."""
         spec = (
-            songspec
-            if isinstance(songspec, SongSpec)
-            else SongSpec.from_dict(songspec)
+            songspec if isinstance(songspec, SongSpec) else SongSpec.from_dict(songspec)
         )
         return ProjectPlan(
             **self.prepare_project_metadata(spec),
@@ -66,4 +66,5 @@ class ProjectService:
                 )
                 for name in spec.tracks
             ],
+            arrangement=list(arrangement or []),
         )

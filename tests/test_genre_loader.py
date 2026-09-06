@@ -4,7 +4,7 @@ import pytest
 
 from kihachi_mcp.knowledge.errors import InvalidGenreTemplateError
 from kihachi_mcp.knowledge.genre_loader import load_genre_template
-from kihachi_mcp.models import GenreTemplate
+from kihachi_mcp.models import Arrangement, GenreTemplate
 
 
 def test_load_dub_techno_yaml() -> None:
@@ -19,13 +19,13 @@ def test_load_dub_techno_yaml() -> None:
         default_bpm=110,
         default_key="D#m",
         tracks=["Kick", "Bass", "Dub Chords", "Pad", "FX"],
-        arrangement={
-            "intro": 32,
-            "build": 32,
-            "drop": 64,
-            "breakdown": 16,
-            "outro": 16,
-        },
+        arrangement=[
+            Arrangement(name="Intro", start_bar=1, length_bars=32),
+            Arrangement(name="Build", start_bar=33, length_bars=32),
+            Arrangement(name="Drop", start_bar=65, length_bars=64),
+            Arrangement(name="Breakdown", start_bar=129, length_bars=16),
+            Arrangement(name="Outro", start_bar=145, length_bars=16),
+        ],
         mood="Deep",
     )
 

@@ -4,7 +4,7 @@ from typing import Any
 import yaml
 
 from kihachi_mcp.knowledge.errors import InvalidGenreTemplateError
-from kihachi_mcp.models.genre_template import GenreTemplate
+from kihachi_mcp.models import Arrangement, GenreTemplate
 
 _REQUIRED_FIELDS = frozenset(
     {"name", "default_bpm", "default_key", "tracks", "arrangement", "mood"}
@@ -57,17 +57,26 @@ def _require_str_list(raw: dict[str, Any], field: str) -> list[str]:
     return tracks
 
 
-def _require_arrangement(raw: dict[str, Any], field: str) -> dict[str, int]:
+def _require_arrangement(raw: dict[str, Any], field: str) -> list[Arrangement]:
     value = raw[field]
     if not isinstance(value, dict) or not value:
         raise InvalidGenreTemplateError(f"{field} must be a non-empty mapping")
-    arrangement: dict[str, int] = {}
+    arrangement: list[Arrangement] = []
+    start_bar = 1
     for name, length in value.items():
-        if not str(name).strip():
+        section_name = str(name).strip()
+        if not section_name:
             raise InvalidGenreTemplateError("arrangement keys must be non-empty")
         if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
             raise InvalidGenreTemplateError(
                 "arrangement values must be positive integers"
             )
-        arrangement[str(name)] = length
+        arrangement.append(
+            Arrangement(
+                name=section_name.replace("_", " ").title(),
+                start_bar=start_bar,
+                length_bars=length,
+            )
+        )
+        start_bar += length
     return arrangement

@@ -57,3 +57,20 @@ def test_create_project_from_songspec_public_json_is_unchanged() -> None:
             {"name": "FX", "type": "Audio", "color": "Gray"},
         ],
     }
+
+
+def test_create_project_can_include_arrangement() -> None:
+    spec = generate_songspec(
+        genre="dub techno",
+        length_minutes=5,
+    )
+
+    plan = create_project_from_songspec(spec, include_arrangement=True)
+
+    assert plan["arrangement"] == [
+        {"name": "Intro", "start_bar": 1, "length_bars": 32},
+        {"name": "Build", "start_bar": 33, "length_bars": 32},
+        {"name": "Drop", "start_bar": 65, "length_bars": 64},
+        {"name": "Breakdown", "start_bar": 129, "length_bars": 16},
+        {"name": "Outro", "start_bar": 145, "length_bars": 16},
+    ]

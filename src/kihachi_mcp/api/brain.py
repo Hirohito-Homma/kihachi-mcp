@@ -1,5 +1,6 @@
 from typing import Any
 
+from kihachi_mcp.knowledge import UnknownGenreError
 from kihachi_mcp.models import Arrangement, ProjectPlan, ReviewResult, SongSpec
 from kihachi_mcp.services import ProjectService, ReviewService, SongService
 
@@ -35,8 +36,19 @@ class Brain:
         )
 
     def create_project(self, songspec: SongSpec | dict[str, Any]) -> ProjectPlan:
-        """Create a ProjectPlan through ProjectService."""
-        return self._projects.create_project_from_songspec(songspec)
+        """Create a ProjectPlan with a knowledge-driven arrangement."""
+        spec = (
+            songspec
+            if isinstance(songspec, SongSpec)
+            else self._songs.from_dict(songspec)
+        )
+        try:
+            arrangement = self._songs.default_arrangement(spec.genre, spec.bars)
+        except UnknownGenreError:
+            arrangement = []
+        return self._projects.create_project_from_songspec(
+            spec, arrangement=arrangement
+        )
 
     def review_song(self, songspec: SongSpec | dict[str, Any]) -> ReviewResult:
         """Review a SongSpec through ReviewService."""

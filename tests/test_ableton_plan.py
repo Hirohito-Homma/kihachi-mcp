@@ -1,5 +1,5 @@
 from kihachi_mcp.models import Arrangement, ProjectPlan, TrackSpec
-from kihachi_mcp.services import AbletonService
+from kihachi_mcp.services import AbletonExecutionAdapter, AbletonService
 
 
 def _project_plan() -> ProjectPlan:
@@ -111,3 +111,31 @@ def test_live_execution_request_blocks_invalid_plan() -> None:
 
     assert result.status == "blocked"
     assert result.approval_required is False
+
+
+def test_execution_adapter_requires_approval() -> None:
+    request = AbletonService().request_live_execution(_project_plan())
+
+    result = AbletonExecutionAdapter().execute(request)
+
+    assert result.status == "approval_required"
+    assert result.mutation_count == 1
+
+
+def test_execution_adapter_reports_missing_transport_after_approval() -> None:
+    request = AbletonService().request_live_execution(_project_plan())
+
+    result = AbletonExecutionAdapter().execute(request, approved=True)
+
+    assert result.status == "unavailable"
+    assert "transport" in result.error
+
+
+def test_execution_adapter_uses_injected_transport() -> None:
+    request = AbletonService().request_live_execution(_project_plan())
+    adapter = AbletonExecutionAdapter(lambda _: {"set_name": "Untitled"})
+
+    result = adapter.execute(request, approved=True)
+
+    assert result.status == "executed"
+    assert result.artifact == {"set_name": "Untitled"}

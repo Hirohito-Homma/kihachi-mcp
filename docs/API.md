@@ -242,3 +242,12 @@ AbletonProjectPlanをLiveへ渡す前に静的検証する。Live接続・Set変
 Ableton Liveの変更を実行せず、承認待ちの1回分の実行要求を返す。検証エラー時は`blocked`、正常時は`approval_required`。
 
 出力は`status`、`target`、`action`、`mutation_count`、`approval_required`、`plan`、`errors`を含む。
+
+
+---
+
+## execute_live_request
+
+承認済みのLive実行要求をアダプターへ渡す。現在は通信Transport未設定のため`unavailable`を返す。未承認は`approval_required`、不正要求は`blocked`。
+
+`AbletonExecutionAdapter`はTransportを注入でき、実機接続は別実装として追加する。

@@ -1,5 +1,6 @@
 from kihachi_mcp.tools.ableton import (
     create_ableton_plan,
+    execute_live_request,
     prepare_ableton_handoff,
     request_live_execution,
 )
@@ -14,6 +15,7 @@ from kihachi_mcp.tools.review import review_songspec
 __all__ = [
     "create_ableton_plan",
     "create_project_from_songspec",
+    "execute_live_request",
     "generate_audio",
     "generate_songspec",
     "hello",

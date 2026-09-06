@@ -82,6 +82,12 @@
 - 未設定時はプロセス内、`KIHACHI_MEMORY_PATH`設定時はJSONへ原子的に永続化
 - 外部DBなしのままOrchestratorから差し替え可能な境界を確保
 
+### ISSUE-0014 — Ableton Execution Adapter
+
+- 承認状態を検査し、`approval_required` / `blocked` / `unavailable`を区別
+- Transport注入点を提供
+- 未設定時は実機実行を行わない
+
 ### ISSUE-0013 — Live Execution Boundary
 
 - `request_live_execution`で承認待ちの1回分要求を作成

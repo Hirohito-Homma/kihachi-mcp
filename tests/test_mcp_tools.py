@@ -1,6 +1,7 @@
 from kihachi_mcp.tools import (
     create_ableton_plan,
     create_project_from_songspec,
+    execute_live_request,
     generate_audio,
     generate_songspec,
     hello,
@@ -194,3 +195,14 @@ def test_request_live_execution_public_json() -> None:
 
     assert result["status"] == "approval_required"
     assert result["mutation_count"] == 1
+
+
+def test_execute_live_request_reports_unavailable_transport() -> None:
+    project = create_project_from_songspec(
+        generate_songspec("dub techno", length_minutes=5), include_arrangement=True
+    )
+    request = request_live_execution(project)
+
+    result = execute_live_request(request, approved=True)
+
+    assert result["status"] == "unavailable"

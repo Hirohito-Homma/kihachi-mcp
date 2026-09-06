@@ -119,8 +119,8 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Google Lyria実機接続と成果物の運用検証
-3. Google Lyria実機接続と成果物の運用検証
+1. ISSUE-0016 — ProjectPlanから決定論的なMIDI計画を生成
+2. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針
 

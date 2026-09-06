@@ -68,3 +68,32 @@ def test_adapter_blocks_quota_response(tmp_path: Path) -> None:
 
     assert result.status == "blocked"
     assert result.error == "Google Lyria quota or rate limit reached"
+
+
+def test_adapter_blocks_authentication_response(tmp_path: Path) -> None:
+    def fake_http(method: str, url: str, headers: dict[str, str], body: bytes | None):
+        return 403, b'{"error":"forbidden"}', {}
+
+    result = GoogleLyriaAdapter(api_key="secret", http_call=fake_http).render(
+        request(), tmp_path / "bass.mp3"
+    )
+
+    assert result.status == "blocked"
+    assert result.error == "Google Lyria authentication was rejected"
+
+
+def test_adapter_rejects_invalid_audio_encoding(tmp_path: Path) -> None:
+    def fake_http(method: str, url: str, headers: dict[str, str], body: bytes | None):
+        return (
+            200,
+            b'{"id":"interaction-1","steps":[{"content":[{"type":"audio","data":"not-base64"}]}]}',
+            {},
+        )
+
+    output = tmp_path / "bass.mp3"
+    result = GoogleLyriaAdapter(api_key="secret", http_call=fake_http).render(
+        request(), output
+    )
+
+    assert result.status == "failed"
+    assert not output.exists()

@@ -55,6 +55,18 @@
 - ProjectPlan が型付きセクションを保持
 - MCP は明示指定時だけ Arrangement を返す
 
+### ISSUE-0007 — DAW Adapter
+
+- ProjectPlan をAbletonProjectPlan へ変換
+- TrackSpec をAbleton track、Arrangement を locator へ変換
+- Live操作やMIDI生成は行わない
+
+### ISSUE-0008 — Audio Tool
+
+- AbletonProjectPlan と音声生成要求を混同しない境界を定義
+- ACE-Step を非同期外部サービスとして扱う
+- 音声ファイルの検証済みartifact receiptを返す設計にする
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。
@@ -63,7 +75,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Audio Tool — ACE-Step など生成系と連携する
+1. Audio Tool 実装 — ACE-Step adapter と AudioRenderRequest/Result
 
 ## 互換方針
 

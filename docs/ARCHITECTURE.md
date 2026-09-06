@@ -244,24 +244,25 @@ Brain
     ↓
 SongSpec
     ↓
-Ableton
-    ↓
 ProjectPlan
-    ↓
-ACE-Step
-    ↓
-Audio
-    ↓
-Review
-    ↓
-Memory
-    ↓
-Knowledge
-    ↓
-Brain
+    ├──> AbletonProjectPlan -> later, authorized Live execution
+    └──> AudioRenderRequest -> ACE-Step adapter -> verified audio receipt
+                                                     ↓
+                                                   Review
+                                                     ↓
+                                                   Memory
+                                                     ↓
+                                                 Knowledge
+                                                     ↓
+                                                   Brain
 ```
 
 This feedback loop enables continuous improvement.
+
+AbletonProjectPlan is a deterministic arrangement handoff. It does not prove
+that audio exists. Audio generation is an asynchronous external boundary:
+only a verified AudioRenderResult may be adopted by a later Ableton execution
+step.
 
 ---
 

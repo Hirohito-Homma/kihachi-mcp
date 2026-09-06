@@ -81,7 +81,12 @@ class GoogleLyriaAdapter:
             return AudioRenderResult(status="failed", error=str(exc))
 
     def _payload(self, request: AudioRenderRequest) -> bytes:
-        prompt = request.prompt or f"{request.genre} track for {request.target_track}"
+        context = (
+            f"Genre: {request.genre}; target: {request.target_track}; "
+            f"tempo: {request.tempo} BPM; key: {request.key}; "
+            f"duration: {request.length_minutes:g} minutes."
+        )
+        prompt = f"{context} {request.prompt}".strip()
         if request.negative_prompt:
             prompt += f" Avoid: {request.negative_prompt}"
         return json.dumps({"model": self.model, "input": prompt}).encode()

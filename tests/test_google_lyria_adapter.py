@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from kihachi_mcp.models import AudioRenderRequest
@@ -44,6 +45,10 @@ def test_adapter_returns_verified_receipt_without_provider_secrets(
     assert output.read_bytes() == b"wav-bytes"
     assert "secret" not in str(result.to_dict())
     assert calls[0][2]["x-goog-api-key"] == "secret"
+    payload = json.loads(calls[0][3])
+    assert "Genre: dub techno" in payload["input"]
+    assert "tempo: 110 BPM" in payload["input"]
+    assert "key: D#m" in payload["input"]
 
 
 def test_adapter_rejects_missing_audio(tmp_path: Path) -> None:

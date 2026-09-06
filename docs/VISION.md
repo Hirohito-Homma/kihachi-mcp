@@ -101,7 +101,7 @@ Continuous Integration is required.
  Project Builder
      │
      ▼
- ACE-Step MCP
+ Google Lyria MCP
      │
      ▼
  Audio Generation
@@ -139,7 +139,7 @@ Creates
 
 ---
 
-## ACE-Step
+## Google Lyria
 
 Generates audio.
 
@@ -232,7 +232,7 @@ Ableton Integration
 
 ## Phase 3
 
-ACE-Step Integration
+Google Lyria Integration
 
 ---
 

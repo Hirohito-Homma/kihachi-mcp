@@ -129,7 +129,7 @@ Live接続、ファイル書き込み、MIDI生成は行わない。
 
 ## generate_audio
 
-ProjectPlanの明示したトラックをACE-Stepへ渡し、検証済み音声artifact receiptを返す。ACE-Step未設定時はblockedを返す。Ableton操作は行わない。
+ProjectPlanの明示したトラックをGoogle Lyriaへ渡し、検証済み音声artifact receiptを返す。Google Lyria未設定時はblockedを返す。Ableton操作は行わない。
 
 ### 入力
 

@@ -64,7 +64,7 @@
 ### ISSUE-0008 — Audio Tool
 
 - ProjectPlan からAudioRenderRequestを構築
-- ACE-Step adapterでsubmit、poll、download、検証を実装
+- Google Lyria adapterでInteractions API、MP3 decode、検証を実装
 - generate_audioを5番目のMCP Toolとして追加
 - `101 passed`、Ruff、FastMCP Tools (5)を確認済み
 
@@ -76,7 +76,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. ACE-Step実機接続と成果物の運用検証
+1. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針
 

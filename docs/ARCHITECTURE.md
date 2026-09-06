@@ -35,7 +35,7 @@ Communication happens through shared domain models.
  Project Builder
     │
     ▼
- ACE-Step MCP
+ Google Lyria MCP
     │
     ▼
  Audio
@@ -53,7 +53,7 @@ Brain thinks.
 
 Ableton builds.
 
-ACE-Step creates audio.
+Google Lyria creates audio.
 
 Memory remembers.
 
@@ -133,7 +133,7 @@ Examples
 - ReviewService
 - MemoryService
 - AbletonService
-- AceStepService
+- GoogleLyriaAdapter
 
 ---
 
@@ -155,7 +155,7 @@ Responsible for
 
 - filesystem
 - Ableton communication
-- ACE-Step execution
+- Google Lyria execution
 - database
 - external APIs
 
@@ -188,7 +188,7 @@ Never decides composition.
 
 ---
 
-## ACE-Step MCP
+## Google Lyria MCP
 
 Produces
 
@@ -246,7 +246,7 @@ SongSpec
     ↓
 ProjectPlan
     ├──> AbletonProjectPlan -> later, authorized Live execution
-    └──> AudioRenderRequest -> ACE-Step adapter -> verified audio receipt
+    └──> AudioRenderRequest -> Google Lyria adapter -> verified audio receipt
                                                      ↓
                                                    Review
                                                      ↓

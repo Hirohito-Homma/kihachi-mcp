@@ -1,6 +1,6 @@
 from typing import Any
 
-from kihachi_mcp.services import AceStepAdapter, AudioService
+from kihachi_mcp.services import AudioService, GoogleLyriaAdapter
 
 _audio = AudioService()
 
@@ -12,6 +12,6 @@ def generate_audio(
     prompt: str = "",
     negative_prompt: str = "",
 ) -> dict[str, Any]:
-    """Generate one audio target through the configured ACE-Step boundary."""
+    """Generate one audio target through the configured Google Lyria boundary."""
     request = _audio.create_request(project_plan, target_track, prompt, negative_prompt)
-    return AceStepAdapter().render(request, output_path).to_dict()
+    return GoogleLyriaAdapter().render(request, output_path).to_dict()

@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-AbletonProjectPlan describes arrangement and track structure, but it is not an audio render request. ACE-Step is an external generation service with its own authentication, asynchronous task lifecycle, quota, and output artifact. The Brain MCP must keep those concerns out of domain models and must not mutate Ableton or invent an audio result when the service is unavailable.
+AbletonProjectPlan describes arrangement and track structure, but it is not an audio render request. Google Lyria is an external generation service with its own authentication, asynchronous task lifecycle, quota, and output artifact. The Brain MCP must keep those concerns out of domain models and must not mutate Ableton or invent an audio result when the service is unavailable.
 
 ## Decision
 
@@ -14,23 +14,23 @@ Keep the handoff one-way and explicit:
 
     ProjectPlan
         -> AudioRenderRequest
-        -> ACE-Step adapter
+        -> Google Lyria adapter
         -> AudioRenderResult (artifact receipt)
 
-The request is renderer-neutral and contains project context, target track or stem role, duration or bars, tempo, key, and generation instructions. ACE-Step-specific fields belong only in the adapter boundary.
+The request is renderer-neutral and contains project context, target track or stem role, duration or bars, tempo, key, and generation instructions. Google Lyria-specific fields belong only in the adapter boundary.
 
-The adapter owns the external REST lifecycle: submit, poll, download, validate existence, non-zero size, expected duration, and checksum, then return an artifact receipt without credentials.
+The adapter owns the external Interactions API call: authenticate, request generation, decode the returned audio block, validate non-zero size and checksum, then return an artifact receipt without credentials.
 
-Credentials come from ACESTEP_API_KEY and optional ACESTEP_BASE_URL. They are never included in MCP arguments, JSON results, logs, or persisted plans. A submitted or progressing task is not a completed audio result.
+Credentials come from GEMINI_API_KEY and optional LYRIA_BASE_URL. They are never included in MCP arguments, JSON results, logs, or persisted plans. An interaction response without a verified audio block is not a completed audio result.
 
-The first implementation remains additive. The additive generate_audio MCP tool exposes this boundary, while the original four public tools remain unchanged. This issue defines the contract only; it does not call ACE-Step, write audio files, or execute Ableton.
+The additive generate_audio MCP tool exposes this boundary, while the original four public tools remain unchanged. It calls Google Lyria only when credentials are configured; it never executes Ableton.
 
 ## Options Considered
 
-- Embed ACE-Step calls in SongService: rejected because domain generation becomes vendor- and network-dependent.
+- Embed Google Lyria calls in SongService: rejected because domain generation becomes vendor- and network-dependent.
 - Put audio paths in AbletonProjectPlan: rejected because a plan is not evidence that audio was generated or verified.
-- Let ACE-Step mutate Ableton: rejected because generation and DAW execution need separate authorization and readback.
-- Add a renderer-neutral request and an ACE-Step adapter: accepted because planning, generation, and artifact verification stay independently testable.
+- Let Google Lyria mutate Ableton: rejected because generation and DAW execution need separate authorization and readback.
+- Add a renderer-neutral request and a Google Lyria adapter: accepted because planning, generation, and artifact verification stay independently testable.
 
 ## Consequences
 
@@ -42,6 +42,6 @@ The first implementation remains additive. The additive generate_audio MCP tool 
 ## Action Items
 
 - Add typed AudioRenderRequest and AudioRenderResult models.
-- Add an ACE-Step infrastructure adapter with injectable HTTP and storage clients.
-- Add focused contract tests using fake clients; do not require ACE-Step in CI.
+- Add a Google Lyria infrastructure adapter with injectable HTTP and storage clients.
+- Add focused contract tests using fake clients; do not require Google Lyria in CI.
 - Add an additive MCP tool only after the service contract is tested.

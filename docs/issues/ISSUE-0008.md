@@ -12,13 +12,13 @@ Milestone: v0.3
 
 ## Goal
 
-Define the boundary between the deterministic Ableton plan and asynchronous ACE-Step audio generation without changing the existing public MCP tools.
+Define the boundary between the deterministic Ableton plan and Google Lyria audio generation without changing the existing public MCP tools.
 
 ## Contract
 
     ProjectPlan
       -> AudioRenderRequest
-      -> ACE-Step adapter
+      -> Google Lyria adapter
       -> AudioRenderResult
 
 AudioRenderRequest is renderer-neutral. It identifies the project and target track or stem, and carries tempo, key, duration or bars, and generation instructions. It does not contain an API key or an Ableton mutation command.
@@ -37,12 +37,12 @@ Authentication, quota, timeout, unavailable backend, invalid response, and downl
 - Brain/Domain: decide project and target intent.
 - Ableton adapter: translate ProjectPlan to AbletonProjectPlan only.
 - Audio service: build the renderer-neutral request and manage lifecycle.
-- ACE-Step adapter: authenticate, submit, poll, download, and validate.
+- Google Lyria adapter: authenticate, request an interaction, decode audio, and validate.
 - Ableton execution: a later separately authorized step.
 
 ## Non-goals
 
-- No live ACE-Step credentials or production backend verification in CI.
+- No live Google Lyria credentials or production backend verification in CI.
 - No Ableton Live API, subprocess, MIDI, or automatic clip placement.
 - No automatic adoption of generated audio into an Ableton set.
 - Existing four MCP tool names and JSON shapes remain unchanged; generate_audio is additive.
@@ -50,6 +50,6 @@ Authentication, quota, timeout, unavailable backend, invalid response, and downl
 ## Acceptance Criteria
 
 - ADR-0004 records the one-way handoff and failure semantics.
-- Future implementation can test the audio service with fakes and no ACE-Step credentials.
+- The implementation is tested with fake HTTP and no Google Lyria credentials.
 - Secrets cannot appear in request, result, logs, or persisted plans.
 - An artifact is accepted only after file and checksum validation.

@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 KIHACHI Brain will grow into a multi-package platform
-consisting of Brain, Ableton, ACE-Step, Memory and Orchestrator.
+consisting of Brain, Ableton, Google Lyria, Memory and Orchestrator.
 
 To avoid import ambiguity and improve packaging,
 the project adopts the standard Python src-layout.

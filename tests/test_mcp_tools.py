@@ -112,10 +112,10 @@ def test_create_ableton_plan_public_json() -> None:
     }
 
 
-def test_generate_audio_blocks_without_ace_step_credentials(
+def test_generate_audio_blocks_without_google_credentials(
     monkeypatch, tmp_path
 ) -> None:
-    monkeypatch.delenv("ACESTEP_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     project = create_project_from_songspec(
         generate_songspec(genre="dub techno", length_minutes=1)
     )

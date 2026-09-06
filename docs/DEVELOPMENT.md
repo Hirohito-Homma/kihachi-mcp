@@ -183,7 +183,7 @@ Examples
 Future
 
 - AbletonService
-- AceStepService
+- GoogleLyriaAdapter
 - MemoryService
 
 ---

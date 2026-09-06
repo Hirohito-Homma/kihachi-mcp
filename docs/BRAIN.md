@@ -10,7 +10,7 @@ The Brain creates musical plans.
 
 Ableton builds projects.
 
-ACE-Step generates audio.
+Google Lyria generates audio.
 
 Memory learns from every song.
 

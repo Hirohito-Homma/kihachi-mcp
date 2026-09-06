@@ -46,8 +46,19 @@ class GoogleLyriaAdapter:
             status, body, _ = self._http_call(
                 "POST", self.base_url, self._headers(), self._payload(request)
             )
+            if status in {401, 403}:
+                return AudioRenderResult(
+                    status="blocked", error="Google Lyria authentication was rejected"
+                )
+            if status == 429:
+                return AudioRenderResult(
+                    status="blocked", error="Google Lyria quota or rate limit reached"
+                )
             if status >= 400:
-                raise ValueError("Lyria generation request failed")
+                return AudioRenderResult(
+                    status="failed",
+                    error=f"Google Lyria request failed (HTTP {status})",
+                )
             data = json.loads(body)
             audio_data = self._audio_data(data)
             if not audio_data:

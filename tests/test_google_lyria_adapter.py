@@ -56,3 +56,15 @@ def test_adapter_rejects_missing_audio(tmp_path: Path) -> None:
 
     assert result.status == "failed"
     assert result.error == "Lyria returned no audio data"
+
+
+def test_adapter_blocks_quota_response(tmp_path: Path) -> None:
+    def fake_http(method: str, url: str, headers: dict[str, str], body: bytes | None):
+        return 429, b'{"error":"quota"}', {}
+
+    result = GoogleLyriaAdapter(api_key="secret", http_call=fake_http).render(
+        request(), tmp_path / "bass.mp3"
+    )
+
+    assert result.status == "blocked"
+    assert result.error == "Google Lyria quota or rate limit reached"

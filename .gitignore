@@ -8,3 +8,20 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ruff
+.ruff_cache/
+
+# IDE
+.cursor/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

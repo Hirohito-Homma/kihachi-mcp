@@ -17,6 +17,17 @@ KIHACHI MUSIC AI の MCP サーバーを、曲の仕様（SongSpec）からプ�
 - models / services / tools の 3 層に分離
 - 公開 MCP API は JSON のまま維持
 
+### ADR-0001 — src-layout
+
+- 実装を `src/kihachi_mcp/` に集約
+- ルートは互換エントリ（`server.py`）とメタデータのみ
+
+### ISSUE-0003 — Service Layer
+
+- ルートの重複パッケージを削除
+- `SongService` / `ProjectService` / `ReviewService` を `src/kihachi_mcp/services/` に置く
+- Tool は Service 呼び出しと JSON 変換だけを行う
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。

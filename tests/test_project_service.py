@@ -1,7 +1,5 @@
-from models.project_plan import ProjectPlan
-from models.songspec import SongSpec
-from models.track import TrackSpec
-from services.project_service import ProjectService
+from kihachi_mcp.models import ProjectPlan, SongSpec, TrackSpec
+from kihachi_mcp.services import ProjectService
 
 
 def _sample_songspec() -> SongSpec:
@@ -54,4 +52,24 @@ def test_create_project_from_songspec_json_matches_public_api() -> None:
             {"name": "Lead", "type": "MIDI", "color": "Green"},
             {"name": "FX", "type": "Audio", "color": "Gray"},
         ],
+    }
+
+
+def test_create_project_from_songspec_accepts_json_dict() -> None:
+    plan = ProjectService().create_project_from_songspec(_sample_songspec().to_dict())
+
+    assert plan.project_name == "Untitled"
+    assert plan.tracks[0].name == "Kick"
+
+
+def test_prepare_project_metadata() -> None:
+    metadata = ProjectService().prepare_project_metadata(_sample_songspec())
+
+    assert metadata == {
+        "project_name": "Untitled",
+        "genre": "dub techno",
+        "tempo": 110,
+        "key": "D#m",
+        "length_minutes": 5,
+        "bars": 160,
     }

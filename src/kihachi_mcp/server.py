@@ -1,13 +1,17 @@
 from fastmcp import FastMCP
 
-from tools.brain import generate_songspec
-from tools.hello import hello
-from tools.project_builder import create_project_from_songspec
+from kihachi_mcp.tools import create_project_from_songspec, generate_songspec, hello
 
 mcp = FastMCP("KIHACHI MUSIC AI")
 mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Start the KIHACHI MUSIC AI MCP server."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -2,16 +2,18 @@
 
 KIHACHI MCP は FastMCP の薄い Tool 層と、dataclass の Domain 層、その間の Service 層で構成する。
 
+実装は src-layout（[ADR-0001](adr/0001-use-src-layout.md)）。コードは `src/kihachi_mcp/` に置き、リポジトリ直下は互換エントリとメタデータだけにする。
+
 ## 流れ
 
 ```
 MCP Client
     ↓ JSON
-tools/          引数を受け取り、Service を呼び、JSON を返す
+kihachi_mcp.tools       引数を受け取り、Service を呼び、JSON を返す
     ↓ dataclass
-services/       生成・変換のルールを持つ
+kihachi_mcp.services    生成・変換のルールを持つ
     ↓ dataclass
-models/         SongSpec / TrackSpec / ProjectPlan
+kihachi_mcp.models      SongSpec / TrackSpec / ProjectPlan / Arrangement / ReviewResult
 ```
 
 Tool は JSON だけを外に出す。計算は Service に置く。
@@ -20,40 +22,43 @@ Tool は JSON だけを外に出す。計算は Service に置く。
 
 ```
 kihachi-mcp/
-├── server.py                 # FastMCP エントリ。Tool を登録する
+├── server.py                      # 互換エントリ。kihachi_mcp.server.main を呼ぶ
 ├── pyproject.toml
 ├── README.md
 ├── docs/
 │   ├── ROADMAP.md
 │   ├── ARCHITECTURE.md
-│   └── API.md
-├── models/                   # Domain models（dataclass）
-│   ├── __init__.py
-│   ├── songspec.py           # SongSpec
-│   ├── track.py              # TrackSpec
-│   └── project_plan.py       # ProjectPlan
-├── services/                 # Application services
-│   ├── __init__.py
-│   ├── song_service.py       # SongService.generate_songspec
-│   └── project_service.py    # ProjectService.create_project_from_songspec
-├── tools/                    # MCP Tool adapters（JSON I/O）
-│   ├── hello.py
-│   ├── brain.py
-│   └── project_builder.py
+│   ├── API.md
+│   └── adr/
+│       └── 0001-use-src-layout.md
+├── src/kihachi_mcp/
+│   ├── server.py                  # FastMCP 登録
+│   ├── models/
+│   ├── services/
+│   ├── tools/
+│   └── shared/
 └── tests/
-    ├── test_song_service.py
-    └── test_project_service.py
 ```
 
-`models` と `services` はパッケージ（`__init__.py` あり）。`tools` はモジュール群として `server.py` から直接 import する。実行時の import ルートはリポジトリ直下（`pythonpath = ["."]`）。
+実行時の import ルートは `src/`。テストは `kihachi_mcp.*` だけを参照する。
 
 ## レイヤー責務
 
 | 層 | 役割 | 戻り値 |
 | --- | --- | --- |
-| `tools/` | FastMCP 公開 API。引数検証は型ヒントに任せる | JSON (`dict`) |
-| `services/` | 小節数、デフォルトトラック、色と type の決定 | dataclass |
-| `models/` | データの形と `to_dict()` / `from_dict()` | dataclass |
+| `kihachi_mcp.tools` | FastMCP 公開 API。Service を呼び JSON を返す | JSON (`dict`) |
+| `kihachi_mcp.services` | 業務ロジック | dataclass |
+| `kihachi_mcp.models` | データの形と `to_dict()` / `from_dict()` | dataclass |
+
+### Services
+
+| Service | 責務 |
+| --- | --- |
+| `SongService` | SongSpec の生成と検証 |
+| `ProjectService` | ProjectPlan の生成とメタデータ準備 |
+| `ReviewService` | ReviewResult の生成とコメント集約 |
+
+公開 MCP Tool は増やさない。ReviewService は内部利用のみ。
 
 ## 変換ルール
 
@@ -81,7 +86,7 @@ kihachi-mcp/
 
 ## 公開 API の境界
 
-`server.py` が登録する Tool だけが互換対象。
+`kihachi_mcp.server` が登録する Tool だけが互換対象。
 
 ```python
 mcp.add_tool(hello)
@@ -89,4 +94,4 @@ mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)
 ```
 
-Service や dataclass のメソッド名は MCP クライアントから見えない。
+ルートの `server.py` は `kihachi_mcp.server.main` を呼ぶ互換エントリ。

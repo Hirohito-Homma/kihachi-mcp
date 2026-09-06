@@ -1,6 +1,6 @@
 from typing import Any
 
-from services.song_service import SongService
+from kihachi_mcp.services import SongService
 
 _song_service = SongService()
 

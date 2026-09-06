@@ -1,3 +1,9 @@
+## Status
+
+Current milestone
+
+Sprint 1 / ISSUE-0003 service layer
+
 # KIHACHI MCP
 
 KIHACHI MUSIC AI 用の FastMCP サーバー。曲の仕様（SongSpec）を作り、そこからプロジェクト計画（ProjectPlan）を返す。
@@ -25,7 +31,7 @@ uv sync --group dev
 
 ```bash
 uv run pytest
-uv run ruff check models services tools tests server.py
+uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
@@ -35,20 +41,18 @@ uv run fastmcp list server.py
 
 ```
 kihachi-mcp/
-├── server.py
-├── models/           # SongSpec / TrackSpec / ProjectPlan
-├── services/         # SongService / ProjectService
-├── tools/            # MCP adapters（JSON I/O）
+├── server.py                 # 互換エントリ
+├── src/kihachi_mcp/          # 実装（ADR-0001）
+│   ├── server.py
+│   ├── models/
+│   ├── services/
+│   └── tools/
 ├── tests/
 └── docs/
     ├── ROADMAP.md
     ├── ARCHITECTURE.md
-    └── API.md
+    ├── API.md
+    └── adr/0001-use-src-layout.md
 ```
 
-- `models/` — dataclass。JSON 変換は `to_dict()` / `from_dict()`
-- `services/` — 生成と変換のルール
-- `tools/` — FastMCP 向け。Service を呼び、JSON だけ返す
-- `server.py` — Tool を登録してサーバーを起動する
-
-設計の説明は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。今後の切片は [docs/ROADMAP.md](docs/ROADMAP.md)。
+設計は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。src-layout の決定は [docs/adr/0001-use-src-layout.md](docs/adr/0001-use-src-layout.md)。

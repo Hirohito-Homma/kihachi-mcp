@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any
 
 from kihachi_mcp.models import ProjectPlan, SongSpec, TrackSpec
@@ -14,15 +15,36 @@ _TRACK_COLORS: dict[str, str] = {
 class ProjectService:
     """Create a ProjectPlan and prepare project metadata."""
 
+    def project_name(self, songspec: SongSpec | None = None) -> str:
+        """Return the default project name. SongSpec is reserved for later naming."""
+        _ = songspec
+        return "Untitled"
+
+    def output_directory(self, songspec: SongSpec | None = None) -> str:
+        """Return the logical project output path. No filesystem writes."""
+        return f"projects/{self.project_name(songspec)}"
+
+    def created_at(self) -> str:
+        """Return the current UTC timestamp in ISO-8601 form."""
+        return datetime.now(UTC).isoformat()
+
     def prepare_project_metadata(self, songspec: SongSpec) -> dict[str, Any]:
-        """Copy SongSpec fields into project metadata."""
+        """Copy SongSpec fields into ProjectPlan constructor metadata."""
         return {
-            "project_name": "Untitled",
+            "project_name": self.project_name(songspec),
             "genre": songspec.genre,
             "tempo": songspec.tempo,
             "key": songspec.key,
             "length_minutes": songspec.length_minutes,
             "bars": songspec.bars,
+        }
+
+    def metadata(self, songspec: SongSpec) -> dict[str, Any]:
+        """Return ProjectPlan fields plus output path and created_at."""
+        return {
+            **self.prepare_project_metadata(songspec),
+            "output_directory": self.output_directory(songspec),
+            "created_at": self.created_at(),
         }
 
     def create_project_from_songspec(

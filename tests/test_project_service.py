@@ -62,6 +62,31 @@ def test_create_project_from_songspec_accepts_json_dict() -> None:
     assert plan.tracks[0].name == "Kick"
 
 
+def test_project_name_and_output_directory() -> None:
+    spec = _sample_songspec()
+    service = ProjectService()
+
+    assert service.project_name(spec) == "Untitled"
+    assert service.output_directory(spec) == "projects/Untitled"
+
+
+def test_created_at_is_iso8601() -> None:
+    stamp = ProjectService().created_at()
+
+    assert "T" in stamp
+    assert stamp.endswith(("+00:00", "Z")) or "+00:00" in stamp
+
+
+def test_metadata_includes_output_and_timestamp() -> None:
+    spec = _sample_songspec()
+    metadata = ProjectService().metadata(spec)
+
+    assert metadata["project_name"] == "Untitled"
+    assert metadata["output_directory"] == "projects/Untitled"
+    assert metadata["genre"] == "dub techno"
+    assert "created_at" in metadata
+
+
 def test_prepare_project_metadata() -> None:
     metadata = ProjectService().prepare_project_metadata(_sample_songspec())
 

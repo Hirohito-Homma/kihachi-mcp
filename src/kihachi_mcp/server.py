@@ -3,6 +3,7 @@ from fastmcp import FastMCP
 from kihachi_mcp.tools import (
     create_ableton_plan,
     create_project_from_songspec,
+    generate_audio,
     generate_songspec,
     hello,
 )
@@ -12,6 +13,7 @@ mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)
 mcp.add_tool(create_ableton_plan)
+mcp.add_tool(generate_audio)
 
 
 def main() -> None:

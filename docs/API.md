@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (4) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`
+期待: Tools (5) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan`
 
 ---
 
@@ -124,3 +124,23 @@ Live接続、ファイル書き込み、MIDI生成は行わない。
   "locators": [{"name": "Intro", "start_bar": 1, "length_bars": 32}]
 }
 ```
+
+---
+
+## generate_audio
+
+ProjectPlanの明示したトラックをACE-Stepへ渡し、検証済み音声artifact receiptを返す。ACE-Step未設定時はblockedを返す。Ableton操作は行わない。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| project_plan | dict | ProjectPlan JSON |
+| target_track | str | 生成対象トラック名 |
+| output_path | str | 保存先パス |
+| prompt | str | 任意の生成指示 |
+| negative_prompt | str | 任意の除外指示 |
+
+### 出力
+
+status、task_id、artifact_path、sha256等を持つAudioRenderResult JSON。APIキーは入力・出力に含めない。

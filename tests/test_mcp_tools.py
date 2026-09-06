@@ -1,6 +1,7 @@
 from kihachi_mcp.tools import (
     create_ableton_plan,
     create_project_from_songspec,
+    generate_audio,
     generate_songspec,
     hello,
 )
@@ -109,3 +110,17 @@ def test_create_ableton_plan_public_json() -> None:
             {"name": "Outro", "start_bar": 145, "length_bars": 16},
         ],
     }
+
+
+def test_generate_audio_blocks_without_ace_step_credentials(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.delenv("ACESTEP_API_KEY", raising=False)
+    project = create_project_from_songspec(
+        generate_songspec(genre="dub techno", length_minutes=1)
+    )
+
+    result = generate_audio(project, "Kick", str(tmp_path / "kick.wav"))
+
+    assert result["status"] == "blocked"
+    assert "API_KEY" in result["error"]

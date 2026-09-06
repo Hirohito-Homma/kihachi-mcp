@@ -19,6 +19,8 @@ SongService.generate
 
 `orchestrate_song` is additive. Existing tool names, arguments, and JSON shapes remain unchanged.
 
+When `stop_on_review_failure=true`, an unapproved review returns `project: null` after the result is remembered. The default remains `false` for compatibility.
+
 ## Boundary
 
 No Ableton mutation, external audio call, or persistent database is performed. Those integrations remain separate follow-up concerns.

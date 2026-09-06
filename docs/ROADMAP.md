@@ -87,6 +87,7 @@
 - `generate_song` → Review → Memory → Project作成の順序を固定
 - `OrchestrationResult`で一連の結果をJSON化
 - `orchestrate_song`を追加し、既存Toolの契約は維持
+- Review不合格時の停止ポリシーをオプション化
 
 ## 進行中
 

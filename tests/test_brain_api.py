@@ -182,3 +182,20 @@ def test_memory_persists_entries_to_json(tmp_path) -> None:
     restored = MemoryService(path)
 
     assert restored.search("dub techno")[0].songspec == spec.to_dict()
+
+
+def test_orchestrator_can_stop_after_failed_review() -> None:
+    from kihachi_mcp.services import ReviewService
+
+    class FailingReviewService(ReviewService):
+        def review_songspec(self, songspec):
+            return ReviewResult(False, 0.0, ["needs revision"])
+
+    brain = Brain(review_service=FailingReviewService())
+    result = brain.orchestrate_song(
+        "dub techno", length_minutes=5, stop_on_review_failure=True
+    )
+
+    assert result.review.approved is False
+    assert result.project is None
+    assert result.memory.review == result.review.to_dict()

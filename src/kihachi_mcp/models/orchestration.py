@@ -14,12 +14,16 @@ class OrchestrationResult:
     songspec: SongSpec
     review: ReviewResult
     memory: MemoryEntry
-    project: ProjectPlan
+    project: ProjectPlan | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "songspec": self.songspec.to_dict(),
             "review": self.review.to_dict(),
             "memory": self.memory.to_dict(),
-            "project": self.project.to_dict(include_arrangement=True),
+            "project": (
+                self.project.to_dict(include_arrangement=True)
+                if self.project is not None
+                else None
+            ),
         }

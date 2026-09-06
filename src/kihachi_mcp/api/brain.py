@@ -101,6 +101,7 @@ class Brain:
         key: str | None = None,
         length_minutes: float = 5.0,
         mood: str | None = None,
+        stop_on_review_failure: bool = False,
     ):
         """Run the complete local song-production workflow."""
         return self._orchestrator.generate_song(
@@ -109,6 +110,7 @@ class Brain:
             key=key,
             length_minutes=length_minutes,
             mood=mood,
+            stop_on_review_failure=stop_on_review_failure,
         )
 
     def default_tracks(self, genre: str) -> list[str]:

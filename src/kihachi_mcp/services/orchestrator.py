@@ -27,6 +27,7 @@ class Orchestrator:
         key: str | None = None,
         length_minutes: float = 5.0,
         mood: str | None = None,
+        stop_on_review_failure: bool = False,
     ) -> OrchestrationResult:
         """Run generation, review, memory, and project preparation in order."""
         songspec = self._songs.generate(
@@ -38,10 +39,14 @@ class Orchestrator:
         )
         review = self._reviews.review_songspec(songspec)
         memory = self._memory.remember(songspec.to_dict(), review.to_dict())
-        project = self._projects.create_project_from_songspec(
-            songspec,
-            arrangement=self._songs.default_arrangement(songspec.genre, songspec.bars),
-        )
+        project = None
+        if not stop_on_review_failure or review.approved:
+            project = self._projects.create_project_from_songspec(
+                songspec,
+                arrangement=self._songs.default_arrangement(
+                    songspec.genre, songspec.bars
+                ),
+            )
         return OrchestrationResult(
             songspec=songspec,
             review=review,

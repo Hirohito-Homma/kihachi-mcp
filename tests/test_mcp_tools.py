@@ -153,3 +153,12 @@ def test_orchestrate_song_public_json() -> None:
     assert result["songspec"]["tempo"] == 110
     assert result["review"]["approved"] is True
     assert result["project"]["arrangement"][0]["name"] == "Intro"
+
+
+def test_orchestrate_song_accepts_review_failure_policy() -> None:
+    result = orchestrate_song(
+        "dub techno", length_minutes=5, stop_on_review_failure=True
+    )
+
+    assert result["review"]["approved"] is True
+    assert result["project"] is not None

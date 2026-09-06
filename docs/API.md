@@ -206,7 +206,7 @@ Memoryへ保存した曲をジャンルで検索する。ジャンルを省略�
 
 ### 入力
 
-`generate_songspec`と同じ`genre`、`tempo`、`key`、`length_minutes`、`mood`を受け取る。
+`generate_songspec`と同じ`genre`、`tempo`、`key`、`length_minutes`、`mood`を受け取る。`stop_on_review_failure`をtrueにすると、Review不合格時はMemory保存後にProject作成を止める。
 
 ### 出力
 

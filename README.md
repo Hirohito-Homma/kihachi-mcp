@@ -32,6 +32,7 @@ Review improves every iteration.
 | `generate_songspec` | SongSpec を JSON で返す |
 | `create_project_from_songspec` | SongSpec から ProjectPlan を JSON で返す |
 | `create_ableton_plan` | ProjectPlan を Ableton 向け構造へ変換 |
+| `prepare_ableton_handoff` | Ableton受け渡し前の静的検証 |
 | `generate_audio` | ProjectPlan の対象トラックからGoogle Lyria音声を生成 |
 | `review_songspec` | SongSpec を検証し ReviewResult を返す |
 | `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
@@ -71,7 +72,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (9) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song
+`fastmcp list` の期待値: Tools (10) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song
 
 ## Python package structure
 

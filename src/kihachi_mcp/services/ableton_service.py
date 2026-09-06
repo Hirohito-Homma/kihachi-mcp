@@ -1,6 +1,6 @@
 from typing import Any
 
-from kihachi_mcp.models import ProjectPlan
+from kihachi_mcp.models import AbletonHandoff, ProjectPlan
 from kihachi_mcp.models.ableton_plan import (
     AbletonLocator,
     AbletonProjectPlan,
@@ -43,4 +43,32 @@ class AbletonService:
                 )
                 for section in plan.arrangement
             ],
+        )
+
+    def prepare_handoff(
+        self, project_plan: ProjectPlan | dict[str, Any]
+    ) -> AbletonHandoff:
+        """Validate an Ableton plan without contacting or mutating Live."""
+        plan = self.create_plan(project_plan)
+        errors: list[str] = []
+        warnings: list[str] = []
+        names = [track.name for track in plan.tracks]
+        if len(names) != len(set(names)):
+            errors.append("track names must be unique")
+        if not 20 <= plan.tempo <= 999:
+            errors.append("tempo must be between 20 and 999 BPM")
+        previous_end = 0
+        for locator in plan.locators:
+            end = locator.start_bar + locator.length_bars - 1
+            if locator.start_bar < 1 or end > plan.bars:
+                errors.append(f"locator '{locator.name}' is outside the project bars")
+            if locator.start_bar < previous_end:
+                errors.append(f"locator '{locator.name}' overlaps a previous locator")
+            previous_end = max(previous_end, end)
+        if not plan.tracks:
+            warnings.append("project has no tracks")
+        if not plan.locators:
+            warnings.append("project has no arrangement locators")
+        return AbletonHandoff(
+            ready=not errors, errors=errors, warnings=warnings, plan=plan
         )

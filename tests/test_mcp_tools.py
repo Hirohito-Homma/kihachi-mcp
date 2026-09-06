@@ -5,6 +5,7 @@ from kihachi_mcp.tools import (
     generate_songspec,
     hello,
     orchestrate_song,
+    prepare_ableton_handoff,
     remember_song,
     review_songspec,
     search_memory,
@@ -170,3 +171,14 @@ def test_search_memory_supports_limit() -> None:
 
 def test_search_memory_supports_text_query() -> None:
     assert search_memory(query="dub", limit=1)[0]["genre"] == "dub techno"
+
+
+def test_prepare_ableton_handoff_public_json() -> None:
+    project = create_project_from_songspec(
+        generate_songspec("dub techno", length_minutes=5), include_arrangement=True
+    )
+
+    result = prepare_ableton_handoff(project)
+
+    assert result["ready"] is True
+    assert result["errors"] == []

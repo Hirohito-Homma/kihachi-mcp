@@ -1,4 +1,4 @@
-from kihachi_mcp.tools.ableton import create_ableton_plan
+from kihachi_mcp.tools.ableton import create_ableton_plan, prepare_ableton_handoff
 from kihachi_mcp.tools.audio import generate_audio
 from kihachi_mcp.tools.brain import generate_songspec
 from kihachi_mcp.tools.hello import hello
@@ -14,6 +14,7 @@ __all__ = [
     "generate_songspec",
     "hello",
     "orchestrate_song",
+    "prepare_ableton_handoff",
     "remember_song",
     "review_songspec",
     "search_memory",

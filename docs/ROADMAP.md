@@ -82,6 +82,11 @@
 - 未設定時はプロセス内、`KIHACHI_MEMORY_PATH`設定時はJSONへ原子的に永続化
 - 外部DBなしのままOrchestratorから差し替え可能な境界を確保
 
+### ISSUE-0012 — Ableton Integration Preparation
+
+- `prepare_ableton_handoff`でトラック重複・テンポ・Locator範囲を静的検証
+- Live操作なしで`ready`、エラー、警告、計画を返す
+
 ### ISSUE-0011 — Orchestrator Design
 
 - `generate_song` → Review → Memory → Project作成の順序を固定

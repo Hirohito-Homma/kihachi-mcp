@@ -58,3 +58,29 @@ def test_ableton_service_handles_legacy_project_json_without_arrangement() -> No
     result = AbletonService().create_plan(source)
 
     assert result.locators == []
+
+
+def test_ableton_handoff_reports_ready_plan() -> None:
+    result = AbletonService().prepare_handoff(_project_plan())
+
+    assert result.ready is True
+    assert result.errors == []
+
+
+def test_ableton_handoff_reports_invalid_locator() -> None:
+    plan = _project_plan()
+    invalid = ProjectPlan(
+        project_name=plan.project_name,
+        genre=plan.genre,
+        tempo=plan.tempo,
+        key=plan.key,
+        length_minutes=plan.length_minutes,
+        bars=32,
+        tracks=plan.tracks,
+        arrangement=plan.arrangement,
+    )
+
+    result = AbletonService().prepare_handoff(invalid)
+
+    assert result.ready is False
+    assert "outside the project bars" in result.errors[0]

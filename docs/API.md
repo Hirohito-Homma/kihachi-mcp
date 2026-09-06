@@ -216,3 +216,20 @@ Memoryへ保存した曲をジャンルで検索する。ジャンルを省略�
 ### 出力
 
 `songspec`、`review`、`memory`、`project`を含むJSONを返す。`project`はArrangementを含む。
+
+
+---
+
+## prepare_ableton_handoff
+
+AbletonProjectPlanをLiveへ渡す前に静的検証する。Live接続・Set変更・ファイル書き込みは行わない。
+
+### 入力
+
+| 名前 | 型 | 説明 |
+| --- | --- | --- |
+| project_plan | dict | ProjectPlan JSON |
+
+### 出力
+
+`ready`、`errors`、`warnings`、`plan`を含むJSON。

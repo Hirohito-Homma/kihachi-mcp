@@ -1,3 +1,4 @@
+from kihachi_mcp.models.ableton_handoff import AbletonHandoff
 from kihachi_mcp.models.ableton_plan import (
     AbletonLocator,
     AbletonProjectPlan,
@@ -14,6 +15,7 @@ from kihachi_mcp.models.songspec import SongSpec
 from kihachi_mcp.models.track import TrackSpec
 
 __all__ = [
+    "AbletonHandoff",
     "AbletonLocator",
     "AbletonProjectPlan",
     "AbletonTrackPlan",

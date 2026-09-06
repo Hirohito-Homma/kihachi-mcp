@@ -7,6 +7,7 @@ from kihachi_mcp.tools import (
     generate_songspec,
     hello,
     orchestrate_song,
+    prepare_ableton_handoff,
     remember_song,
     review_songspec,
     search_memory,
@@ -17,6 +18,7 @@ mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)
 mcp.add_tool(create_ableton_plan)
+mcp.add_tool(prepare_ableton_handoff)
 mcp.add_tool(generate_audio)
 mcp.add_tool(review_songspec)
 mcp.add_tool(remember_song)

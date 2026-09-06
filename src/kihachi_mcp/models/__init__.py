@@ -10,6 +10,7 @@ from kihachi_mcp.models.execution_result import AbletonExecutionResult
 from kihachi_mcp.models.genre_template import GenreTemplate
 from kihachi_mcp.models.live_execution import LiveExecutionRequest
 from kihachi_mcp.models.memory import MemoryEntry
+from kihachi_mcp.models.midi_plan import MidiClipPlan, MidiPlan
 from kihachi_mcp.models.orchestration import OrchestrationResult
 from kihachi_mcp.models.project_plan import ProjectPlan
 from kihachi_mcp.models.review_result import ReviewResult
@@ -28,6 +29,8 @@ __all__ = [
     "GenreTemplate",
     "LiveExecutionRequest",
     "MemoryEntry",
+    "MidiClipPlan",
+    "MidiPlan",
     "OrchestrationResult",
     "ProjectPlan",
     "ReviewResult",

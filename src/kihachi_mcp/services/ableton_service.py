@@ -1,6 +1,12 @@
 from typing import Any
 
-from kihachi_mcp.models import AbletonHandoff, LiveExecutionRequest, ProjectPlan
+from kihachi_mcp.models import (
+    AbletonHandoff,
+    LiveExecutionRequest,
+    MidiClipPlan,
+    MidiPlan,
+    ProjectPlan,
+)
 from kihachi_mcp.models.ableton_plan import (
     AbletonLocator,
     AbletonProjectPlan,
@@ -44,6 +50,28 @@ class AbletonService:
                 for section in plan.arrangement
             ],
         )
+
+    def create_midi_plan(
+        self, project_plan: ProjectPlan | dict[str, Any]
+    ) -> MidiPlan:
+        """Create deterministic MIDI clip placements without contacting Live."""
+        plan = (
+            project_plan
+            if isinstance(project_plan, ProjectPlan)
+            else ProjectPlan.from_dict(project_plan)
+        )
+        midi_tracks = [track.name for track in plan.tracks if track.type == "MIDI"]
+        clips = [
+            MidiClipPlan(
+                track_name=track_name,
+                section_name=section.name,
+                start_bar=section.start_bar,
+                length_bars=section.length_bars,
+            )
+            for section in plan.arrangement
+            for track_name in midi_tracks
+        ]
+        return MidiPlan(tempo=plan.tempo, bars=plan.bars, clips=clips)
 
     def prepare_handoff(
         self, project_plan: ProjectPlan | dict[str, Any]

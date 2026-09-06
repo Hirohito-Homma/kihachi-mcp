@@ -8,7 +8,7 @@ KIHACHI MUSIC AI の公開 MCP Tool。戻り値は JSON（`hello` のみ文字�
 uv run fastmcp list server.py
 ```
 
-期待: Tools (12) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `prepare_ableton_handoff` / `request_live_execution` / `execute_live_request` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song`
+期待: Tools (13) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `create_midi_plan` / `prepare_ableton_handoff` / `request_live_execution` / `execute_live_request` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song`
 
 ---
 

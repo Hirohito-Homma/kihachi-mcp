@@ -87,6 +87,12 @@
 - push / pull requestでpytest、Ruff、FastMCP登録確認を実行
 - Lyria実機やAbleton Liveには接続しない
 
+### ISSUE-0016 — Deterministic MIDI Plan
+
+- ProjectPlanのMIDIトラックとArrangementから決定論的なクリップ配置計画を生成
+- `create_midi_plan`をMCP Toolとして追加
+- Live接続、音符生成、プロジェクト変更は行わない
+
 ### ISSUE-0014 — Ableton Execution Adapter
 
 - 承認状態を検査し、`approval_required` / `blocked` / `unavailable`を区別
@@ -119,8 +125,7 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. ISSUE-0016 — ProjectPlanから決定論的なMIDI計画を生成
-2. Google Lyria実機接続と成果物の運用検証
+1. Google Lyria実機接続と成果物の運用検証
 
 ## 互換方針
 

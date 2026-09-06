@@ -11,6 +11,11 @@ def create_ableton_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
     return _ableton.create_plan(project_plan).to_dict()
 
 
+def create_midi_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
+    """Create a deterministic MIDI clip plan without contacting Ableton Live."""
+    return _ableton.create_midi_plan(project_plan).to_dict()
+
+
 def prepare_ableton_handoff(project_plan: dict[str, Any]) -> dict[str, Any]:
     """Validate an Ableton plan before a future Live handoff."""
     return _ableton.prepare_handoff(project_plan).to_dict()

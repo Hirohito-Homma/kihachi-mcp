@@ -1,6 +1,8 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Self
 
+from kihachi_mcp.models.midi_event import MidiEvent
+
 
 @dataclass(frozen=True)
 class MidiClipPlan:
@@ -22,6 +24,7 @@ class MidiPlan:
     tempo: int
     bars: int
     clips: list[MidiClipPlan]
+    events: list[MidiEvent]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -37,6 +40,11 @@ class MidiPlan:
                 )
                 for clip in data.get("clips") or []
                 if isinstance(clip, dict)
+            ],
+            events=[
+                MidiEvent.from_dict(event)
+                for event in data.get("events") or []
+                if isinstance(event, dict)
             ],
         )
 

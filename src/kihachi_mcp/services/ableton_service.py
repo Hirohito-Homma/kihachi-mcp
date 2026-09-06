@@ -71,7 +71,7 @@ class AbletonService:
             for section in plan.arrangement
             for track_name in midi_tracks
         ]
-        return MidiPlan(tempo=plan.tempo, bars=plan.bars, clips=clips)
+        return MidiPlan(tempo=plan.tempo, bars=plan.bars, clips=clips, events=[])
 
     def prepare_handoff(
         self, project_plan: ProjectPlan | dict[str, Any]

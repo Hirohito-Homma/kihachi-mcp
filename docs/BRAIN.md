@@ -18,8 +18,9 @@ Review improves every iteration.
 
 ---
 
-This repository is the Brain MCP. It produces SongSpec and ProjectPlan.
-It does not render audio, edit Ableton sets, or store long-term memory.
+This repository is the Brain MCP. It produces SongSpec and ProjectPlan
+from structured genre knowledge. It does not render audio, edit Ableton
+sets, or store long-term memory.
 
 Public tools: `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `generate_audio`.
 See [API.md](API.md) and [VISION.md](VISION.md).

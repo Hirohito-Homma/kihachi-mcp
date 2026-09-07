@@ -7,7 +7,14 @@ from kihachi_mcp.models.ableton_plan import (
 from kihachi_mcp.models.arrangement import Arrangement
 from kihachi_mcp.models.audio_plan import AudioRenderRequest, AudioRenderResult
 from kihachi_mcp.models.execution_result import AbletonExecutionResult
+from kihachi_mcp.models.generation import (
+    GenerationContext,
+    GenerationParameters,
+    GenerationRequest,
+    GenerationResult,
+)
 from kihachi_mcp.models.genre_template import GenreTemplate
+from kihachi_mcp.models.knowledge import KnowledgeContext, KnowledgeEntry
 from kihachi_mcp.models.live_execution import LiveExecutionRequest
 from kihachi_mcp.models.memory import MemoryEntry
 from kihachi_mcp.models.midi_event import MidiEvent
@@ -27,7 +34,13 @@ __all__ = [
     "Arrangement",
     "AudioRenderRequest",
     "AudioRenderResult",
+    "GenerationContext",
+    "GenerationParameters",
+    "GenerationRequest",
+    "GenerationResult",
     "GenreTemplate",
+    "KnowledgeContext",
+    "KnowledgeEntry",
     "LiveExecutionRequest",
     "MemoryEntry",
     "MidiClipPlan",

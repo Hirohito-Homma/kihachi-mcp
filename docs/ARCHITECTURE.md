@@ -128,6 +128,8 @@ Contains application logic.
 
 Examples
 
+- KnowledgeService
+- GenerationService
 - SongService
 - ProjectService
 - ReviewService
@@ -380,10 +382,32 @@ without breaking modularity.
 
 This repo is Phase 1 Brain Foundation. Public tools are `hello`, `generate_songspec`, `create_project_from_songspec`, and `create_ableton_plan`, `generate_audio`. The Ableton adapter is plan-only. Details: [API.md](API.md).
 
+Knowledge-driven generation flow:
+
+```
+MCP / Brain
+    ↓
+GenerationService
+    ↓
+KnowledgeService → KnowledgeEngine → GenreTemplate
+    ↓
+GenerationContext
+    ↓
+SongService / GoogleLyriaAdapter
+    ↓
+SongSpec / AudioRenderResult + knowledge provenance
+```
+
+Knowledge is a structured `GenreTemplate` wrapped by `KnowledgeEntry`.
+Generators do not read genre YAML. The public SongSpec JSON shape is unchanged;
+`Brain.generate_from_knowledge()` returns the knowledge that was used.
+
 ## Current services
 
 | Service | Responsibility |
 | --- | --- |
+| KnowledgeService | Retrieve, select, and filter packaged genre knowledge |
+| GenerationService | Build GenerationContext and produce a traced SongSpec |
 | SongService | Generate, validate, defaults, bar/duration conversion |
 | ProjectService | ProjectPlan, name, output path, metadata, created_at |
 | ReviewService | Score, comments, warnings, suggestions (internal) |

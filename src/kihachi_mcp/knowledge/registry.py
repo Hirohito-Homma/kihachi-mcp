@@ -14,6 +14,12 @@ class GenreRegistry:
     def __init__(self, directory: Path) -> None:
         self._directory = directory
 
+    def list_names(self) -> list[str]:
+        """Return packaged genre keys in stable order."""
+        return sorted(
+            path.stem for path in self._directory.glob("*.yaml") if path.is_file()
+        )
+
     def resolve(self, name: str) -> Path:
         """Return the YAML path for a genre name."""
         key = normalize_genre_name(name)

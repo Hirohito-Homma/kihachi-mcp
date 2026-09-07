@@ -47,6 +47,8 @@
 ### ISSUE-0005 — Knowledge-driven Song Generation
 
 - SongSpec のテンポ、キー、トラックを Genre YAML から補完
+- KnowledgeService が知識を取得し、GenerationContext として Generator へ渡す
+- 生成結果は使用した knowledge id / version / source を保持できる
 - 既存の引数指定と JSON 形を維持
 
 ### ISSUE-0006 — Arrangement Integration

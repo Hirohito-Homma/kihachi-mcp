@@ -1,7 +1,9 @@
 from kihachi_mcp.services.ableton_execution_adapter import AbletonExecutionAdapter
 from kihachi_mcp.services.ableton_service import AbletonService
 from kihachi_mcp.services.audio_service import AudioService
+from kihachi_mcp.services.generation_service import GenerationService
 from kihachi_mcp.services.google_lyria_adapter import GoogleLyriaAdapter
+from kihachi_mcp.services.knowledge_service import KnowledgeService
 from kihachi_mcp.services.memory_service import MemoryService
 from kihachi_mcp.services.orchestrator import Orchestrator
 from kihachi_mcp.services.project_service import ProjectService
@@ -12,7 +14,9 @@ __all__ = [
     "AbletonExecutionAdapter",
     "AbletonService",
     "AudioService",
+    "GenerationService",
     "GoogleLyriaAdapter",
+    "KnowledgeService",
     "MemoryService",
     "Orchestrator",
     "ProjectService",

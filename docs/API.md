@@ -30,7 +30,7 @@ Hello from KIHACHI MCP
 
 ## generate_songspec
 
-曲の仕様（SongSpec）を生成する。Brain → Knowledge Engine → SongService。省略したテンポとキー、およびトラックはジャンル YAML から補完する。未知のジャンルはエラー。
+曲の仕様（SongSpec）を生成する。Brain → GenerationService → KnowledgeService → SongService。省略したテンポとキー、およびトラックはジャンル知識から補完する。未知のジャンルはエラー。公開JSON形は従来どおり。知識の出典（id / version / source）は Python API `Brain.generate_from_knowledge()` が返す。
 
 ### 入力
 

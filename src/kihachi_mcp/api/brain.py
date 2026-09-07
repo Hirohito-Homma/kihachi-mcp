@@ -3,12 +3,15 @@ from typing import Any
 from kihachi_mcp.knowledge import UnknownGenreError
 from kihachi_mcp.models import (
     Arrangement,
+    GenerationRequest,
+    GenerationResult,
     MemoryEntry,
     ProjectPlan,
     ReviewResult,
     SongSpec,
 )
 from kihachi_mcp.services import (
+    GenerationService,
     MemoryService,
     Orchestrator,
     ProjectService,
@@ -31,6 +34,7 @@ class Brain:
         self._projects = project_service or ProjectService()
         self._reviews = review_service or ReviewService(self._songs)
         self._memory = memory_service or MemoryService()
+        self._generation = GenerationService(song_service=self._songs)
         self._orchestrator = Orchestrator(
             self._songs, self._reviews, self._memory, self._projects
         )
@@ -43,13 +47,32 @@ class Brain:
         length_minutes: float = 5.0,
         mood: str | None = None,
     ) -> SongSpec:
-        """Create a SongSpec through SongService."""
-        return self._songs.generate(
+        """Create a SongSpec through knowledge-driven generation."""
+        return self.generate_from_knowledge(
             genre=genre,
             tempo=tempo,
             key=key,
             length_minutes=length_minutes,
             mood=mood,
+        ).songspec
+
+    def generate_from_knowledge(
+        self,
+        genre: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        length_minutes: float = 5.0,
+        mood: str | None = None,
+    ) -> GenerationResult:
+        """Generate a SongSpec and keep the knowledge that produced it."""
+        return self._generation.generate(
+            GenerationRequest(
+                genre=genre,
+                tempo=tempo,
+                key=key,
+                length_minutes=length_minutes,
+                mood=mood,
+            )
         )
 
     def create_project(self, songspec: SongSpec | dict[str, Any]) -> ProjectPlan:

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Knowledge-driven generation context: `KnowledgeEntry`, `KnowledgeContext`,
+  `GenerationRequest`, `GenerationContext`, and `GenerationResult`
+- `KnowledgeService` query / select / filter over packaged genre knowledge
+- `GenerationService` and `Brain.generate_from_knowledge()` for provenance
+- Audio generation consumes genre knowledge when the project genre is known
+
+### Changed
+
+- `generate_song` now goes through `GenerationService` while keeping the
+  existing SongSpec JSON shape
+
+---
+
 ## v0.1.0 - 2026-09-07
 
 ### Added

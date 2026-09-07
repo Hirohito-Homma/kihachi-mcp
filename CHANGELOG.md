@@ -9,11 +9,23 @@
 - `KnowledgeService` query / select / filter over packaged genre knowledge
 - `GenerationService` and `Brain.generate_from_knowledge()` for provenance
 - Audio generation consumes genre knowledge when the project genre is known
+- ISSUE-0019 production Lyria 3.5 Interactions API path, arrangement-aware
+  prompt builder, and atomic MP3 artifact verification
+- ADR-0005: Google Lyria 3.5 as the primary audio generation provider
 
 ### Changed
 
 - `generate_song` now goes through `GenerationService` while keeping the
   existing SongSpec JSON shape
+- `generate_audio` now builds a full-song Lyria prompt from ProjectPlan,
+  Arrangement, and genre knowledge
+- Real HTTP failures classify 401/403/429 as blocked and 400/404/5xx,
+  timeout, and network errors as failed without leaking response bodies
+
+### Fixed
+
+- urllib `HTTPError` is no longer collapsed into a generic `OSError` before
+  status classification
 
 ---
 

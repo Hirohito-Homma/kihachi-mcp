@@ -18,9 +18,12 @@ Review improves every iteration.
 
 ---
 
-This repository is the Brain MCP. It produces SongSpec and ProjectPlan
-from structured genre knowledge. It does not render audio, edit Ableton
-sets, or store long-term memory.
+This repository is the Brain MCP. It produces SongSpec, Arrangement, and
+ProjectPlan from structured genre knowledge. Audio rendering is delegated to
+Google Lyria 3.5 through `generate_audio`. The Brain does not operate Ableton
+or treat a successful Lyria receipt as Live authorization.
 
-Public tools: `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `generate_audio`.
+Primary audio generator: Google Lyria 3.5 API. ACE-Step is not a runtime path.
+
+Public tools: `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `create_midi_plan`, `prepare_ableton_handoff`, `request_live_execution`, `execute_live_request`, `generate_audio`, `review_songspec`, `remember_song`, `search_memory`, `orchestrate_song`.
 See [API.md](API.md) and [VISION.md](VISION.md).

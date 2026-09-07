@@ -194,11 +194,12 @@ Never decides composition.
 
 Produces
 
-- Audio
-- Stems
-- Samples
+- Full-song / reference audio via Google Lyria 3.5
 
 Never edits arrangements.
+
+Stems, isolated tracks, and multi-track export are future architecture, not
+current implementation. ACE-Step is not a runtime provider.
 
 ---
 
@@ -380,7 +381,7 @@ without breaking modularity.
 
 # Current Brain MCP (this repository)
 
-This repo is Phase 1 Brain Foundation. Public tools are `hello`, `generate_songspec`, `create_project_from_songspec`, and `create_ableton_plan`, `generate_audio`. The Ableton adapter is plan-only. Details: [API.md](API.md).
+This repo is Phase 1 Brain Foundation. Primary audio generator is Google Lyria 3.5. Public tools are `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `create_midi_plan`, `prepare_ableton_handoff`, `request_live_execution`, `execute_live_request`, `generate_audio`, `review_songspec`, `remember_song`, `search_memory`, `orchestrate_song`. The Ableton adapter stays behind the human authorization boundary. Details: [API.md](API.md).
 
 Knowledge-driven generation flow:
 
@@ -411,6 +412,9 @@ Generators do not read genre YAML. The public SongSpec JSON shape is unchanged;
 | SongService | Generate, validate, defaults, bar/duration conversion |
 | ProjectService | ProjectPlan, name, output path, metadata, created_at |
 | ReviewService | Score, comments, warnings, suggestions (internal) |
+| AudioService | Build renderer-neutral AudioRenderRequest from ProjectPlan and knowledge |
+| LyriaPromptBuilder | Convert Arrangement and genre knowledge into a Lyria 3.5 prompt |
+| GoogleLyriaAdapter | Call Lyria 3.5, classify HTTP failures, verify MP3 receipts |
 
 ## Current conversion rules
 

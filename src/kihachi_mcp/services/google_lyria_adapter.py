@@ -8,6 +8,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from kihachi_mcp.models import GenerationContext
 from kihachi_mcp.models.audio_plan import AudioRenderRequest, AudioRenderResult
 
 HttpCall = Callable[
@@ -35,7 +36,10 @@ class GoogleLyriaAdapter:
         self._http_call = http_call or self._default_http_call
 
     def render(
-        self, request: AudioRenderRequest, output_path: str | Path
+        self,
+        request: AudioRenderRequest,
+        output_path: str | Path,
+        context: GenerationContext | None = None,
     ) -> AudioRenderResult:
         """Generate one song and return a verified local MP3 receipt."""
         if not self.api_key:
@@ -44,7 +48,10 @@ class GoogleLyriaAdapter:
             )
         try:
             status, body, _ = self._http_call(
-                "POST", self.base_url, self._headers(), self._payload(request)
+                "POST",
+                self.base_url,
+                self._headers(),
+                self._payload(request, context),
             )
             if status in {401, 403}:
                 return AudioRenderResult(
@@ -80,13 +87,23 @@ class GoogleLyriaAdapter:
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             return AudioRenderResult(status="failed", error=str(exc))
 
-    def _payload(self, request: AudioRenderRequest) -> bytes:
-        context = (
-            f"Genre: {request.genre}; target: {request.target_track}; "
-            f"tempo: {request.tempo} BPM; key: {request.key}; "
-            f"duration: {request.length_minutes:g} minutes."
-        )
-        prompt = f"{context} {request.prompt}".strip()
+    def _payload(
+        self,
+        request: AudioRenderRequest,
+        context: GenerationContext | None = None,
+    ) -> bytes:
+        parts = [
+            f"Genre: {request.genre}",
+            f"target: {request.target_track}",
+            f"tempo: {request.tempo} BPM",
+            f"key: {request.key}",
+            f"duration: {request.length_minutes:g} minutes.",
+        ]
+        template = context.knowledge.template() if context is not None else None
+        if template is not None:
+            parts.insert(1, f"mood: {context.parameters.mood or template.mood}")
+            parts.insert(2, f"tracks: {', '.join(template.tracks)}")
+        prompt = f"{'; '.join(parts)} {request.prompt}".strip()
         if request.negative_prompt:
             prompt += f" Avoid: {request.negative_prompt}"
         return json.dumps({"model": self.model, "input": prompt}).encode()

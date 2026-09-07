@@ -1,11 +1,21 @@
 from typing import Any
 
-from kihachi_mcp.models import ProjectPlan
+from kihachi_mcp.models import GenerationContext, GenerationRequest, ProjectPlan
 from kihachi_mcp.models.audio_plan import AudioRenderRequest
+from kihachi_mcp.services.generation_service import GenerationService
+from kihachi_mcp.services.knowledge_service import KnowledgeService
 
 
 class AudioService:
     """Build renderer-neutral audio requests without contacting a provider."""
+
+    def __init__(
+        self,
+        knowledge: KnowledgeService | None = None,
+        generation: GenerationService | None = None,
+    ) -> None:
+        self._knowledge = knowledge or KnowledgeService()
+        self._generation = generation or GenerationService(knowledge=self._knowledge)
 
     def create_request(
         self,
@@ -15,11 +25,7 @@ class AudioService:
         negative_prompt: str = "",
     ) -> AudioRenderRequest:
         """Create one audio request from a project and an explicit target."""
-        plan = (
-            project_plan
-            if isinstance(project_plan, ProjectPlan)
-            else ProjectPlan.from_dict(project_plan)
-        )
+        plan = self._plan(project_plan)
         target = target_track.strip()
         if not target:
             raise ValueError("target_track must not be empty")
@@ -35,4 +41,26 @@ class AudioService:
             bars=plan.bars,
             prompt=prompt.strip(),
             negative_prompt=negative_prompt.strip(),
+        )
+
+    def create_generation_context(
+        self, project_plan: ProjectPlan | dict[str, Any]
+    ) -> GenerationContext:
+        """Retrieve genre knowledge for an audio request without failing if absent."""
+        plan = self._plan(project_plan)
+        return self._generation.build_context(
+            GenerationRequest(
+                genre=plan.genre,
+                tempo=plan.tempo,
+                key=plan.key,
+                length_minutes=plan.length_minutes,
+            )
+        )
+
+    @staticmethod
+    def _plan(project_plan: ProjectPlan | dict[str, Any]) -> ProjectPlan:
+        return (
+            project_plan
+            if isinstance(project_plan, ProjectPlan)
+            else ProjectPlan.from_dict(project_plan)
         )

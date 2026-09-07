@@ -113,6 +113,15 @@ def test_generate_song_can_omit_knowledge_backed_inputs() -> None:
     assert spec.key == "D#m"
 
 
+def test_generate_from_knowledge_keeps_public_songspec_and_provenance() -> None:
+    result = _brain().generate_from_knowledge(genre="dub techno", length_minutes=5)
+
+    assert result.songspec.tempo == 110
+    assert result.knowledge.primary() is not None
+    assert result.knowledge.primary().id == "dub_techno"
+    assert result.to_dict()["songspec"] == result.songspec.to_dict()
+
+
 def test_create_project_adds_knowledge_arrangement() -> None:
     brain = _brain()
     spec = brain.generate_song(genre="dub techno", length_minutes=5)

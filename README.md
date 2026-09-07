@@ -22,7 +22,7 @@ Memory learns from every song.
 
 Review improves every iteration.
 
-このリポジトリは Brain（FastMCP）です。SongSpec と ProjectPlan を返します。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
+このリポジトリは Brain（FastMCP）です。ジャンル知識を取得して SongSpec と ProjectPlan を返します。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
 
 ## 公開 Tool
 
@@ -100,6 +100,7 @@ kihachi-mcp/
     ├── issues/ISSUE-0003B.md
     ├── issues/ISSUE-0003C.md
     ├── issues/ISSUE-0004A.md
+    ├── issues/ISSUE-0005.md
     └── adr/0001-use-src-layout.md
 ```
 

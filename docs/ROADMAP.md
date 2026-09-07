@@ -119,6 +119,15 @@
 - `orchestrate_song`を追加し、既存Toolの契約は維持
 - Review不合格時の停止ポリシーをオプション化
 
+### ISSUE-0019 — Lyria 3.5 Production API
+
+- Primary audio generator を Google Lyria 3.5 (`lyria-3.5`) に統一
+- Interactions API へ `response_format: audio` を送り、`model_output` audio を検証してMP3を保存
+- Arrangement をテンポ基準のタイムスタンプ prompt へ変換
+- HTTP status を blocked / failed に分類し、秘密情報を結果へ出さない
+- ACE-Step は runtime 経路に置かない
+- 完了条件: unit test 緑、Ruff 緑、FastMCP 13 tools、実機 smoke 成功または `GEMINI_API_KEY` 未設定による明示 BLOCKED
+
 ## 進行中
 
 なし。Sprint 1 の公開 API は安定対象。
@@ -127,7 +136,8 @@
 
 公開 API を壊さない前提で、次を検討する。
 
-1. Google Lyria実機接続と成果物の運用検証
+1. Review が Lyria artifact receipt を評価し、承認後にだけ Ableton へ採用する境界
+2. Lyria が公式に保証していない stems / multi-track export は、実API確認後に別Issueとする
 
 ## 互換方針
 

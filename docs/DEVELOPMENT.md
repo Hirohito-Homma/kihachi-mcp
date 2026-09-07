@@ -179,12 +179,11 @@ Examples
 - SongService
 - ProjectService
 - ReviewService
-
-Future
-
-- AbletonService
+- AudioService
 - GoogleLyriaAdapter
+- LyriaPromptBuilder
 - MemoryService
+- AbletonService
 
 ---
 

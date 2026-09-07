@@ -1,9 +1,16 @@
 from typing import Any
 
-from kihachi_mcp.models import GenerationContext, GenerationRequest, ProjectPlan
+from kihachi_mcp.knowledge import UnknownGenreError
+from kihachi_mcp.models import (
+    Arrangement,
+    GenerationContext,
+    GenerationRequest,
+    ProjectPlan,
+)
 from kihachi_mcp.models.audio_plan import AudioRenderRequest
 from kihachi_mcp.services.generation_service import GenerationService
 from kihachi_mcp.services.knowledge_service import KnowledgeService
+from kihachi_mcp.services.song_service import SongService
 
 
 class AudioService:
@@ -13,9 +20,11 @@ class AudioService:
         self,
         knowledge: KnowledgeService | None = None,
         generation: GenerationService | None = None,
+        song_service: SongService | None = None,
     ) -> None:
         self._knowledge = knowledge or KnowledgeService()
         self._generation = generation or GenerationService(knowledge=self._knowledge)
+        self._songs = song_service or SongService()
 
     def create_request(
         self,
@@ -31,6 +40,8 @@ class AudioService:
             raise ValueError("target_track must not be empty")
         if plan.tracks and target not in {track.name for track in plan.tracks}:
             raise ValueError(f"target_track not found: {target}")
+        context = self.create_generation_context(plan)
+        template = context.knowledge.template()
         return AudioRenderRequest(
             project_name=plan.project_name,
             genre=plan.genre,
@@ -41,6 +52,10 @@ class AudioService:
             bars=plan.bars,
             prompt=prompt.strip(),
             negative_prompt=negative_prompt.strip(),
+            arrangement=self._arrangement_for(plan),
+            mood=context.parameters.mood or (template.mood if template else ""),
+            tracks=context.parameters.tracks
+            or tuple(track.name for track in plan.tracks),
         )
 
     def create_generation_context(
@@ -56,6 +71,14 @@ class AudioService:
                 length_minutes=plan.length_minutes,
             )
         )
+
+    def _arrangement_for(self, plan: ProjectPlan) -> tuple[Arrangement, ...]:
+        if plan.arrangement:
+            return tuple(plan.arrangement)
+        try:
+            return tuple(self._songs.default_arrangement(plan.genre, plan.bars))
+        except UnknownGenreError:
+            return ()
 
     @staticmethod
     def _plan(project_plan: ProjectPlan | dict[str, Any]) -> ProjectPlan:

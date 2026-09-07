@@ -28,3 +28,6 @@ htmlcov/
 
 # Local credentials
 .env
+
+# Generated audio artifacts
+outputs/

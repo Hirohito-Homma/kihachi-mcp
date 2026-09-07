@@ -129,7 +129,7 @@ Live接続、ファイル書き込み、MIDI生成は行わない。
 
 ## generate_audio
 
-ProjectPlanの明示したトラックをGoogle Lyriaへ渡し、検証済み音声artifact receiptを返す。GEMINI_API_KEY未設定時はblockedを返す。Ableton操作は行わない。
+ProjectPlanとArrangementからGoogle Lyria 3.5へフル曲リファレンス音声を依頼し、検証済みMP3 artifact receiptを返す。GEMINI_API_KEY未設定時はblockedを返す。Ableton操作は行わない。Stemsや独立キック／ベース書き出しは未対応。
 
 ### 入力
 
@@ -143,13 +143,20 @@ ProjectPlanの明示したトラックをGoogle Lyriaへ渡し、検証済み音
 
 ### 出力
 
-status、task_id、artifact_path、sha256等を持つAudioRenderResult JSON。APIキーは入力・出力に含めない。
+status、task_id、artifact_path、duration_seconds、sample_rate、channels、sha256、error を持つAudioRenderResult JSON。APIキーは入力・出力に含めない。
+
+成功時の前提:
+
+- 保存形式はMP3
+- `sample_rate` は `44100`、`channels` は `2`（Lyria 3.5公式出力）
+- `duration_seconds` は実測できない場合 `0`。推測値は入れない
 
 ### 設定
 
 - `GEMINI_API_KEY`: 必須。Google AI APIキー。
 - `LYRIA_MODEL`: 任意。既定値は `lyria-3.5`。
 - `LYRIA_BASE_URL`: 任意。既定値はGoogle Gemini Interactions API。
+- `LYRIA_TIMEOUT`: 任意。秒。既定値は `300`。
 
 ---
 

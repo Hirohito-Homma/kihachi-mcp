@@ -36,7 +36,7 @@ Review improves every iteration.
 | `prepare_ableton_handoff` | Ableton受け渡し前の静的検証 |
 | `request_live_execution` | 承認待ちのLive実行要求を作成 |
 | `execute_live_request` | 承認済み要求を実行アダプターへ渡す |
-| `generate_audio` | ProjectPlan の対象トラックからGoogle Lyria音声を生成 |
+| `generate_audio` | ProjectPlan と Arrangement から Lyria 3.5 のフル曲リファレンス音声を生成 |
 | `review_songspec` | SongSpec を検証し ReviewResult を返す |
 | `remember_song` | SongSpec とReview結果をプロセス内Memoryへ保存 |
 | `search_memory` | ジャンル・全文・Review品質・順位でMemoryを検索 |
@@ -75,7 +75,7 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (13) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `create_midi_plan` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song`
+`fastmcp list` の期待値: Tools (13) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `create_midi_plan` / `prepare_ableton_handoff` / `request_live_execution` / `execute_live_request` / `generate_audio` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song`
 
 ## Python package structure
 

@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 
@@ -6,6 +7,9 @@ import pytest
 from kihachi_mcp.knowledge import UnknownGenreError
 from kihachi_mcp.models import GenerationRequest, ProjectPlan, SongSpec, TrackSpec
 from kihachi_mcp.services import AudioService, GenerationService, GoogleLyriaAdapter
+
+_MIN_MP3 = b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\xff\xfb\x90\x00" + bytes(64)
+_MIN_MP3_B64 = base64.b64encode(_MIN_MP3).decode()
 
 
 def test_build_context_uses_retrieved_knowledge() -> None:
@@ -117,7 +121,17 @@ def test_lyria_uses_structured_knowledge_when_context_is_provided(
         calls.append(body)
         return (
             200,
-            b'{"id":"interaction-1","steps":[{"content":[{"type":"audio","data":"d2F2LWJ5dGVz"}]}]}',
+            json.dumps(
+                {
+                    "id": "interaction-1",
+                    "steps": [
+                        {
+                            "type": "model_output",
+                            "content": [{"type": "audio", "data": _MIN_MP3_B64}],
+                        }
+                    ],
+                }
+            ).encode(),
             {},
         )
 

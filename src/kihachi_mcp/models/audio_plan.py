@@ -1,6 +1,8 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Self
 
+from kihachi_mcp.models.arrangement import Arrangement
+
 
 @dataclass(frozen=True)
 class AudioRenderRequest:
@@ -15,6 +17,9 @@ class AudioRenderRequest:
     bars: int
     prompt: str = ""
     negative_prompt: str = ""
+    arrangement: tuple[Arrangement, ...] = ()
+    mood: str = ""
+    tracks: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -29,6 +34,13 @@ class AudioRenderRequest:
             bars=max(1, int(data.get("bars") or 1)),
             prompt=str(data.get("prompt") or ""),
             negative_prompt=str(data.get("negative_prompt") or ""),
+            arrangement=tuple(
+                Arrangement.from_dict(section)
+                for section in data.get("arrangement") or []
+                if isinstance(section, dict)
+            ),
+            mood=str(data.get("mood") or ""),
+            tracks=tuple(str(name) for name in data.get("tracks") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -12,7 +12,7 @@ def generate_audio(
     prompt: str = "",
     negative_prompt: str = "",
 ) -> dict[str, Any]:
-    """Generate one audio target through the configured Google Lyria boundary."""
+    """Generate one full-song Lyria 3.5 reference mix from a ProjectPlan."""
     request = _audio.create_request(project_plan, target_track, prompt, negative_prompt)
     context = _audio.create_generation_context(project_plan)
     return GoogleLyriaAdapter().render(request, output_path, context).to_dict()

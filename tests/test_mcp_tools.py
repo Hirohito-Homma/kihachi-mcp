@@ -1,10 +1,12 @@
 from kihachi_mcp.tools import (
     create_ableton_plan,
+    create_live_mutation_plan,
     create_project_from_songspec,
     execute_live_request,
-    generate_audio,
     generate_songspec,
     hello,
+    inspect_live_state,
+    live_device_catalogue,
     orchestrate_song,
     prepare_ableton_handoff,
     remember_song,
@@ -119,18 +121,21 @@ def test_create_ableton_plan_public_json() -> None:
     }
 
 
-def test_generate_audio_blocks_without_google_credentials(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    project = create_project_from_songspec(
-        generate_songspec(genre="dub techno", length_minutes=1)
-    )
+def test_inspect_live_state_reports_unconfigured_transport() -> None:
+    result = inspect_live_state()
 
-    result = generate_audio(project, "Kick", str(tmp_path / "kick.wav"))
+    assert result["health"]["connected"] is False
+    assert result["snapshot"] is None
 
-    assert result["status"] == "blocked"
-    assert "API_KEY" in result["error"]
+
+def test_live_device_catalogue_excludes_external_plugins() -> None:
+    result = live_device_catalogue()
+
+    names = [device["name"] for device in result["devices"]]
+
+    assert result["external_plugins_supported"] is False
+    assert "Drum Rack" in names
+    assert "Operator" in names
 
 
 def test_review_songspec_public_json() -> None:
@@ -186,23 +191,30 @@ def test_prepare_ableton_handoff_public_json() -> None:
     assert result["errors"] == []
 
 
-def test_request_live_execution_public_json() -> None:
+def test_create_live_mutation_plan_is_unavailable_without_a_transport() -> None:
+    project = create_project_from_songspec(
+        generate_songspec("dub techno", length_minutes=5), include_arrangement=True
+    )
+
+    result = create_live_mutation_plan(project)
+
+    assert result["status"] == "unavailable"
+    assert result["operations"] == []
+
+
+def test_request_live_execution_does_not_reach_live_without_a_transport() -> None:
     project = create_project_from_songspec(
         generate_songspec("dub techno", length_minutes=5), include_arrangement=True
     )
 
     result = request_live_execution(project)
 
-    assert result["status"] == "approval_required"
-    assert result["mutation_count"] == 1
-
-
-def test_execute_live_request_reports_unavailable_transport() -> None:
-    project = create_project_from_songspec(
-        generate_songspec("dub techno", length_minutes=5), include_arrangement=True
-    )
-    request = request_live_execution(project)
-
-    result = execute_live_request(request, approved=True)
-
     assert result["status"] == "unavailable"
+    assert result["approval_required"] is False
+    assert "approval_token_path" not in result
+
+
+def test_execute_live_request_refuses_a_plan_it_never_approved() -> None:
+    result = execute_live_request({"schema_version": 1, "operations": []})
+
+    assert result["status"] == "blocked"

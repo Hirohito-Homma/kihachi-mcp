@@ -5,8 +5,6 @@ from kihachi_mcp.models.ableton_plan import (
     AbletonTrackPlan,
 )
 from kihachi_mcp.models.arrangement import Arrangement
-from kihachi_mcp.models.audio_plan import AudioRenderRequest, AudioRenderResult
-from kihachi_mcp.models.execution_result import AbletonExecutionResult
 from kihachi_mcp.models.generation import (
     GenerationContext,
     GenerationParameters,
@@ -20,7 +18,6 @@ from kihachi_mcp.models.live_contract import (
     LiveContractError,
     SchemaVersionError,
 )
-from kihachi_mcp.models.live_execution import LiveExecutionRequest
 from kihachi_mcp.models.live_mutation import (
     LiveConflict,
     LiveMutationOperation,
@@ -52,14 +49,11 @@ from kihachi_mcp.models.track import TrackSpec
 
 __all__ = [
     "SCHEMA_VERSION",
-    "AbletonExecutionResult",
     "AbletonHandoff",
     "AbletonLocator",
     "AbletonProjectPlan",
     "AbletonTrackPlan",
     "Arrangement",
-    "AudioRenderRequest",
-    "AudioRenderResult",
     "GenerationContext",
     "GenerationParameters",
     "GenerationRequest",
@@ -72,7 +66,6 @@ __all__ = [
     "LiveContractError",
     "LiveDevice",
     "LiveExecutionReceipt",
-    "LiveExecutionRequest",
     "LiveMutationOperation",
     "LiveMutationPlan",
     "LiveOperationReadback",

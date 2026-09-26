@@ -1,9 +1,14 @@
+"""MCP tools that translate a ProjectPlan into Ableton-shaped plans.
+
+These three tools never contact Ableton Live. Everything that can change a Set
+lives in :mod:`kihachi_mcp.tools.live` behind the approval gate.
+"""
+
 from typing import Any
 
-from kihachi_mcp.services import AbletonExecutionAdapter, AbletonService
+from kihachi_mcp.services import AbletonService
 
 _ableton = AbletonService()
-_execution = AbletonExecutionAdapter()
 
 
 def create_ableton_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
@@ -17,17 +22,5 @@ def create_midi_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_ableton_handoff(project_plan: dict[str, Any]) -> dict[str, Any]:
-    """Validate an Ableton plan before a future Live handoff."""
+    """Validate an Ableton plan statically before any Live mutation is planned."""
     return _ableton.prepare_handoff(project_plan).to_dict()
-
-
-def request_live_execution(project_plan: dict[str, Any]) -> dict[str, Any]:
-    """Prepare one approval-gated Live mutation request without executing it."""
-    return _ableton.request_live_execution(project_plan).to_dict()
-
-
-def execute_live_request(
-    request: dict[str, Any], approved: bool = False
-) -> dict[str, Any]:
-    """Attempt an approved Live request through the configured adapter boundary."""
-    return _execution.execute(request, approved=approved).to_dict()

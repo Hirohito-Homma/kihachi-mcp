@@ -1,6 +1,7 @@
 import base64
 import json
 from email.message import EmailMessage
+from http.client import IncompleteRead
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -339,3 +340,60 @@ def test_looks_like_mp3_accepts_id3_and_frame_sync() -> None:
     assert looks_like_mp3(b"\xff\xfb\x90\x00" + bytes(16))
     assert not looks_like_mp3(b"wav-bytes")
     assert not looks_like_mp3(b"")
+    assert not looks_like_mp3(b"ID3")
+    assert not looks_like_mp3(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+    assert not looks_like_mp3(b"\xff\xe0x")
+    assert not looks_like_mp3(b"ID3\x04\x00\x00\x00\x00\x00\x01")
+    assert not looks_like_mp3(b"ID3\x01\x00\x00\x00\x00\x00\x00" + b"\xff\xfb\x90\x00")
+    assert not looks_like_mp3(b"ID3\x04\x00\x00\x80\x00\x00\x00" + b"\xff\xfb\x90\x00")
+
+
+def test_adapter_rejects_prefix_only_audio(tmp_path: Path) -> None:
+    samples = (b"ID3", b"ID3\x04\x00\x00\x00\x00\x00\x00", b"\xff\xe0x")
+    for index, sample in enumerate(samples):
+        encoded = base64.b64encode(sample).decode()
+
+        def fake_http(
+            method: str,
+            url: str,
+            headers: dict[str, str],
+            body: bytes | None,
+            audio_b64: str = encoded,
+        ):
+            return 200, _audio_body(audio_b64), {}
+
+        output = tmp_path / f"prefix-{index}.mp3"
+        result = GoogleLyriaAdapter(api_key=SECRET, http_call=fake_http).render(
+            request(), output
+        )
+
+        assert result.status == "failed"
+        assert result.error == "Lyria returned an invalid audio artifact"
+        assert result.sha256 == ""
+        assert not output.exists()
+
+
+def test_real_http_path_survives_truncated_error_body(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class TruncatedBody(BytesIO):
+        def read(self, *args, **kwargs):
+            raise IncompleteRead(partial=b"", expected=8)
+
+    def fake_urlopen(*args, **kwargs):
+        raise HTTPError(
+            _DEFAULT_BASE_URL,
+            429,
+            "Too Many Requests",
+            EmailMessage(),
+            TruncatedBody(),
+        )
+
+    monkeypatch.setattr(
+        "kihachi_mcp.services.google_lyria_adapter.urlopen", fake_urlopen
+    )
+    result = GoogleLyriaAdapter(api_key=SECRET).render(request(), tmp_path / "bass.mp3")
+
+    assert result.status == "blocked"
+    assert result.error == "Google Lyria quota or rate limit reached"
+    assert SECRET not in result.error

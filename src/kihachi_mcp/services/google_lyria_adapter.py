@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -205,11 +206,11 @@ class GoogleLyriaAdapter:
                     dict(response.headers.items()),
                 )
         except HTTPError as exc:
-            payload = exc.read() if exc.fp is not None else b""
+            _discard_error_body(exc)
             response_headers = (
                 dict(exc.headers.items()) if exc.headers is not None else {}
             )
-            return int(exc.code), payload, response_headers
+            return int(exc.code), b"", response_headers
         except TimeoutError as exc:
             raise LyriaTransportError(
                 "timeout", "Google Lyria request timed out"
@@ -231,12 +232,68 @@ def base64_decode(value: str) -> bytes:
 
 
 def looks_like_mp3(audio: bytes) -> bool:
-    """Accept ID3-tagged or MPEG-frame MP3 leading bytes."""
-    if len(audio) < 3:
-        return False
+    """Require a valid MPEG frame header, after a well-formed ID3v2 tag if present."""
     if audio.startswith(b"ID3"):
-        return True
-    return audio[0] == 0xFF and (audio[1] & 0xE0) == 0xE0
+        offset = _id3v2_audio_offset(audio)
+        if offset is None:
+            return False
+        return _has_mpeg_frame_header(audio, offset)
+    return _has_mpeg_frame_header(audio, 0)
+
+
+def _discard_error_body(exc: HTTPError) -> None:
+    """Drop an HTTP error body. A truncated read must not escape the adapter."""
+    if exc.fp is None:
+        return
+    try:
+        exc.read()
+    except (HTTPException, OSError):
+        return
+
+
+def _id3v2_audio_offset(audio: bytes) -> int | None:
+    """Return the first audio byte after a complete ID3v2 tag, or None."""
+    if len(audio) < 10 or not audio.startswith(b"ID3"):
+        return None
+    major = audio[3]
+    revision = audio[4]
+    flags = audio[5]
+    if major not in {2, 3, 4} or revision == 0xFF:
+        return None
+    footer = False
+    if major == 2 and flags & 0x3F:
+        return None
+    if major == 3 and flags & 0x1F:
+        return None
+    if major == 4:
+        if flags & 0x0F:
+            return None
+        footer = bool(flags & 0x10)
+    size = audio[6:10]
+    if any(byte & 0x80 for byte in size):
+        return None
+    tag_bytes = (size[0] << 21) | (size[1] << 14) | (size[2] << 7) | size[3]
+    offset = 10 + tag_bytes + (10 if footer else 0)
+    if offset > len(audio):
+        return None
+    return offset
+
+
+def _has_mpeg_frame_header(audio: bytes, offset: int) -> bool:
+    """Accept one 4-byte header with legal version, layer, bitrate, and rate."""
+    if offset < 0 or len(audio) - offset < 4:
+        return False
+    word = int.from_bytes(audio[offset : offset + 4], "big")
+    if (word & 0xFFE00000) != 0xFFE00000:
+        return False
+    version = (word >> 19) & 0x3
+    layer = (word >> 17) & 0x3
+    bitrate = (word >> 12) & 0xF
+    sample_rate = (word >> 10) & 0x3
+    emphasis = word & 0x3
+    if version == 0x1 or layer == 0x0:
+        return False
+    return bitrate not in {0x0, 0xF} and sample_rate != 0x3 and emphasis != 0x2
 
 
 def write_artifact_atomically(output_path: Path, audio: bytes) -> Path:

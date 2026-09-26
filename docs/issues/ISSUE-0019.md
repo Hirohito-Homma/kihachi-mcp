@@ -1,5 +1,13 @@
 # ISSUE-0019 — Lyria 3.5 Production API Integration
 
+> **Status: 撤回済み（ISSUE-0020 により機能全体を削除）**
+>
+> Google Lyria は廃止済みです。この Issue が実装した `GoogleLyriaAdapter`、
+> `LyriaPromptBuilder`、`generate_audio`、MP3 検証はすべて削除されました。
+> 判断の記録は [../adr/0006-ableton-live-automation.md](../adr/0006-ableton-live-automation.md)。
+> 履歴として残しています。実装の参照には使わないでください。
+
+
 ## Goal
 
 Make Google Lyria 3.5 the production audio generator for KIHACHI MUSIC AI

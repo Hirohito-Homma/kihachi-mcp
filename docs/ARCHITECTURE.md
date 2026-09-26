@@ -32,13 +32,16 @@ Communication happens through shared domain models.
  Ableton MCP     Knowledge Store
     │
     ▼
- Project Builder
+ Live Mutation Planner
     │
     ▼
- Google Lyria MCP
+ Approval Gate
     │
     ▼
- Audio
+ Max for Live / Live Object Model
+    │
+    ▼
+ Editable Live Set
 ```
 
 ---
@@ -52,8 +55,6 @@ Each MCP owns one responsibility.
 Brain thinks.
 
 Ableton builds.
-
-Google Lyria creates audio.
 
 Memory remembers.
 
@@ -135,7 +136,11 @@ Examples
 - ReviewService
 - MemoryService
 - AbletonService
-- GoogleLyriaAdapter
+- LiveStateInspector
+- LiveMutationPlanner
+- ApprovalGate
+- LiveExecutionService
+- ArrangementExpander
 
 ---
 
@@ -156,10 +161,12 @@ No network dependency.
 Responsible for
 
 - filesystem
-- Ableton communication
-- Google Lyria execution
+- localhost-only Ableton Live bridge (`127.0.0.1`, session token, size and time caps)
+- Max for Live device transport
 - database
-- external APIs
+
+There are no external API boundaries. Google Lyria is removed; KIHACHI generates
+no audio.
 
 ---
 
@@ -190,16 +197,17 @@ Never decides composition.
 
 ---
 
-## Google Lyria MCP
+## Audio generation
 
-Produces
+There is none. KIHACHI generates no audio.
 
-- Full-song / reference audio via Google Lyria 3.5
+Google Lyria was removed in [ADR-0006](adr/0006-ableton-live-automation.md)
+because a finished audio file is not an editable production artefact. The
+deliverable is a Live Set whose MIDI, devices, and arrangement the user can
+change. ACE-Step is not a runtime provider either.
 
-Never edits arrangements.
-
-Stems, isolated tracks, and multi-track export are future architecture, not
-current implementation. ACE-Step is not a runtime provider.
+Audio comes out of Ableton Live, rendered by the user from the Set KIHACHI
+built.
 
 ---
 
@@ -247,25 +255,44 @@ Brain
     ↓
 SongSpec
     ↓
-ProjectPlan
-    ├──> AbletonProjectPlan -> later, authorized Live execution
-    └──> AudioRenderRequest -> Google Lyria adapter -> verified audio receipt
-                                                     ↓
-                                                   Review
-                                                     ↓
-                                                   Memory
-                                                     ↓
-                                                 Knowledge
-                                                     ↓
-                                                   Brain
+ProjectPlan / MidiPlan
+    ↓
+LiveStateInspector          reads Live, changes nothing
+    ↓
+LiveMutationPlanner         builds an inert plan
+    ↓
+ApprovalGate                human approval, plan_hash binding, idempotency
+    ↓
+LiveExecutionService        applies an approved plan exactly once
+    ↓
+localhost bridge            127.0.0.1 only
+    ↓
+Max for Live device         Live Object Model
+    ↓
+Session View                patterns
+    ↓ verification
+Arrangement View            expansion of verified patterns only
+    ↓ readback
+Verified Execution Receipt
+    ↓
+Review → Memory → Knowledge → Brain
 ```
 
-This feedback loop enables continuous improvement.
+The feedback loop enables continuous improvement.
 
-AbletonProjectPlan is a deterministic arrangement handoff. It does not prove
-that audio exists. Audio generation is an asynchronous external boundary:
-only a verified AudioRenderResult may be adopted by a later Ableton execution
-step.
+Two boundaries carry the safety weight.
+
+A `LiveMutationPlan` is inert data. Holding one changes nothing. It records the
+`set_fingerprint` it was planned against, so if the Set moved between planning
+and execution the predicted track and scene indices are known to be stale and
+execution stops.
+
+A `LiveExecutionReceipt` never overclaims. `verified` requires that every
+attempted operation was applied *and* read back matching its
+`expected_readback`. `partially_applied` and `verification_failed` are distinct
+outcomes that a human must resolve; neither is completion.
+
+KIHACHI generates no audio. The deliverable is an editable Live Set.
 
 ---
 
@@ -381,7 +408,18 @@ without breaking modularity.
 
 # Current Brain MCP (this repository)
 
-This repo is Phase 1 Brain Foundation. Primary audio generator is Google Lyria 3.5. Public tools are `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `create_midi_plan`, `prepare_ableton_handoff`, `request_live_execution`, `execute_live_request`, `generate_audio`, `review_songspec`, `remember_song`, `search_memory`, `orchestrate_song`. The Ableton adapter stays behind the human authorization boundary. Details: [API.md](API.md).
+This repo is the Brain plus the Ableton Live automation boundary ([ADR-0006](adr/0006-ableton-live-automation.md)). There is no audio generator: Google Lyria is removed.
+
+Public tools (17): `hello`, `generate_songspec`, `create_project_from_songspec`, `create_ableton_plan`, `create_midi_plan`, `prepare_ableton_handoff`, `inspect_live_state`, `live_device_catalogue`, `create_live_mutation_plan`, `request_live_execution`, `execute_live_request`, `verify_live_execution`, `expand_session_to_arrangement`, `review_songspec`, `remember_song`, `search_memory`, `orchestrate_song`. Details: [API.md](API.md).
+
+Every Live mutation stays behind the human approval boundary. `save_live_set` is not implemented; its design is in [issues/ISSUE-0021.md](issues/ISSUE-0021.md).
+
+Max for Live is a hard requirement for the Live tools. The `.amxd` binary is not
+in this repository; the JavaScript source, protocol spec, and packaging steps
+are ([maxforlive/README.md](../maxforlive/README.md)).
+
+Real-hardware state: **not verified on a real Ableton Live instance.** The
+automated suite uses a fake transport only ([MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md)).
 
 Knowledge-driven generation flow:
 
@@ -394,9 +432,9 @@ KnowledgeService → KnowledgeEngine → GenreTemplate
     ↓
 GenerationContext
     ↓
-SongService / GoogleLyriaAdapter
+SongService
     ↓
-SongSpec / AudioRenderResult + knowledge provenance
+SongSpec + knowledge provenance
 ```
 
 Knowledge is a structured `GenreTemplate` wrapped by `KnowledgeEntry`.
@@ -412,9 +450,36 @@ Generators do not read genre YAML. The public SongSpec JSON shape is unchanged;
 | SongService | Generate, validate, defaults, bar/duration conversion |
 | ProjectService | ProjectPlan, name, output path, metadata, created_at |
 | ReviewService | Score, comments, warnings, suggestions (internal) |
-| AudioService | Build renderer-neutral AudioRenderRequest from ProjectPlan and knowledge |
-| LyriaPromptBuilder | Convert Arrangement and genre knowledge into a Lyria 3.5 prompt |
-| GoogleLyriaAdapter | Call Lyria 3.5, classify HTTP failures, verify MP3 receipts |
+| AbletonService | Translate ProjectPlan into Ableton-shaped plans, statically validated |
+| LiveStateInspector | Read Live health and state; never mutates, never retries |
+| LiveMutationPlanner | Build an inert Session View plan, with conflicts and warnings |
+| SessionPatternBuilder | Deterministic MIDI notes per track role and section density |
+| LiveDeviceCatalog | Candidate stock devices; refuses unknown or unavailable, never substitutes |
+| ApprovalGate | Bind approval to a plan hash, retire idempotency keys |
+| LiveExecutionService | Apply an approved plan once, read back, build a truthful receipt |
+| ArrangementExpander | Expand verified Session patterns into free Arrangement ranges |
+| LocalhostBridgeTransport | Loopback UDP to the Max device, token-attached, size-capped |
+
+### Safety rules enforced in code and tests
+
+1. No change while recording
+2. No structural change while playing
+3. Stop if the Set fingerprint moved since planning
+4. Never reuse an existing track on name alone
+5. Elements without a KIHACHI id are user owned
+6. Never delete or overwrite an existing clip
+7. Never place into an occupied Arrangement range
+8. Never substitute an unavailable device
+9. Editing a plan invalidates its approval
+10. Never execute the same idempotency key twice
+11. Never continue after a partial failure
+12. Never retry automatically
+13. Saving requires separate approval
+14. A readback mismatch is never `verified`
+
+Ownership is expressed in names, because Live tracks and scenes cannot carry
+arbitrary metadata. Tracks and scenes get ` [KIHACHI]`; clips get
+` [K:<8-char hash>]`.
 
 ## Current conversion rules
 

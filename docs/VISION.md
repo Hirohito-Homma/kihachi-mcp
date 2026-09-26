@@ -98,16 +98,19 @@ Continuous Integration is required.
  Ableton MCP   Knowledge Base
      │
      ▼
- Project Builder
+ Live Mutation Planner
      │
      ▼
- Google Lyria MCP
+ Approval Gate
      │
      ▼
- Audio Generation
+ Max for Live
      │
      ▼
- Final Song
+ Session View → Arrangement View
+     │
+     ▼
+ Editable Live Set
 ```
 
 ---
@@ -128,26 +131,31 @@ Produces
 
 ## Ableton
 
-Builds projects.
+Builds projects. **Max for Live is required.**
 
 Creates
 
 - Tracks
-- MIDI
-- Devices
-- Automation
+- Scenes
+- Session View clips and MIDI notes
+- Live stock devices
+- Locators
+- Arrangement View clips
+
+Every change requires human approval and is confirmed by reading Live back.
+Existing user content is never overwritten.
 
 ---
 
-## Google Lyria
+## Audio
 
-Generates audio.
+KIHACHI generates no audio.
 
-Responsible for
+Google Lyria was removed in [adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md).
+A rendered audio file cannot be edited in a DAW, so it is not the deliverable of
+a production platform. The deliverable is an editable Live Set.
 
-- audio rendering
-- prompt execution
-- stem generation
+The user renders audio from Ableton Live when the Set is ready.
 
 ---
 
@@ -226,13 +234,16 @@ Brain Foundation
 
 ## Phase 2
 
-Ableton Integration
+Ableton Integration (Max for Live, approval-gated, readback-verified)
 
 ---
 
 ## Phase 3
 
-Google Lyria Integration
+Set persistence and external plugin allow list
+
+Previously "Google Lyria Integration", withdrawn in
+[adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md).
 
 ---
 

@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0006](0006-ableton-live-automation.md)
+
+**Google Lyria は廃止済みです。** `GoogleLyriaAdapter`、`LyriaPromptBuilder`、
+`generate_audio`、`GEMINI_API_KEY`、`LYRIA_MODEL`、MP3 取得・検証・保存処理は
+すべて削除されました。
+
+理由は ADR-0006 に記載しています。要点は、Lyria の出力が完成音声であり
+DAW 上で編集できないため、AI 音楽制作プラットフォームの成果物にならないことです。
+成果物は編集可能な Live Set に変更しました。
+
+この ADR は判断の記録として残しています。実装の参照には使わないでください。
 
 ## Context
 

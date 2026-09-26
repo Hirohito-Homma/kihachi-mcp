@@ -2,30 +2,82 @@
 
 ## Unreleased
 
+### Removed (breaking)
+
+- **Google Lyria is gone.** The `generate_audio` MCP tool, `GoogleLyriaAdapter`,
+  `LyriaPromptBuilder`, `AudioService`, `AudioRenderRequest`,
+  `AudioRenderResult`, `scripts/lyria_smoke.py`, and the MP3 fetch, validate,
+  and store path are all deleted. KIHACHI generates no audio; the deliverable is
+  an editable Ableton Live Set
+- `GEMINI_API_KEY`, `LYRIA_MODEL`, `LYRIA_BASE_URL`, and `LYRIA_TIMEOUT` are no
+  longer read. Live automation needs no external API key
+- `AbletonExecutionAdapter`, `AbletonExecutionResult`, `LiveExecutionRequest`,
+  and `AbletonService.request_live_execution`. The old adapter returned
+  `status="executed"` without reading anything back from Live, which cannot be
+  reconciled with the readback requirement
+
 ### Added
 
+- Ableton Live automation behind a human approval gate (ISSUE-0020, ADR-0006).
+  **Max for Live is now a hard requirement** for the Live tools
+- Models: `LiveStateSnapshot`, `LiveMutationOperation`, `LiveMutationPlan`,
+  `LiveExecutionReceipt`, `LiveConflict`, `LivePrecondition`,
+  `LiveOperationReadback`, `LiveReadbackMismatch`, all schema-versioned and
+  JSON round-trip safe
+- Services: `LiveStateInspector`, `LiveMutationPlanner`,
+  `SessionPatternBuilder`, `LiveDeviceCatalog`, `ApprovalGate`,
+  `LiveExecutionService`, `ArrangementExpander`, `LocalhostBridgeTransport`,
+  `FakeLiveTransport`
+- MCP tools: `inspect_live_state`, `live_device_catalogue`,
+  `create_live_mutation_plan`, `verify_live_execution`,
+  `expand_session_to_arrangement`
+- Session View generation: differential scene creation, empty-slot checks, MIDI
+  clips with loop, length, name, and colour, deterministic notes with velocity
+  and duration, and immediate readback verification
+- Arrangement View expansion, allowed only after the Session receipt is
+  `verified`, placed only into free time ranges
+- Automatic loading of 11 Live stock devices, blocked rather than substituted
+  when unavailable
+- Loopback-only bridge: `127.0.0.1`, a fresh session token per start, request
+  size cap, operation count cap, timeout, duplicate `request_id` rejection, and
+  structured logs that never contain the token
+- `maxforlive/kihachi.device.js` with the Live Object Model implementation,
+  plus the protocol spec, setup, and packaging steps
+- Docs: `MAXFORLIVE.md`, `MANUAL_LIVE_TESTS.md`, `RECOVERY.md`, ADR-0006,
+  ISSUE-0020, ISSUE-0021
 - Knowledge-driven generation context: `KnowledgeEntry`, `KnowledgeContext`,
   `GenerationRequest`, `GenerationContext`, and `GenerationResult`
 - `KnowledgeService` query / select / filter over packaged genre knowledge
 - `GenerationService` and `Brain.generate_from_knowledge()` for provenance
-- Audio generation consumes genre knowledge when the project genre is known
-- ISSUE-0019 production Lyria 3.5 Interactions API path, arrangement-aware
-  prompt builder, and atomic MP3 artifact verification
-- ADR-0005: Google Lyria 3.5 as the primary audio generation provider
 
-### Changed
+### Changed (breaking)
 
+- Public MCP tools go from 13 to 17. `fastmcp list server.py` expects
+  `Tools (17)`
+- `request_live_execution` keeps its name but now builds a `LiveMutationPlan`
+  and writes its approval token to an owner-only file instead of returning it
+- `execute_live_request` keeps its name but now requires `approval_token`,
+  applies a plan exactly once, and returns a `LiveExecutionReceipt`.
+  `verified` means every operation was applied *and* read back matching
 - `generate_song` now goes through `GenerationService` while keeping the
   existing SongSpec JSON shape
-- `generate_audio` now builds a full-song Lyria prompt from ProjectPlan,
-  Arrangement, and genre knowledge
-- Real HTTP failures classify 401/403/429 as blocked and 400/404/5xx,
-  timeout, and network errors as failed without leaking response bodies
+- ADR-0003, ADR-0004, and ADR-0005 are superseded by ADR-0006
 
-### Fixed
+### Security
 
-- urllib `HTTPError` is no longer collapsed into a generic `OSError` before
-  status classification
+- The only secret in the Live path is a loopback session token, generated per
+  start, passed through a `0600` handshake file, attached by the transport, and
+  excluded from logs, errors, tool output, and Git
+
+### Not verified
+
+- **Ableton Live and Max for Live have not been exercised on real hardware.**
+  The automated suite uses a fake transport only. See `docs/MANUAL_LIVE_TESTS.md`
+- The `.amxd` binary is not in this repository, because Max's binary format
+  cannot be generated correctly from text and a fake device file would be worse
+  than none
+- The `load_live_device` Max patch wiring is incomplete; JavaScript cannot drive
+  the Live browser
 
 ---
 

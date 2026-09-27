@@ -2,7 +2,12 @@
 
 # Audio Tool
 
-Status: Done
+Status: **撤回済み（ISSUE-0020 により機能全体を削除）**
+
+> Google Lyria は廃止済みです。この Issue が定めた音声生成境界、
+> `AudioRenderRequest`、`AudioRenderResult`、`generate_audio` はすべて
+> 削除されました。理由は [../adr/0006-ableton-live-automation.md](../adr/0006-ableton-live-automation.md)。
+> 履歴として残しています。実装の参照には使わないでください。
 
 Priority: High
 

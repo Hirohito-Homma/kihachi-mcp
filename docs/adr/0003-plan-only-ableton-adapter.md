@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0006](0006-ableton-live-automation.md)
+
+`AbletonService.create_plan`、`create_midi_plan`、`prepare_handoff` と、MCP ツール
+`create_ableton_plan`、`create_midi_plan`、`prepare_ableton_handoff` はそのまま有効です。
+
+無効になったのは実行境界です。この ADR が予告した「a later execution adapter must add
+explicit authorization and readback」の readback 部分が `AbletonExecutionAdapter` に実装されず、
+読戻しなしで `status="executed"` を返していました。ADR-0006 が
+`LiveStateInspector` / `LiveMutationPlanner` / `ApprovalGate` /
+`LiveExecutionService` へ置き換え、`AbletonExecutionAdapter`、
+`AbletonExecutionResult`、`LiveExecutionRequest` を削除しました。
 
 ## Context
 

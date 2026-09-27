@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0006](0006-ableton-live-automation.md)
+
+この ADR が定めた音声生成境界は完全に廃止されました。`generate_audio` MCP ツール、
+`AudioService`、`AudioRenderRequest`、`AudioRenderResult` はすべて削除済みです。
+
+KIHACHI は音声を生成しません。成果物は編集可能な Ableton Live Set です。
 
 ## Context
 

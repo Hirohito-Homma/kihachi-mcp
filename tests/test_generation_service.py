@@ -1,11 +1,8 @@
-import json
-from pathlib import Path
-
 import pytest
 
 from kihachi_mcp.knowledge import UnknownGenreError
-from kihachi_mcp.models import GenerationRequest, ProjectPlan, SongSpec, TrackSpec
-from kihachi_mcp.services import AudioService, GenerationService, GoogleLyriaAdapter
+from kihachi_mcp.models import GenerationRequest, SongSpec
+from kihachi_mcp.services import GenerationService
 
 
 def test_build_context_uses_retrieved_knowledge() -> None:
@@ -72,73 +69,3 @@ def test_explicit_request_values_override_knowledge_defaults() -> None:
     assert result.songspec.tempo == 118
     assert result.songspec.key == "Fm"
     assert result.context.parameters.tracks[0] == "Kick"
-
-
-def test_audio_context_uses_knowledge_when_genre_is_known() -> None:
-    plan = ProjectPlan(
-        "Demo",
-        "dub techno",
-        110,
-        "D#m",
-        5,
-        160,
-        [TrackSpec("Bass", "Audio", "Blue")],
-    )
-    context = AudioService().create_generation_context(plan)
-
-    assert context.knowledge.template() is not None
-    assert context.parameters.mood == "Deep"
-
-
-def test_audio_context_without_knowledge_does_not_block_request() -> None:
-    plan = ProjectPlan(
-        "Demo",
-        "custom",
-        120,
-        "Am",
-        1,
-        32,
-        [TrackSpec("Bass", "Audio", "Blue")],
-    )
-    service = AudioService()
-    request = service.create_request(plan, "Bass")
-    context = service.create_generation_context(plan)
-
-    assert request.genre == "custom"
-    assert context.knowledge.entries == ()
-
-
-def test_lyria_uses_structured_knowledge_when_context_is_provided(
-    tmp_path: Path,
-) -> None:
-    calls: list[bytes | None] = []
-
-    def fake_http(method: str, url: str, headers: dict[str, str], body: bytes | None):
-        calls.append(body)
-        return (
-            200,
-            b'{"id":"interaction-1","steps":[{"content":[{"type":"audio","data":"d2F2LWJ5dGVz"}]}]}',
-            {},
-        )
-
-    plan = ProjectPlan(
-        "Demo",
-        "dub techno",
-        110,
-        "D#m",
-        1,
-        32,
-        [TrackSpec("Bass", "Audio", "Blue")],
-    )
-    service = AudioService()
-    request = service.create_request(plan, "Bass", "deep bass")
-    context = service.create_generation_context(plan)
-    result = GoogleLyriaAdapter(api_key="secret", http_call=fake_http).render(
-        request, tmp_path / "bass.mp3", context
-    )
-
-    payload = json.loads(calls[0] or b"{}")
-    assert result.status == "succeeded"
-    assert "mood: Deep" in payload["input"]
-    assert "tracks: Kick, Bass, Dub Chords, Pad, FX" in payload["input"]
-    assert "Genre: dub techno" in payload["input"]

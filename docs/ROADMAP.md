@@ -63,12 +63,9 @@
 - TrackSpec をAbleton track、Arrangement を locator へ変換
 - Live操作やMIDI生成は行わない
 
-### ISSUE-0008 — Audio Tool
+### ISSUE-0008 — Audio Tool（**撤回済み**）
 
-- ProjectPlan からAudioRenderRequestを構築
-- Google Lyria adapterでInteractions API、MP3 decode、検証を実装
-- `generate_audio`をMCP Toolとして追加
-- `127 passed`、Ruff、FastMCP Tools (12)を確認済み
+ISSUE-0020 で完全に削除されました。`AudioRenderRequest`、`GoogleLyriaAdapter`、`generate_audio` は存在しません。
 
 ### ISSUE-0009 — Review Integration
 
@@ -87,7 +84,7 @@
 ### ISSUE-0015 — GitHub Actions CI
 
 - push / pull requestでpytest、Ruff、FastMCP登録確認を実行
-- Lyria実機やAbleton Liveには接続しない
+- **CIでは実機接続しない。** Ableton Live も Max も起動しない
 
 ### ISSUE-0016 — Deterministic MIDI Plan
 
@@ -95,17 +92,13 @@
 - `create_midi_plan`をMCP Toolとして追加
 - Live接続、音符生成、プロジェクト変更は行わない
 
-### ISSUE-0014 — Ableton Execution Adapter
+### ISSUE-0014 — Ableton Execution Adapter（**ISSUE-0020 で置換**）
 
-- 承認状態を検査し、`approval_required` / `blocked` / `unavailable`を区別
-- Transport注入点を提供
-- 未設定時は実機実行を行わない
+読戻しなしで `executed` を返していたため撤去しました。`LiveExecutionService` が後継です。
 
-### ISSUE-0013 — Live Execution Boundary
+### ISSUE-0013 — Live Execution Boundary（**ISSUE-0020 で再設計**）
 
-- `request_live_execution`で承認待ちの1回分要求を作成
-- 検証エラーは`blocked`、正常時は`approval_required`
-- Live接続・変更は実行しない
+ツール名 `request_live_execution` は維持し、`LiveMutationPlan` と承認トークンを扱うよう再設計しました。
 
 ### ISSUE-0012 — Ableton Integration Preparation
 
@@ -119,30 +112,71 @@
 - `orchestrate_song`を追加し、既存Toolの契約は維持
 - Review不合格時の停止ポリシーをオプション化
 
+### ISSUE-0019 — Lyria 3.5 Production API（**ISSUE-0020 で撤回**）
+
+MP3 検証と HTTP 境界の堅牢化は完了しましたが、方針変更により機能全体を削除しました。判断の記録は [adr/0005-lyria-35-primary-audio.md](adr/0005-lyria-35-primary-audio.md)（superseded）。
+
+### ISSUE-0020 — Ableton Live 自動操作（完了、**実機未検証**）
+
+- Google Lyria を完全に廃止（tool / adapter / prompt builder / models / tests / 環境変数 / 文書）
+- Max for Live を必須要件化
+- `LiveStateSnapshot` / `LiveMutationOperation` / `LiveMutationPlan` / `LiveExecutionReceipt` を追加
+- `LiveStateInspector` → `LiveMutationPlanner` → `ApprovalGate` → `LiveExecutionService` の境界を確立
+- Session View でパターン生成、検証後に Arrangement View へ展開
+- Live 標準デバイス11種の自動ロード、利用不能時は `blocked`、自動フォールバックなし
+- `127.0.0.1` 限定 Bridge、起動ごとのセッショントークン、サイズ・操作数・時間上限
+- 安全規則14項目をコードとテストで固定
+- macOS / Windows のパス差を分離
+- 公開ツール 13 → 17
+- 完了条件: `264 passed`、Ruff 緑、FastMCP Tools (17)
+- **実機未検証。** [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) を人間が実行するまで実機動作は未確認
+
+詳細は [adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md) と [issues/ISSUE-0020.md](issues/ISSUE-0020.md)。
+
 ## 進行中
 
-なし。Sprint 1 の公開 API は安定対象。
+なし。
 
 ## 次の候補
 
-公開 API を壊さない前提で、次を検討する。
+### ISSUE-0021 — save_live_set（設計のみ）
 
-1. Google Lyria実機接続と成果物の運用検証
+保存は取り消せない唯一の操作のため、別の承認段階として分離します。実装は含みません。[issues/ISSUE-0021.md](issues/ISSUE-0021.md)。
+
+### ISSUE-0022 — 外部プラグイン許可リスト（未着手）
+
+VST3 / AU / CLAP は現在スコープ外です。将来対応する場合は明示的な許可リスト方式にします。理由は [adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md) の「デバイススコープ」節。
+
+### ISSUE-0023 — Max パッチのデバイスローダー配線（未完了）
+
+`load_live_device` は Max パッチ側の配線が必要です。JavaScript からは Live のブラウザを操作できません。[maxforlive/README.md](../maxforlive/README.md) の「デバイスローダー」節。
+
+### さらに先
+
+1. Review が `LiveExecutionReceipt` を評価し、`verified` のときだけ Memory へ採用する境界
+2. Session パターンのバリエーション生成（Groove A / Groove B の差分規則）
+3. Live の automation / mixer 操作。読戻しの設計が固まってから
 
 ## 互換方針
 
-既存 Tool の名前と JSON 形は変えない。
+次の Tool の名前と JSON 形は変えない。
 
 - `hello`
 - `generate_songspec`
 - `create_project_from_songspec`
+- `create_ableton_plan`
+- `create_midi_plan`
+- `prepare_ableton_handoff`
 - `review_songspec`
+- `remember_song`
+- `search_memory`
+- `orchestrate_song`
 
-内部の dataclass / service は自由にリファクタしてよい。
+`request_live_execution` と `execute_live_request` は名前を維持したまま ISSUE-0020 で再設計した（破壊的変更）。内部の dataclass / service は自由にリファクタしてよい。
 
 ## 長期フェーズ
 
-[VISION.md](VISION.md) の Phase 1–6。いまは Phase 1（Brain Foundation）。
+[VISION.md](VISION.md) の Phase 1–6。いまは Phase 2（Ableton Integration）。**実機未検証。**
 
 ### ISSUE-0007 — DAW Adapter
 

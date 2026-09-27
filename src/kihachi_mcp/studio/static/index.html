@@ -117,7 +117,10 @@
       <div id="spec-grid" class="grid"></div>
       <p><b>解釈</b></p>
       <ul id="interpretations"></ul>
-      <p><b>補った値</b></p>
+      <p><b>指示ごとの反映</b></p>
+      <p class="sub" id="coverage-line"></p>
+      <ul id="coverage"></ul>
+      <p><b>AIが補った値</b></p>
       <ul id="filled"></ul>
       <p><b>未対応・矛盾・曖昧</b></p>
       <ul id="unhandled"></ul>
@@ -148,6 +151,15 @@
       </div>
       <div id="apply-summary"></div>
       <div id="apply-result"></div>
+
+      <h2>アレンジメントに展開</h2>
+      <p class="sub">Sessionへ適用済みの候補を、同じ小節位置のままアレンジメントへ複製し、セクションの頭にロケーターを置きます。既存のアレンジメントのクリップは動かしません。再生を止めてから実行してください。</p>
+      <div class="actions">
+        <button id="preview-arrange" class="secondary">展開内容を確認</button>
+        <button id="arrange" disabled>この内容でアレンジメントに展開</button>
+      </div>
+      <div id="arrange-summary"></div>
+      <div id="arrange-result"></div>
     </section>
 
     <section id="recover-view">
@@ -188,7 +200,32 @@
       return { user: "指定", ai: "AI補完", default: "既定" }[item.source] || item.source;
     }
 
-    function renderCandidate(candidate) {
+    const COVERAGE_STATES = {
+      read: ["反映", "ok"],
+      partly_read: ["一部のみ", "warn"],
+      out_of_scope: ["対象外", "warn"],
+      unread: ["未反映", "bad"]
+    };
+
+    function renderCoverageList(coverage) {
+      if (!coverage) {
+        $("coverage-line").textContent = "";
+        $("coverage").innerHTML = "";
+        return;
+      }
+      const clauses = coverage.clauses || [];
+      const unread = clauses.filter((x) => x.state === "unread").length;
+      $("coverage-line").textContent = unread
+        ? `${clauses.length} 文のうち ${unread} 文は規則で読めず、音に反映されていない可能性が高いです`
+        : `${clauses.length} 文すべてに、規則で読めた部分があります`;
+      $("coverage").innerHTML = clauses.map((x) => {
+        const [label, cls] = COVERAGE_STATES[x.state] || [x.state, ""];
+        const detail = x.read_as.length ? `（${x.read_as.join("、")}）` : x.out_of_scope.length ? `（${x.out_of_scope.join("、")}）` : "";
+        return `<li><span class="${cls}">${label}</span> ${x.text}<span class="sub">${detail}</span></li>`;
+      }).join("");
+    }
+
+    function renderCandidate(candidate, coverage) {
       state.candidate = candidate;
       $("brief-view").classList.remove("hidden");
       $("candidate-view").classList.remove("hidden");
@@ -204,8 +241,10 @@
         ["ドロップ", brief.drop_start_bar.value || "なし"]
       ].map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
       $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>";
-      const filled = ["tempo", "key", "bars", "genre"].filter((k) => brief[k].source !== "user").map((k) => `${k} = ${brief[k].value}`);
-      $("filled").innerHTML = filled.map((x) => `<li>${x}</li>`).join("") || "<li>指定値をそのまま保持しています</li>";
+      renderCoverageList(coverage);
+      const filled = ((coverage && coverage.model_filled) || []).map((x) =>
+        `<li>${x.label} = ${x.value}${x.affects_notes ? "" : ' <span class="warn">（今は音に影響しません）</span>'}</li>`);
+      $("filled").innerHTML = filled.join("") || "<li>AIが補った値はありません</li>";
       const extra = [].concat(brief.unhandled || [], brief.contradictions || [], brief.ambiguous || []);
       $("unhandled").innerHTML = extra.map((x) => `<li>${x}</li>`).join("") || "<li>未対応の指示はありません</li>";
       $("candidate-meta").textContent = `候補 ${candidate.candidate_id.slice(0, 8)} / seed ${candidate.seed} / ノート ${candidate.note_counts.total}`;
@@ -229,7 +268,7 @@
       if (job.state === "done" && job.candidate_id) {
         $("job-line").textContent = `生成完了 ${job.elapsed_seconds.toFixed(1)} 秒`;
         const payload = await getJson("/api/candidate/" + job.candidate_id);
-        if (payload.ok) renderCandidate(payload.candidate);
+        if (payload.ok) renderCandidate(payload.candidate, payload.coverage);
       } else {
         $("job-line").textContent = job.error || "生成できませんでした";
       }
@@ -318,6 +357,46 @@
       renderCoverage(result.sound_coverage || {}, result.error);
     };
 
+    $("preview-arrange").onclick = async () => {
+      if (!state.candidate) return;
+      $("arrange").disabled = true;
+      $("arrange-result").innerHTML = "";
+      $("arrange-summary").innerHTML = "<p>Liveのアレンジメントを確認しています…</p>";
+      const result = await getJson("/api/arrangement/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
+      });
+      const s = result.summary || {};
+      $("arrange-summary").innerHTML = `
+        ${result.error ? `<p class="bad">${result.error}</p>` : ""}
+        <p>対象Set: ${s.set_name || "（未保存）"} / クリップ ${s.clip_count || 0} 個 / ${s.bars || 0} 小節</p>
+        <p>ロケーター: ${(s.locators || []).join(", ") || "なし"}</p>
+        ${s.already_expanded ? `<p class="bad">この候補はすでに展開を試行済みです</p>` : ""}
+        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
+        <ul>${(result.warnings || []).map((x) => `<li class="warn">${x}</li>`).join("")}</ul>
+      `;
+      $("arrange").disabled = !(result.ok && !s.already_expanded);
+    };
+
+    $("arrange").onclick = async () => {
+      if (!state.candidate || state.applying) return;
+      state.applying = true;
+      $("arrange").disabled = true;
+      const result = await getJson("/api/arrangement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: state.candidate.candidate_id, confirmed: true })
+      });
+      state.applying = false;
+      const receipt = result.receipt || {};
+      $("arrange-result").innerHTML = `
+        <p>結果: <b>${receipt.status || ""}</b>${result.error ? ` <span class="bad">${result.error}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
+        <p>${result.verified_means || ""}</p>
+        <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+      `;
+    };
+
     $("fill-drums").onclick = async () => {
       if (!state.candidate) return;
       const result = await getJson("/api/fill-drums", {
@@ -392,7 +471,7 @@
       const health = await refreshHealth();
       if (health.selected_candidate_id) {
         const payload = await getJson("/api/candidate/" + health.selected_candidate_id);
-        if (payload.ok) renderCandidate(payload.candidate);
+        if (payload.ok) renderCandidate(payload.candidate, payload.coverage);
       }
       const last = await getJson("/api/apply/last");
       if (last && last.receipt) renderApplyResult(last);

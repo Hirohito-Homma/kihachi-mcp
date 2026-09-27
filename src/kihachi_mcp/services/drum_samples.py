@@ -12,10 +12,16 @@ from pathlib import Path
 
 SAMPLE_RATE = 44100
 KICK_NOTE = 36
+CLAP_NOTE = 39
 HAT_NOTE = 42
+OPEN_HAT_NOTE = 46
+# Existing files are never rewritten: a Set that already loaded one keeps the
+# sound it was made with. New voices get new file names.
 _SAMPLES = {
     "kihachi-kick.wav": KICK_NOTE,
+    "kihachi-clap.wav": CLAP_NOTE,
     "kihachi-hat.wav": HAT_NOTE,
+    "kihachi-open-hat.wav": OPEN_HAT_NOTE,
 }
 
 
@@ -32,7 +38,7 @@ def ensure_drum_samples() -> dict[int, Path]:
     for name, note in _SAMPLES.items():
         path = folder / name
         if not path.is_file() or path.stat().st_size < 64:
-            _write_wav(path, _kick_frames() if note == KICK_NOTE else _hat_frames())
+            _write_wav(path, _FRAMES[note]())
         paths[note] = path
     return paths
 
@@ -87,6 +93,51 @@ def _hat_frames() -> list[int]:
         previous = noise
         frames.append(_clamp(highpass * math.exp(-55 * t)))
     return frames
+
+
+def _open_hat_frames() -> list[int]:
+    length = int(SAMPLE_RATE * 0.32)
+    frames: list[int] = []
+    seed = 0x5A5A
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        seed = (1103515245 * seed + 12345) & 0x7FFFFFFF
+        noise = (seed / 0x7FFFFFFF) * 2.0 - 1.0
+        highpass = noise - previous
+        previous = noise
+        frames.append(_clamp(highpass * math.exp(-11 * t) * 0.45))
+    return frames
+
+
+def _clap_frames() -> list[int]:
+    """Three quick noise bursts and a tail, the way a hand clap smears."""
+    length = int(SAMPLE_RATE * 0.25)
+    frames: list[int] = []
+    seed = 0x3C3C
+    band = 0.0
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        seed = (1103515245 * seed + 12345) & 0x7FFFFFFF
+        noise = (seed / 0x7FFFFFFF) * 2.0 - 1.0
+        # A one-pole low-pass after a difference keeps roughly 1-3 kHz.
+        band += 0.35 * ((noise - previous) - band)
+        previous = noise
+        bursts = sum(
+            math.exp(-160 * (t - onset)) for onset in (0.0, 0.011, 0.022) if t >= onset
+        )
+        tail = math.exp(-20 * max(0.0, t - 0.022)) * 0.6 if t >= 0.022 else 0.0
+        frames.append(_clamp(band * 2.2 * (bursts * 0.5 + tail)))
+    return frames
+
+
+_FRAMES = {
+    KICK_NOTE: _kick_frames,
+    CLAP_NOTE: _clap_frames,
+    HAT_NOTE: _hat_frames,
+    OPEN_HAT_NOTE: _open_hat_frames,
+}
 
 
 def _clamp(value: float) -> int:

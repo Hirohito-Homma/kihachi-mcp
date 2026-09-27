@@ -256,3 +256,115 @@ def test_short_id_fill_with_no_matching_tracks_says_so(tmp_path: Path) -> None:
     assert result["ok"] is False
     assert any("cdcd0005" in warning for warning in result["warnings"])
     assert transport.applied_operation_ids == []
+
+
+def _arrangement_placements(transport: FakeLiveTransport) -> list:
+    return [
+        clip
+        for clip in transport.live_set.arrangement_clips
+        if "[K:" in clip.name
+    ]
+
+
+def test_an_applied_candidate_expands_to_its_bars_in_the_arrangement(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    preview = runtime.arrangement_preview(candidate.candidate_id)
+    assert preview["ok"] is True
+    assert preview["summary"]["clip_count"] == len(candidate.clips)
+    assert preview["summary"]["bars"] == candidate.brief.bars.value
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is True
+    assert result["receipt"]["status"] == "verified"
+    assert result["musical_quality_claimed"] is False
+    placed = _arrangement_placements(transport)
+    assert len(placed) == len(candidate.clips)
+    beats = candidate.brief.beats_per_bar
+    expected = sorted(
+        ((clip.start_bar - 1) * beats, clip.length_bars * beats, len(clip.notes))
+        for clip in candidate.clips
+    )
+    assert sorted((c.start_beats, c.length_beats, c.note_count) for c in placed) == expected
+    locators = {item["beats"] for item in transport.live_set.locators}
+    assert locators == {(section.start_bar - 1) * beats for section in candidate.brief.sections}
+
+
+def test_arrangement_expansion_runs_once_even_after_a_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    assert runtime.expand_arrangement(candidate.candidate_id, confirmed=True)["ok"] is True
+    count = len(transport.live_set.arrangement_clips)
+    again = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert again["ok"] is False
+    assert "試行済み" in again["error"]
+    restarted = _restarted(tmp_path, transport, saved)
+    assert restarted.expand_arrangement(candidate.candidate_id, confirmed=True)["ok"] is False
+    assert restarted.arrangement_preview(candidate.candidate_id)["summary"]["already_expanded"]
+    assert len(transport.live_set.arrangement_clips) == count
+
+
+def test_arrangement_expansion_needs_the_session_clips_first(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    preview = runtime.arrangement_preview(candidate.candidate_id)
+    assert preview["ok"] is False
+    assert any(item["kind"] == "session_clip_missing" for item in preview["conflicts"])
+    assert runtime.expand_arrangement(candidate.candidate_id, confirmed=True)["ok"] is False
+    assert transport.live_set.arrangement_clips == []
+
+
+def test_arrangement_expansion_never_overlaps_an_existing_clip(tmp_path: Path) -> None:
+    from kihachi_mcp.services.live_transport_fake import FakeArrangementClip
+
+    runtime, candidate, transport = _runtime(tmp_path)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    kick = next(t for t in transport.live_set.tracks if "Kick" in t["name"])
+    mine = FakeArrangementClip(kick["index"], "my edit", 8.0, 4.0)
+    transport.live_set.arrangement_clips.append(mine)
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is False
+    assert any(
+        item["kind"] == "arrangement_range_occupied" for item in result["conflicts"]
+    )
+    assert transport.live_set.arrangement_clips == [mine]
+    assert transport.live_set.locators == []
+
+
+def test_arrangement_expansion_is_refused_while_live_plays(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    transport.live_set.is_playing = True
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is False
+    assert transport.live_set.arrangement_clips == []
+
+
+def test_unconfirmed_arrangement_expansion_does_nothing(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    assert runtime.expand_arrangement(candidate.candidate_id, confirmed=False)["ok"] is False
+    assert transport.live_set.arrangement_clips == []
+
+
+def test_the_default_runtime_expands_beside_existing_arrangement_clips(
+    tmp_path: Path,
+) -> None:
+    """Planning and execution must read the Set the same way.
+
+    The Set fingerprint covers Arrangement clips. If execution re-read Live
+    without them, any Set with an Arrangement clip would look changed and the
+    expansion would be refused every time.
+    """
+    from kihachi_mcp.services.live_transport_fake import FakeArrangementClip
+
+    live = FakeLiveSet(live_version="12.4.3", tempo=125)
+    user = live.add_track("My Synth")
+    live.arrangement_clips.append(FakeArrangementClip(user["index"], "user take", 0.0, 64.0))
+    transport = FakeLiveTransport(live)
+    runtime = StudioRuntime(transport=transport, gate=gate(tmp_path))
+    candidate = _candidate()
+    runtime._store(candidate)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is True, result.get("error") or result.get("receipt")
+    assert len(_arrangement_placements(transport)) == len(candidate.clips)

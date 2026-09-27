@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.studio_runtime import StudioRuntime
 
@@ -87,7 +88,16 @@ def _handler_for(app: StudioApp):
                 if candidate is None:
                     self._send_json({"ok": False, "error": "候補がありません"}, 404)
                     return
-                self._send_json({"ok": True, "candidate": candidate.to_dict()})
+                self._send_json(
+                    {
+                        "ok": True,
+                        "candidate": candidate.to_dict(),
+                        "coverage": read_coverage(
+                            candidate.brief.original_text,
+                            model_filled_fields(candidate.brief),
+                        ),
+                    }
+                )
                 return
             self._send_json({"ok": False, "error": "not found"}, 404)
 
@@ -133,6 +143,19 @@ def _handler_for(app: StudioApp):
                     runtime.apply_preview(
                         str(body.get("candidate_id") or ""),
                         change_tempo=bool(body.get("change_tempo")),
+                    )
+                )
+                return
+            if parsed.path == "/api/arrangement/preview":
+                self._send_json(
+                    runtime.arrangement_preview(str(body.get("candidate_id") or ""))
+                )
+                return
+            if parsed.path == "/api/arrangement":
+                self._send_json(
+                    runtime.expand_arrangement(
+                        str(body.get("candidate_id") or ""),
+                        confirmed=bool(body.get("confirmed")),
                     )
                 )
                 return

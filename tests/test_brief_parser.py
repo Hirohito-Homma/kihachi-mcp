@@ -80,3 +80,18 @@ def _valid_intent() -> dict:
         "unhandled": [],
         "ambiguous": [],
     }
+
+
+def test_letters_inside_english_words_are_not_keys() -> None:
+    """The C of TECHNO once turned a D minor brief into C minor."""
+    assert extract_explicit("Dマイナーの重いDUB TECHNO")["fields"]["key"] == "Dm"
+    assert extract_explicit("CのACID DISCO")["fields"]["key"] == "C"
+    assert "key" not in extract_explicit("BPM 125 のハードテクノ")["fields"]
+
+
+def test_full_width_and_music_sign_sharps_are_read() -> None:
+    brief = "105 BPM、D＃マイナー、144小節で5分程度の重いDUB TECHNO。"
+    assert extract_explicit(brief)["fields"]["key"] == "D#m"
+    assert extract_explicit("Ｄ＃マイナー")["fields"]["key"] == "D#m"
+    assert extract_explicit("D♯マイナー")["fields"]["key"] == "D#m"
+    assert extract_explicit("E♭マイナー")["fields"]["key"] == "D#m"

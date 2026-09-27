@@ -96,6 +96,22 @@ class StudioRuntime:
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
         )
+        # Arrangement expansion reads Arrangement clips, and the Set fingerprint
+        # covers them, so planning and execution must read the Set the same way.
+        self._arrangement_inspector = (
+            inspector
+            if inspector is not None
+            else _ArrangementInspector(
+                self._transport, request_id_factory=_unique_request_ids()
+            )
+        )
+        self._arrangement_executor = executor or LiveExecutionService(
+            transport=self._transport,
+            inspector=self._arrangement_inspector,
+            approval_gate=self._gate,
+            request_id_factory=_unique_request_ids(),
+        )
+        self._arranged_ids: set[str] = set()
         self._export_dir = Path(
             export_dir or Path.home() / "Music" / "KIHACHI" / "exports"
         )
@@ -373,6 +389,103 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
+    def arrangement_preview(self, candidate_id: str) -> dict[str, Any]:
+        """Show where the Session clips would go in the Arrangement. No changes."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        try:
+            snapshot = self._arrangement_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {"ok": False, "error": f"{exc.code}: {exc.message}"}
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
+        plan = self._planner.create_arrangement_plan(candidate, snapshot)
+        placements = [
+            operation for operation in plan.operations
+            if operation.op == "place_arrangement_clip"
+        ]
+        beats = snapshot.time_signature.beats_per_bar
+        last_bar = max(
+            (
+                (operation.arguments["start_beats"] + operation.arguments["length_beats"])
+                / beats
+                for operation in placements
+            ),
+            default=0,
+        )
+        return {
+            "ok": plan.status != "blocked",
+            "candidate_id": candidate.candidate_id,
+            "status": plan.status,
+            "plan": plan.to_dict(),
+            "summary": {
+                "set_name": snapshot.set_name,
+                "clip_count": len(placements),
+                "locators": [
+                    f"{section.name} {section.start_bar}小節目"
+                    for section in candidate.brief.sections
+                ],
+                "bars": round(last_bar),
+                "already_expanded": self._arranged(candidate_id),
+            },
+            "conflicts": [item.to_dict() for item in plan.conflicts],
+            "warnings": list(plan.warnings),
+            "musical_quality_claimed": False,
+        }
+
+    def expand_arrangement(
+        self, candidate_id: str, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Copy one applied candidate into the Arrangement once. Never retries."""
+        if not confirmed:
+            return {"ok": False, "error": "展開内容を確認してから実行してください"}
+        if self._arranged(candidate_id):
+            return {
+                "ok": False,
+                "error": (
+                    "この候補はすでにアレンジメントへの展開を試行済みです。"
+                    "重複配置を防ぐため再実行しません"
+                ),
+            }
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            preview = self.arrangement_preview(candidate_id)
+            if not preview.get("ok"):
+                return preview
+            from kihachi_mcp.models.live_mutation import LiveMutationPlan
+
+            plan = LiveMutationPlan.from_dict(preview["plan"])
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message, "preview": preview}
+            self._arranged_ids.add(candidate_id)
+            self._mark(candidate_id, ".arranged")
+            receipt = self._arrangement_executor.execute(
+                plan, approved=True, approval_token=token
+            )
+            return {
+                "ok": receipt.status == "verified",
+                "candidate_id": candidate_id,
+                "receipt": receipt.to_dict(),
+                "partial": receipt.status == "partially_applied",
+                "musical_quality_claimed": False,
+                "verified_means": (
+                    "Liveが計画どおりクリップとロケーターを置いたこと。"
+                    "音楽的な良し悪しは含みません"
+                ),
+            }
+        finally:
+            self._apply_lock.release()
+
+    def _arranged(self, candidate_id: str) -> bool:
+        if candidate_id in self._arranged_ids:
+            return True
+        path = self._candidate_path(candidate_id, ".arranged")
+        return path is not None and path.is_file()
+
     def last_apply(self) -> dict[str, Any] | None:
         """Return the most recent apply result."""
         return self._last_apply
@@ -488,7 +601,10 @@ class StudioRuntime:
 
     def _mark_applied(self, candidate_id: str) -> None:
         """Remember the attempt on disk so a restart cannot apply it twice."""
-        path = self._candidate_path(candidate_id, ".applied")
+        self._mark(candidate_id, ".applied")
+
+    def _mark(self, candidate_id: str, suffix: str) -> None:
+        path = self._candidate_path(candidate_id, suffix)
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"{time.time():.0f}\n", encoding="utf-8")
@@ -617,6 +733,13 @@ class _PlanningInspector(LiveStateInspector):
 
     def snapshot(self) -> Any:
         return super().snapshot(include_arrangement=False, count_session_notes=False)
+
+
+class _ArrangementInspector(LiveStateInspector):
+    """Inspect Session and Arrangement clips, without counting notes."""
+
+    def snapshot(self) -> Any:
+        return super().snapshot(include_arrangement=True, count_session_notes=False)
 
 
 class _CoverageInspector(LiveStateInspector):

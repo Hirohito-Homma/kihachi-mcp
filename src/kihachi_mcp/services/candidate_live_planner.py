@@ -8,11 +8,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
+    OP_CREATE_LOCATOR,
     OP_CREATE_MIDI_TRACK,
     OP_CREATE_SCENE,
     OP_CREATE_SESSION_CLIP,
     OP_LOAD_DRUM_PAD_SAMPLE,
     OP_LOAD_LIVE_DEVICE,
+    OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
     OP_SET_TEMPO,
     canonical_hash,
@@ -35,6 +37,8 @@ from kihachi_mcp.services.live_approval_gate import APPROVAL_TTL_SECONDS
 CONFLICT_RECORDING = "live_is_recording"
 CONFLICT_PLAYING = "live_is_playing"
 CONFLICT_USER_CLIP = "user_owned_clip"
+CONFLICT_SESSION_MISSING = "session_clip_missing"
+CONFLICT_ARRANGEMENT_OCCUPIED = "arrangement_range_occupied"
 
 _TRACK_COLORS = {"Kick": "2", "Hats": "20", "Bass": "14", "Stab": "9"}
 _SHORT_ID_RE = re.compile(r"[0-9a-f]{8}")
@@ -121,6 +125,42 @@ class CandidateLivePlanner:
             warnings=warnings,
         )
 
+    def create_arrangement_plan(
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+    ) -> LiveMutationPlan:
+        """Copy the candidate's Session clips to their bars in the Arrangement.
+
+        Every Session clip already holds its whole window of notes, so one copy
+        per clip at its start bar lays out the song exactly as previewed. The
+        snapshot must include Arrangement clips: an occupied range is refused,
+        never moved or trimmed.
+        """
+        builder = _Builder(candidate, snapshot, change_tempo=False)
+        operations, conflicts, warnings = builder.build_arrangement()
+        request_id = self._request_id_factory()
+        return LiveMutationPlan(
+            request_id=request_id,
+            idempotency_key=canonical_hash(
+                {
+                    "request_id": request_id,
+                    "candidate_id": candidate.candidate_id,
+                    "note_fingerprint": candidate.note_fingerprint,
+                    "set_fingerprint": snapshot.set_fingerprint,
+                    "stage": "arrangement",
+                }
+            ),
+            source_plan_hash=candidate.note_fingerprint,
+            set_fingerprint=snapshot.set_fingerprint,
+            expires_at=(
+                self._clock() + timedelta(seconds=self._ttl_seconds)
+            ).isoformat(),
+            operations=operations,
+            conflicts=conflicts,
+            warnings=warnings,
+        )
+
     def create_drum_sample_plan(
         self,
         candidate: MidiCandidate | AppliedTracks,
@@ -184,6 +224,188 @@ class _Builder:
         if self._conflicts:
             return [], self._conflicts, self._warnings
         return self._operations, self._conflicts, self._warnings
+
+    def build_arrangement(
+        self,
+    ) -> tuple[list[LiveMutationOperation], list[LiveConflict], list[str]]:
+        self._guard_transport()
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        beats = self._snapshot.time_signature.beats_per_bar
+        reserved: dict[int, list[tuple[float, float]]] = {}
+        for part in STUDIO_PARTS:
+            track_name = managed_track_name(f"KIHACHI {part} {self._short_id}")
+            track = self._snapshot.track_by_name(track_name)
+            if track is None:
+                self._conflicts.append(
+                    LiveConflict(
+                        CONFLICT_SESSION_MISSING,
+                        f"'{track_name}' がありません。先にSessionへ適用してください",
+                        {"track_name": track_name},
+                    )
+                )
+                continue
+            clips = self._candidate.clips_for_part(part)
+            missing = [
+                clip
+                for clip in clips
+                if not self._plan_arrangement_clip(
+                    track.index, track_name, clip, beats, reserved
+                )
+            ]
+            if missing:
+                self._conflicts.append(
+                    LiveConflict(
+                        CONFLICT_SESSION_MISSING,
+                        f"{track_name} のSessionクリップが {len(clips)} 個中 "
+                        f"{len(missing)} 個見つかりません（最初は {missing[0].section_name} "
+                        f"{missing[0].start_bar}小節目）。Sessionのシーンやクリップが"
+                        "消えている場合は、候補を作り直して適用してください",
+                        {"track_name": track_name, "missing": len(missing)},
+                    )
+                )
+        # Clips first: an empty Arrangement can keep Live from moving the
+        # insert marker far enough to create later locators.
+        for section in self._candidate.brief.sections:
+            self._plan_section_locator(section.name, section.start_bar, beats)
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        self._warnings.append(
+            "既存のロケーターと同じ位置に置く場合、そのロケーター操作は失敗として報告し、"
+            "そこで止まります（既存のロケーターは消しません）"
+        )
+        return self._operations, self._conflicts, self._warnings
+
+    def _plan_arrangement_clip(
+        self,
+        track_index: int,
+        track_name: str,
+        clip: CandidateClip,
+        beats: float,
+        reserved: dict[int, list[tuple[float, float]]],
+    ) -> bool:
+        """Plan one copy. Returns False only when the Session source is missing."""
+        scene_name = managed_track_name(
+            f"{clip.section_name} {clip.start_bar} {self._short_id}"
+        )
+        session_name = managed_clip_name(clip.section_name, self._session_clip_id(clip))
+        scene = self._snapshot.scene_by_name(scene_name)
+        source = (
+            self._snapshot.session_clip_at(track_index, scene.index)
+            if scene is not None
+            else None
+        )
+        if source is None or source.name != session_name:
+            return False
+        start = round((clip.start_bar - 1) * beats, 6)
+        length = round(clip.length_bars * beats, 6)
+        end = start + length
+        for existing in self._snapshot.arrangement_clips_on(track_index):
+            if start < existing.end_beats and existing.start_beats < end:
+                self._conflicts.append(
+                    LiveConflict(
+                        CONFLICT_ARRANGEMENT_OCCUPIED,
+                        f"{track_name} の {clip.start_bar}〜"
+                        f"{clip.start_bar + clip.length_bars - 1}小節には "
+                        f"'{existing.name}' があります。既存のクリップは動かしません",
+                        {"track_index": track_index, "existing_clip": existing.name},
+                    )
+                )
+                return True
+        for other_start, other_end in reserved.get(track_index, []):
+            if start < other_end and other_start < end:
+                self._conflicts.append(
+                    LiveConflict(
+                        CONFLICT_ARRANGEMENT_OCCUPIED,
+                        f"{track_name} で候補のクリップ同士が重なっています",
+                        {"track_index": track_index},
+                    )
+                )
+                return True
+        reserved.setdefault(track_index, []).append((start, end))
+        name = managed_clip_name(
+            clip.section_name,
+            canonical_hash(
+                {
+                    "candidate": self._candidate.candidate_id,
+                    "part": clip.part,
+                    "start_bar": clip.start_bar,
+                    "stage": "arrangement",
+                }
+            )[:8],
+        )
+        self._operations.append(
+            LiveMutationOperation(
+                operation_id=self._next_id(OP_PLACE_ARRANGEMENT_CLIP),
+                op=OP_PLACE_ARRANGEMENT_CLIP,
+                target={"track_index": track_index, "scene_index": scene.index},
+                arguments={
+                    "name": name,
+                    "start_beats": start,
+                    "length_beats": length,
+                    "source_clip_name": session_name,
+                },
+                preconditions=[
+                    LivePrecondition("not_recording"),
+                    LivePrecondition("transport_stopped"),
+                    LivePrecondition(
+                        "track_name_at_index",
+                        {"track_index": track_index, "name": track_name},
+                    ),
+                    LivePrecondition(
+                        "clip_is_managed",
+                        {"track_index": track_index, "scene_index": scene.index},
+                    ),
+                    LivePrecondition(
+                        "arrangement_range_free",
+                        {
+                            "track_index": track_index,
+                            "start_beats": start,
+                            "length_beats": length,
+                        },
+                    ),
+                ],
+                destructive=False,
+                expected_readback={
+                    "track_index": track_index,
+                    "name": name,
+                    "start_beats": start,
+                    "length_beats": length,
+                    # The copy must hold exactly the notes that were previewed.
+                    "note_count": len(clip.notes),
+                },
+            )
+        )
+        return True
+
+    def _plan_section_locator(self, section: str, start_bar: int, beats: float) -> None:
+        name = managed_track_name(f"{section} {self._short_id}")
+        position = round((start_bar - 1) * beats, 6)
+        self._operations.append(
+            LiveMutationOperation(
+                operation_id=self._next_id(OP_CREATE_LOCATOR),
+                op=OP_CREATE_LOCATOR,
+                target={"scope": "arrangement"},
+                arguments={"name": name, "beats": position},
+                preconditions=[
+                    LivePrecondition("not_recording"),
+                    LivePrecondition("transport_stopped"),
+                ],
+                destructive=False,
+                expected_readback={"name": name, "beats": position},
+            )
+        )
+
+    def _session_clip_id(self, clip: CandidateClip) -> str:
+        """The managed id _plan_one_clip gave this clip's Session copy."""
+        return canonical_hash(
+            {
+                "candidate": self._candidate.candidate_id,
+                "part": clip.part,
+                "section": clip.section_name,
+                "start_bar": clip.start_bar,
+            }
+        )[:8]
 
     def build_drum_samples_only(
         self,
@@ -437,15 +659,7 @@ class _Builder:
         beats: float,
     ) -> None:
         existing = self._snapshot.session_clip_at(track["index"], scene_index)
-        managed_id = canonical_hash(
-            {
-                "candidate": self._candidate.candidate_id,
-                "part": clip.part,
-                "section": clip.section_name,
-                "start_bar": clip.start_bar,
-            }
-        )[:8]
-        clip_name = managed_clip_name(clip.section_name, managed_id)
+        clip_name = managed_clip_name(clip.section_name, self._session_clip_id(clip))
         length_beats = round(clip.length_bars * beats, 6)
         notes = [note.to_dict() for note in clip.notes]
         if existing is not None and not existing.is_managed:

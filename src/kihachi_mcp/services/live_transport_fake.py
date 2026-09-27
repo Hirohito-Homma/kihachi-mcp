@@ -145,7 +145,7 @@ class FakeLiveTransport:
         if method == METHOD_PING:
             return self._ok(request_id, self._ping())
         if method == METHOD_GET_STATE:
-            return self._ok(request_id, self.snapshot_payload())
+            return self._ok(request_id, self.snapshot_payload(payload))
         if method == METHOD_GET_DRUM_RACK_SUMMARY:
             return self._ok(request_id, self._drum_rack_summary(payload))
         if method == METHOD_APPLY_OPERATION:
@@ -204,9 +204,18 @@ class FakeLiveTransport:
             "devices": devices,
         }
 
-    def snapshot_payload(self) -> dict[str, Any]:
-        """Return the Set as a ``LiveStateSnapshot``-compatible payload."""
+    def snapshot_payload(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return the Set as a ``LiveStateSnapshot``-compatible payload.
+
+        ``options`` are the get_state flags, honored the way the Max device
+        honors them, so a caller that reads the Set two different ways sees
+        two different fingerprints here too.
+        """
         live = self.live_set
+        options = options or {}
+        include_arrangement = options.get("include_arrangement") is not False
+        include_session_clips = options.get("include_session_clips") is not False
+        count_session_notes = options.get("count_session_notes") is not False
         return {
             "schema_version": SCHEMA_VERSION,
             "live_version": live.live_version,
@@ -228,14 +237,16 @@ class FakeLiveTransport:
                     "scene_index": scene_index,
                     "name": clip.name,
                     "length_beats": clip.length_beats,
-                    "note_count": len(clip.notes),
+                    "note_count": len(clip.notes) if count_session_notes else 0,
                     "is_midi": clip.is_midi,
                     "looping": clip.looping,
                 }
                 for (track_index, scene_index), clip in sorted(
                     live.session_clips.items()
                 )
-            ],
+            ]
+            if include_session_clips
+            else [],
             "arrangement_clips": [
                 {
                     "track_index": clip.track_index,
@@ -245,7 +256,9 @@ class FakeLiveTransport:
                     "note_count": clip.note_count,
                 }
                 for clip in live.arrangement_clips
-            ],
+            ]
+            if include_arrangement
+            else [],
             "devices": [
                 {"name": name, "available": True, "category": ""}
                 for name in live.available_devices

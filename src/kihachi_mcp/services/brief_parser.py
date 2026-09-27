@@ -1,6 +1,7 @@
 """Deterministic extraction of explicit values from a Japanese brief."""
 
 import re
+import unicodedata
 from typing import Any
 
 from kihachi_mcp.models.production_brief import KEY_ENUM, SOURCE_USER
@@ -43,29 +44,40 @@ _UNHANDLED_PATTERNS = (
 )
 
 
+#: A span of the brief a reader acted on: (start, end, label).
+Span = tuple[int, int, str]
+
+_TEMPO_RES = (
+    re.compile(r"(?<!\d)(\d{2,3})\s*(?:BPM|bpm|ＢＰＭ)"),
+    re.compile(r"テンポ\s*(\d{2,3})"),
+)
+# 「57小節目」 is a position, not a length.
+_BARS_RE = re.compile(r"(?<!\d)(\d{2,3})\s*小節(?!目)")
+_DROP_RES = (
+    re.compile(r"(?<!\d)(\d{1,3})\s*小節目?から\s*(?:ドロップ|Drop|DROP|サビ)"),
+    re.compile(r"(?:ドロップ|Drop|DROP)\s*(?:は|を|に)?\s*(\d{1,3})\s*小節"),
+)
+_FEWER = "(少なく|疎|減ら)"
+_MORE = "(多く|密|増や)"
+_HAT = "(ハット|hats?)"
+# (field, value, pattern). The first match per field wins, in this order.
+_HAT_RULES = (
+    ("hats_first_half", "sparse", rf"前半.{{0,12}}{_HAT}.{{0,8}}{_FEWER}"),
+    ("hats_first_half", "dense", rf"前半.{{0,12}}{_HAT}.{{0,8}}{_MORE}"),
+    ("hats_second_half", "dense", rf"後半.{{0,12}}{_HAT}.{{0,8}}{_MORE}"),
+    ("hats_second_half", "sparse", rf"後半.{{0,12}}{_HAT}.{{0,8}}{_FEWER}"),
+    ("hats_first_half", "sparse", rf"{_HAT}.{{0,8}}前半.{{0,8}}{_FEWER}"),
+    ("hats_second_half", "dense", rf"{_HAT}.{{0,8}}後半.{{0,8}}{_MORE}"),
+)
+_MOOD_WORDS = ("暗い", "ダーク", "明るい", "優しい", "激しい", "冷たい")
+
+
 def extract_explicit(brief: str) -> dict[str, Any]:
     """Return user-specified fields that the model is not allowed to override."""
     text = brief.strip()
     if not text or len(text) > 4000:
         raise ValueError("制作指示は1〜4000文字で入力してください")
-    fields: dict[str, Any] = {}
-    tempo = _extract_tempo(text)
-    if tempo is not None:
-        fields["tempo"] = tempo
-    key = _extract_key(text)
-    if key is not None:
-        fields["key"] = key
-    bars = _extract_bars(text)
-    if bars is not None:
-        fields["bars"] = bars
-    drop = _extract_drop(text)
-    if drop is not None:
-        fields["drop_start_bar"] = drop
-    hats = _extract_hat_density(text)
-    fields.update(hats)
-    mood = _extract_mood(text)
-    if mood is not None:
-        fields["mood"] = mood
+    fields, _spans = read_explicit(text)
     return {
         "original_text": text,
         "fields": fields,
@@ -74,44 +86,107 @@ def extract_explicit(brief: str) -> dict[str, Any]:
     }
 
 
-def _extract_tempo(text: str) -> int | None:
-    match = re.search(r"(?<!\d)(\d{2,3})\s*(?:BPM|bpm|ＢＰＭ)", text)
-    if not match:
-        match = re.search(r"テンポ\s*(\d{2,3})", text)
-    if not match:
-        return None
-    tempo = int(match.group(1))
-    if 60 <= tempo <= 180:
-        return tempo
+def read_explicit(text: str) -> tuple[dict[str, Any], list[Span]]:
+    """Return the explicit fields and exactly which text produced each one.
+
+    Brief coverage reads the spans, so what it reports as read is what these
+    readers used -- not a second copy of the patterns that could drift.
+    """
+    fields: dict[str, Any] = {}
+    spans: list[Span] = []
+
+    def first(name: str, found: tuple[Any, int, int] | None) -> None:
+        if found is not None:
+            value, start, end = found
+            fields[name] = value
+            spans.append((start, end, name))
+
+    first("tempo", _find_tempo(text))
+    first("key", _find_key(text))
+    first("bars", _find_bars(text))
+    first("drop_start_bar", _find_drop(text))
+    for name, value, pattern in _HAT_RULES:
+        if name in fields:
+            continue
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            fields[name] = value
+            spans.append((match.start(), match.end(), name))
+    for word in _MOOD_WORDS:
+        position = text.find(word)
+        if position >= 0:
+            fields["mood"] = word
+            spans.append((position, position + len(word), "mood"))
+            break
+    return fields, spans
+
+
+def out_of_scope_spans(text: str) -> list[tuple[int, int, str]]:
+    """Where the brief asks for something KIHACHI states it does not do."""
+    found: list[tuple[int, int, str]] = []
+    for pattern, message in _UNHANDLED_PATTERNS:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            found.append((match.start(), match.end(), message))
+    return found
+
+
+def _find_tempo(text: str) -> tuple[int, int, int] | None:
+    for pattern in _TEMPO_RES:
+        match = pattern.search(text)
+        if match:
+            tempo = int(match.group(1))
+            return (tempo, match.start(), match.end()) if 60 <= tempo <= 180 else None
     return None
 
 
-def _extract_bars(text: str) -> int | None:
-    match = re.search(r"(?<!\d)(\d{2,3})\s*小節", text)
-    if not match:
-        return None
-    bars = int(match.group(1))
-    if 16 <= bars <= 256 and bars % 4 == 0:
-        return bars
+def _find_bars(text: str) -> tuple[int, int, int] | None:
+    for match in _BARS_RE.finditer(text):
+        bars = int(match.group(1))
+        if 16 <= bars <= 256 and bars % 4 == 0:
+            return bars, match.start(), match.end()
     return None
 
 
-def _extract_drop(text: str) -> int | None:
-    match = re.search(r"(?<!\d)(\d{1,3})\s*小節目?から\s*(?:ドロップ|Drop|DROP|サビ)", text)
-    if not match:
-        match = re.search(r"(?:ドロップ|Drop|DROP)\s*(?:は|を|に)?\s*(\d{1,3})\s*小節", text)
-    if not match:
-        return None
-    bar = int(match.group(1))
-    return bar if bar >= 1 else None
+def _find_drop(text: str) -> tuple[int, int, int] | None:
+    for pattern in _DROP_RES:
+        match = pattern.search(text)
+        if match:
+            bar = int(match.group(1))
+            return (bar, match.start(), match.end()) if bar >= 1 else None
+    return None
 
 
 def _extract_key(text: str) -> str | None:
-    lowered = text
+    found = _find_key(text)
+    return found[0] if found else None
+
+
+def _find_key(text: str) -> tuple[str, int, int] | None:
+    # Full-width 「Ｄ＃」 is what a Japanese IME types; ♯/♭ are the music signs.
+    # Normalizing one character at a time keeps an index back into the brief.
+    normalized: list[str] = []
+    origin: list[int] = []
+    for index, character in enumerate(text):
+        piece = unicodedata.normalize("NFKC", character).replace("♯", "#").replace("♭", "b")
+        normalized.append(piece)
+        origin.extend([index] * len(piece))
+    lowered = "".join(normalized)
+    origin.append(len(text))
     for alias, root in _KEY_ALIASES.items():
-        lowered = lowered.replace(alias, root)
+        position = lowered.find(alias)
+        if position >= 0:
+            quality = lowered[position + len(alias):position + len(alias) + 4]
+            key = f"{root}m" if quality.startswith("マイナー") else root
+            end = position + len(alias) + (4 if quality.startswith(("マイナー", "メジャー")) else 0)
+            if key in KEY_ENUM:
+                return key, origin[position], origin[end]
     for raw, root in _ROOTS:
-        pattern = rf"{re.escape(raw)}\s*(マイナー|minor|m\b|メジャー|major)?"
+        # A key letter stands alone: the C in "TECHNO" or the D in "DUB" is
+        # part of a word, not a key.
+        pattern = (
+            rf"(?<![A-Za-z]){re.escape(raw)}"
+            r"\s*(マイナー|minor|m(?![A-Za-z])|メジャー|major)?(?![A-Za-z#])"
+        )
         match = re.search(pattern, lowered, flags=re.IGNORECASE)
         if not match:
             continue
@@ -123,37 +198,7 @@ def _extract_key(text: str) -> str | None:
         ):
             key = f"{root}m"
         if key in KEY_ENUM:
-            return key
-    if re.search(r"\bDm\b", text):
-        return "Dm"
-    return None
-
-
-def _extract_hat_density(text: str) -> dict[str, str]:
-    result: dict[str, str] = {}
-    if re.search(r"前半.{0,12}(ハット|hats?).{0,8}(少なく|疎|減ら)", text, flags=re.IGNORECASE):
-        result["hats_first_half"] = "sparse"
-    elif re.search(r"前半.{0,12}(ハット|hats?).{0,8}(多く|密|増や)", text, flags=re.IGNORECASE):
-        result["hats_first_half"] = "dense"
-    if re.search(r"後半.{0,12}(ハット|hats?).{0,8}(多く|密|増や)", text, flags=re.IGNORECASE):
-        result["hats_second_half"] = "dense"
-    elif re.search(r"後半.{0,12}(ハット|hats?).{0,8}(少なく|疎|減ら)", text, flags=re.IGNORECASE):
-        result["hats_second_half"] = "sparse"
-    if "hats_first_half" not in result and re.search(
-        r"(ハット|hats?).{0,8}前半.{0,8}(少なく|疎|減ら)", text, flags=re.IGNORECASE
-    ):
-        result["hats_first_half"] = "sparse"
-    if "hats_second_half" not in result and re.search(
-        r"(ハット|hats?).{0,8}後半.{0,8}(多く|密|増や)", text, flags=re.IGNORECASE
-    ):
-        result["hats_second_half"] = "dense"
-    return result
-
-
-def _extract_mood(text: str) -> str | None:
-    for word in ("暗い", "ダーク", "明るい", "優しい", "激しい", "冷たい"):
-        if word in text:
-            return word
+            return key, origin[match.start()], origin[match.end()]
     return None
 
 

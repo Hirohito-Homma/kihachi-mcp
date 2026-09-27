@@ -10,6 +10,7 @@ Max device has been verified on a real machine.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
@@ -18,6 +19,7 @@ from kihachi_mcp.models.live_contract import (
     OP_CREATE_MIDI_TRACK,
     OP_CREATE_SCENE,
     OP_CREATE_SESSION_CLIP,
+    OP_LOAD_DRUM_PAD_SAMPLE,
     OP_LOAD_LIVE_DEVICE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
@@ -33,6 +35,7 @@ from kihachi_mcp.services.live_transport import (
     ERROR_OPERATION_FAILED,
     ERROR_PROTOCOL,
     METHOD_APPLY_OPERATION,
+    METHOD_GET_DRUM_RACK_SUMMARY,
     METHOD_GET_STATE,
     METHOD_PING,
     PROTOCOL_NAME,
@@ -143,6 +146,8 @@ class FakeLiveTransport:
             return self._ok(request_id, self._ping())
         if method == METHOD_GET_STATE:
             return self._ok(request_id, self.snapshot_payload())
+        if method == METHOD_GET_DRUM_RACK_SUMMARY:
+            return self._ok(request_id, self._drum_rack_summary(payload))
         if method == METHOD_APPLY_OPERATION:
             return self._apply(request_id, payload)
         raise LiveTransportError(ERROR_PROTOCOL, f"unsupported method '{method}'")
@@ -172,6 +177,31 @@ class FakeLiveTransport:
             "live_version": self.live_set.live_version,
             "protocol_version": PROTOCOL_VERSION,
             "device_version": "kihachi-live-device/0.1.0",
+        }
+
+    def _drum_rack_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        index = int(payload.get("track_index") or 0)
+        track = next((item for item in self.live_set.tracks if item["index"] == index), None)
+        if track is None:
+            return {"track_index": index, "track_name": "", "devices": []}
+        devices = []
+        for device_index, name in enumerate(track.get("device_names") or []):
+            devices.append(
+                {
+                    "device_index": device_index,
+                    "name": name,
+                    "class_display_name": name,
+                    "can_have_drum_pads": name == "Drum Rack",
+                    "chain_count": 0,
+                    "occupied_pads": list(
+                        track.get("occupied_pads") or []
+                    ),
+                }
+            )
+        return {
+            "track_index": index,
+            "track_name": str(track.get("name") or ""),
+            "devices": devices,
         }
 
     def snapshot_payload(self) -> dict[str, Any]:
@@ -392,6 +422,21 @@ class FakeLiveTransport:
                 "track_index": track["index"],
                 "device_name": device_name,
                 "device_index": len(track["device_names"]) - 1,
+            }
+
+        if op == OP_LOAD_DRUM_PAD_SAMPLE:
+            track = self._require_track(int(target.get("track_index") or 0))
+            note = int(arguments.get("note") or 0)
+            path = str(arguments.get("sample_path") or "")
+            pads = track.setdefault("occupied_pads", [])
+            if not any(int(pad.get("note") or 0) == note for pad in pads):
+                pads.append({"note": note, "name": Path(path).stem, "chain_count": 1})
+            return {
+                "track_index": track["index"],
+                "note": note,
+                "occupied": True,
+                "already_occupied": False,
+                "sample_path": path,
             }
 
         if op == OP_CREATE_LOCATOR:

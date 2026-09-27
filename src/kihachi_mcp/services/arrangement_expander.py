@@ -160,12 +160,16 @@ class _ArrangementBuilder:
     ]:
         """Return the arrangement operations together with any conflicts."""
         beats_per_bar = self._snapshot.time_signature.beats_per_bar
-        for section in self._plan.arrangement:
-            self._plan_locator(section.name, section.start_bar, beats_per_bar)
+        # Place clips first so Live's Arrangement timeline reaches every
+        # approved section before set_or_delete_cue moves the insert marker.
+        # An otherwise empty Arrangement can clamp current_song_time near its
+        # existing end and prevent later locators from being created.
         for track in self._plan.tracks:
             if track.type.upper() != "MIDI":
                 continue
             self._plan_track(track.name, beats_per_bar)
+        for section in self._plan.arrangement:
+            self._plan_locator(section.name, section.start_bar, beats_per_bar)
         if self._conflicts:
             return [], self._conflicts, self._warnings
         return self._operations, self._conflicts, self._warnings

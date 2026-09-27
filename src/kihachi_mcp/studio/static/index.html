@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KIHACHI 制作画面</title>
+  <style>
+    :root {
+      --bg: #101214;
+      --panel: #1a1e22;
+      --line: #2c333a;
+      --text: #e8edf2;
+      --muted: #93a0ab;
+      --accent: #d7a13b;
+      --good: #3dba86;
+      --warn: #d7a13b;
+      --bad: #d46565;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header, main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    header h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: 0.04em; }
+    .sub { color: var(--muted); font-size: 13px; }
+    .status-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+    .ok { color: var(--good); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 15px;
+    }
+    button {
+      background: var(--accent);
+      color: #111;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary { background: #2b333b; color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 20px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    h2 { margin: 0 0 10px; font-size: 16px; }
+    ul { margin: 0; padding-left: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+    .metric { border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+    .metric b { display: block; font-size: 12px; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 6px 4px; }
+    .hidden { display: none; }
+    .progress { color: var(--accent); }
+    label.inline { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    pre { white-space: pre-wrap; font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KIHACHI 制作画面</h1>
+    <p class="sub">日本語の指示からMIDI候補を作り、確認してから Ableton Live の専用トラックへ適用します。有料APIは使いません。</p>
+    <div class="status-row">
+      <div id="ollama-pill" class="pill">Ollama: 確認中</div>
+      <div id="live-pill" class="pill">Live: 確認中</div>
+      <div id="job-pill" class="pill">生成: 待機</div>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>制作指示</h2>
+      <textarea id="brief">125 BPM、Dマイナー、96小節の暗いテクノ。
+前半はハットを少なく、後半で増やす。
+57小節目からドロップにして</textarea>
+      <div class="actions">
+        <button id="generate">候補を生成</button>
+        <button id="cancel" class="secondary" disabled>キャンセル</button>
+        <button id="regenerate" class="secondary" disabled>別候補を再生成</button>
+      </div>
+      <p id="job-line" class="progress"></p>
+    </section>
+
+    <section id="brief-view" class="hidden">
+      <h2>AIが解釈した内容</h2>
+      <div id="spec-grid" class="grid"></div>
+      <p><b>解釈</b></p>
+      <ul id="interpretations"></ul>
+      <p><b>補った値</b></p>
+      <ul id="filled"></ul>
+      <p><b>未対応・矛盾・曖昧</b></p>
+      <ul id="unhandled"></ul>
+    </section>
+
+    <section id="candidate-view" class="hidden">
+      <h2>MIDI候補</h2>
+      <p id="candidate-meta"></p>
+      <div id="counts" class="grid"></div>
+      <table>
+        <thead><tr><th>パート</th><th>セクション</th><th>小節</th><th>ノート数</th></tr></thead>
+        <tbody id="clip-rows"></tbody>
+      </table>
+      <div class="actions">
+        <a id="midi-link" href="#"><button type="button">MIDIを書き出す</button></a>
+      </div>
+      <p class="sub">これは技術的に指示を反映した候補です。音楽的に気に入るかは別です。</p>
+    </section>
+
+    <section id="apply-view" class="hidden">
+      <h2>Liveへ適用</h2>
+      <label class="inline"><input type="checkbox" id="change-tempo"> Setのテンポも候補に合わせる（既存曲のテンポが変わります）</label>
+      <div class="actions">
+        <button id="preview-apply" class="secondary">適用内容を確認</button>
+        <button id="apply" disabled>この内容でLiveへ適用</button>
+        <button id="recheck-coverage" class="secondary">音源と残骸を再確認</button>
+        <button id="fill-drums" class="secondary">Drum Rackにサンプルを入れる</button>
+      </div>
+      <div id="apply-summary"></div>
+      <div id="apply-result"></div>
+    </section>
+  </main>
+  <script>
+    const state = { candidate: null, poll: null, applying: false };
+    const $ = (id) => document.getElementById(id);
+
+    async function getJson(url, options) {
+      const response = await fetch(url, options);
+      return response.json();
+    }
+
+    function setPill(id, ok, text) {
+      const el = $(id);
+      el.textContent = text;
+      el.className = "pill " + (ok === true ? "ok" : ok === false ? "bad" : "warn");
+    }
+
+    async function refreshHealth() {
+      const health = await getJson("/api/health");
+      setPill("ollama-pill", health.ollama.ok, "Ollama: " + health.ollama.message);
+      setPill("live-pill", health.live.connected && health.live.state === "ready", "Live: " + (health.live.message || health.live.state));
+      const job = health.inference;
+      setPill("job-pill", job.state === "done" ? true : job.state === "error" || job.state === "cancelled" ? false : null, "生成: " + job.state);
+      return health;
+    }
+
+    function sourceLabel(item) {
+      return { user: "指定", ai: "AI補完", default: "既定" }[item.source] || item.source;
+    }
+
+    function renderCandidate(candidate) {
+      state.candidate = candidate;
+      $("brief-view").classList.remove("hidden");
+      $("candidate-view").classList.remove("hidden");
+      $("apply-view").classList.remove("hidden");
+      $("regenerate").disabled = false;
+      const brief = candidate.brief;
+      $("spec-grid").innerHTML = [
+        ["テンポ", brief.tempo.value + " BPM (" + sourceLabel(brief.tempo) + ")"],
+        ["キー", brief.key.value + " (" + sourceLabel(brief.key) + ")"],
+        ["小節", brief.bars.value + " (" + sourceLabel(brief.bars) + ")"],
+        ["長さ", brief.duration_minutes.toFixed(2) + " 分"],
+        ["ムード", (brief.mood.value || "なし") + " (" + sourceLabel(brief.mood) + ")"],
+        ["ドロップ", brief.drop_start_bar.value || "なし"]
+      ].map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
+      $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>";
+      const filled = ["tempo", "key", "bars", "genre"].filter((k) => brief[k].source !== "user").map((k) => `${k} = ${brief[k].value}`);
+      $("filled").innerHTML = filled.map((x) => `<li>${x}</li>`).join("") || "<li>指定値をそのまま保持しています</li>";
+      const extra = [].concat(brief.unhandled || [], brief.contradictions || [], brief.ambiguous || []);
+      $("unhandled").innerHTML = extra.map((x) => `<li>${x}</li>`).join("") || "<li>未対応の指示はありません</li>";
+      $("candidate-meta").textContent = `候補 ${candidate.candidate_id.slice(0, 8)} / seed ${candidate.seed} / ノート ${candidate.note_counts.total}`;
+      $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
+      $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${clip.part}</td><td>${clip.section_name}</td><td>${clip.start_bar}–${clip.start_bar + clip.length_bars - 1}</td><td>${clip.note_count}</td></tr>`).join("");
+      $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
+    }
+
+    async function pollJob() {
+      const job = await getJson("/api/job");
+      if (job.state === "running") {
+        $("job-line").textContent = `生成中… ${job.elapsed_seconds.toFixed(1)} 秒`;
+        $("generate").disabled = true;
+        $("cancel").disabled = false;
+        return;
+      }
+      clearInterval(state.poll);
+      state.poll = null;
+      $("generate").disabled = false;
+      $("cancel").disabled = true;
+      if (job.state === "done" && job.candidate_id) {
+        $("job-line").textContent = `生成完了 ${job.elapsed_seconds.toFixed(1)} 秒`;
+        const payload = await getJson("/api/candidate/" + job.candidate_id);
+        if (payload.ok) renderCandidate(payload.candidate);
+      } else {
+        $("job-line").textContent = job.error || "生成できませんでした";
+      }
+      refreshHealth();
+    }
+
+    $("generate").onclick = async () => {
+      const result = await getJson("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief: $("brief").value })
+      });
+      if (!result.ok) {
+        $("job-line").textContent = result.error;
+        return;
+      }
+      $("job-line").textContent = "生成を開始しました";
+      state.poll = setInterval(pollJob, 700);
+      pollJob();
+    };
+
+    $("cancel").onclick = async () => {
+      const result = await getJson("/api/cancel", { method: "POST" });
+      $("job-line").textContent = result.message || result.error;
+    };
+
+    $("regenerate").onclick = async () => {
+      if (!state.candidate) return;
+      const result = await getJson("/api/regenerate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
+      });
+      if (!result.ok) {
+        $("job-line").textContent = result.error;
+        return;
+      }
+      state.poll = setInterval(pollJob, 700);
+      pollJob();
+    };
+
+    $("preview-apply").onclick = async () => {
+      if (!state.candidate) return;
+      const result = await getJson("/api/apply/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: state.candidate.candidate_id,
+          change_tempo: $("change-tempo").checked
+        })
+      });
+      const s = result.summary || {};
+      $("apply-summary").innerHTML = `
+        <p>対象Set: ${s.set_name || "不明"} / 現在 ${s.current_tempo || "?"} BPM</p>
+        <p>新規トラック: ${(s.new_tracks || []).join(", ") || "なし"}</p>
+        <p>クリップ ${s.clip_count || 0} / ノート ${s.note_count || 0}</p>
+        <p>残骸トラック: ${(s.leftover_tracks || []).join(", ") || "なし"}</p>
+        <p>プレビューと適用ノート: ${result.notes_match_preview ? "一致" : "不一致のため適用しません"}</p>
+        <ul>${(result.warnings || []).map((x) => `<li>${x}</li>`).join("")}</ul>
+        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
+      `;
+      $("apply").disabled = !(result.ok && result.notes_match_preview);
+    };
+
+    $("apply").onclick = async () => {
+      if (!state.candidate || state.applying) return;
+      state.applying = true;
+      $("apply").disabled = true;
+      const result = await getJson("/api/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: state.candidate.candidate_id,
+          confirmed: true,
+          change_tempo: $("change-tempo").checked
+        })
+      });
+      state.applying = false;
+      renderApplyResult(result);
+      refreshHealth();
+    };
+
+    $("recheck-coverage").onclick = async () => {
+      if (!state.candidate) return;
+      const result = await getJson("/api/coverage?candidate_id=" + state.candidate.candidate_id);
+      renderCoverage(result.sound_coverage || {}, result.error);
+    };
+
+    $("fill-drums").onclick = async () => {
+      if (!state.candidate) return;
+      const result = await getJson("/api/fill-drums", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: state.candidate.candidate_id,
+          confirmed: true
+        })
+      });
+      if (result.receipt) renderApplyResult(result);
+      else renderCoverage(result.sound_coverage || {}, result.error);
+    };
+
+    function renderCoverage(coverage, error) {
+      $("apply-result").innerHTML = `
+        <p>${error ? `<span class="bad">${error}</span>` : "音源と残骸を再確認しました"}</p>
+        <p>今回のトラック: ${(coverage.current_tracks || []).join(", ") || "未確認"}</p>
+        <p>残骸トラック: ${(coverage.leftover_tracks || []).join(", ") || "なし"}</p>
+        <ul>${(coverage.issues || []).map((x) => `<li>${x.detail}${x.verified ? "" : "（未検証）"}</li>`).join("")}</ul>
+        <p><b>自動でできたこと</b></p>
+        <ul>${(coverage.automatic || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>"}</ul>
+        <p><b>手動が必要なこと</b></p>
+        <ul>${(coverage.manual || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>"}</ul>
+      `;
+    }
+
+    function renderApplyResult(result) {
+      const receipt = result.receipt || {};
+      const coverage = result.sound_coverage || {};
+      $("apply-result").innerHTML = `
+        <p>結果: <b>${receipt.status || result.error}</b>${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
+        <p>${result.verified_means || ""}</p>
+        <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+        <p>今回のトラック: ${(coverage.current_tracks || []).join(", ") || "未確認"}</p>
+        <p>残骸トラック: ${(coverage.leftover_tracks || []).join(", ") || "なし"}</p>
+        <ul>${(coverage.issues || []).map((x) => `<li>${x.detail}${x.verified ? "" : "（未検証）"}</li>`).join("")}</ul>
+        <p><b>自動でできたこと</b></p>
+        <ul>${(coverage.automatic || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>"}</ul>
+        <p><b>手動が必要なこと</b></p>
+        <ul>${(coverage.manual || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>"}</ul>
+      `;
+    }
+
+    async function loadSelected() {
+      const health = await refreshHealth();
+      if (health.selected_candidate_id) {
+        const payload = await getJson("/api/candidate/" + health.selected_candidate_id);
+        if (payload.ok) renderCandidate(payload.candidate);
+      }
+      const last = await getJson("/api/apply/last");
+      if (last && last.receipt) renderApplyResult(last);
+    }
+
+    loadSelected();
+    setInterval(refreshHealth, 4000);
+  </script>
+</body>
+</html>

@@ -34,3 +34,4 @@ packages = ["src/kihachi_mcp"]
 "src/kihachi_mcp/resources/genres/dub_techno.yaml" = "kihachi_mcp/resources/genres/dub_techno.yaml"
 "src/kihachi_mcp/resources/genres/tech_house.yaml" = "kihachi_mcp/resources/genres/tech_house.yaml"
 "src/kihachi_mcp/resources/genres/melodic_techno.yaml" = "kihachi_mcp/resources/genres/melodic_techno.yaml"
+"src/kihachi_mcp/studio/static/index.html" = "kihachi_mcp/studio/static/index.html"

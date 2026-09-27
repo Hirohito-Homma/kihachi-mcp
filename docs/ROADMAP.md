@@ -147,9 +147,9 @@ MP3 検証と HTTP 境界の堅牢化は完了しましたが、方針変更に�
 
 VST3 / AU / CLAP は現在スコープ外です。将来対応する場合は明示的な許可リスト方式にします。理由は [adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md) の「デバイススコープ」節。
 
-### ISSUE-0023 — Max パッチのデバイスローダー配線（未完了）
+### ISSUE-0023 — Live純正デバイスローダー（コード完了、実機未検証）
 
-`load_live_device` は Max パッチ側の配線が必要です。JavaScript からは Live のブラウザを操作できません。[maxforlive/README.md](../maxforlive/README.md) の「デバイスローダー」節。
+Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側の非公式ブラウザー配線は不要です。Live 11〜12.2ではロード可能一覧を無効化して計画段階で拒否します。コードと契約テストは完了していますが、実機確認は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) の段階8が終わるまで未検証です。
 
 ### さらに先
 

@@ -104,6 +104,36 @@ def test_decode_response_rejects_a_different_protocol_version() -> None:
         )
 
 
+def test_stale_replies_are_discarded_until_the_matching_request_id(tmp_path) -> None:
+    class _StaleThenFresh(_RecordingChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self._replies = [
+                {
+                    "protocol": PROTOCOL_NAME,
+                    "version": PROTOCOL_VERSION,
+                    "request_id": "old",
+                    "ok": True,
+                    "result": {},
+                },
+                {
+                    "protocol": PROTOCOL_NAME,
+                    "version": PROTOCOL_VERSION,
+                    "request_id": "req-2",
+                    "ok": True,
+                    "result": {"fresh": True},
+                },
+            ]
+
+        def receive(self, timeout: float) -> bytes:
+            return json.dumps(self._replies.pop(0)).encode("utf-8")
+
+    channel = _StaleThenFresh()
+    transport = LocalhostBridgeTransport(session=_session(tmp_path), channel=channel)
+    result = transport.request(build_message("ping", "req-2"))
+    assert result["result"] == {"fresh": True}
+
+
 def test_the_token_is_attached_by_the_transport_not_the_caller(tmp_path) -> None:
     channel = _RecordingChannel(
         {
@@ -268,6 +298,15 @@ def test_the_udp_channel_binds_to_loopback_only() -> None:
             probe.bind((bound_host, 0))
         finally:
             probe.close()
+    finally:
+        channel.close()
+
+
+def test_the_udp_channel_raises_the_macos_send_buffer() -> None:
+    channel = LoopbackUdpChannel(device_port=0, reply_port=0)
+    try:
+        sndbuf = channel._socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        assert sndbuf >= 60_000
     finally:
         channel.close()
 

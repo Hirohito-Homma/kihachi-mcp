@@ -19,8 +19,10 @@ from kihachi_mcp.tools import (
     search_memory,
     verify_live_execution,
 )
+from kihachi_mcp.tools.local_ai import preview_local_ai_song
 
 mcp = FastMCP("KIHACHI MUSIC AI")
+mcp.add_tool(preview_local_ai_song)
 mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)

@@ -22,6 +22,16 @@ Review improves every iteration.
 
 このリポジトリは Brain（FastMCP）です。ジャンル知識から SongSpec と ProjectPlan を作り、承認を経て Ableton Live の Session View と Arrangement View を組み立てます。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
 
+## 制作画面の起動
+
+日常の制作では Cursor や Codex を開く必要はありません。
+
+```bash
+uv run python -m kihachi_mcp.studio
+```
+
+または `scripts/kihachi-studio.command` をダブルクリックします。手順と復旧は [docs/STUDIO.md](docs/STUDIO.md)。
+
 ## 前提
 
 この4点は仕様です。

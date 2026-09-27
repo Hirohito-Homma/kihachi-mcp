@@ -27,7 +27,11 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.1.0";
+var DEVICE_VERSION = "kihachi-live-device/0.2.9";
+var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
+var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
+var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
+var REPLACE_SAMPLE_MIN_LIVE_MINOR = 4;
 
 var MANAGED_MARKER = "[KIHACHI]";
 var MANAGED_CLIP_PREFIX = "[K:";
@@ -60,9 +64,25 @@ function getProperty(api, name) {
     return value;
 }
 
+function getPropertyOrNull(api, name) {
+    try {
+        return getProperty(api, name);
+    } catch (error) {
+        return null;
+    }
+}
+
 function countChildren(api, child) {
     var value = api.getcount(child);
     return value === null ? 0 : value;
+}
+
+function liveVersionString() {
+    var value = liveApi("live_app").call("get_version_string");
+    if (value instanceof Array) {
+        value = value.length > 0 ? value[0] : "";
+    }
+    return String(value || "");
 }
 
 function isManagedName(name) {
@@ -196,7 +216,7 @@ function readScenes(song) {
     return scenes;
 }
 
-function readSessionClips(trackCount, sceneCount) {
+function readSessionClips(trackCount, sceneCount, countNotesInSlots) {
     var clips = [];
     for (var track = 0; track < trackCount; track += 1) {
         for (var scene = 0; scene < sceneCount; scene += 1) {
@@ -214,7 +234,7 @@ function readSessionClips(trackCount, sceneCount) {
                 scene_index: scene,
                 name: String(getProperty(clip, "name") || ""),
                 length_beats: Number(getProperty(clip, "length") || 0),
-                note_count: countNotes(clip),
+                note_count: countNotesInSlots ? countNotes(clip) : 0,
                 is_midi: getProperty(clip, "is_midi_clip") ? true : false,
                 looping: getProperty(clip, "looping") ? true : false
             });
@@ -249,14 +269,38 @@ function readArrangementClips(trackCount) {
             var clip = liveApi(
                 "live_set tracks " + track + " arrangement_clips " + index
             );
+            var clipStart = Number(getProperty(clip, "start_time") || 0);
+            var clipEnd = Number(getProperty(clip, "end_time") || clipStart);
             clips.push({
                 track_index: track,
                 name: String(getProperty(clip, "name") || ""),
-                start_beats: Number(getProperty(clip, "start_time") || 0),
-                length_beats: Number(getProperty(clip, "length") || 0),
-                note_count: countNotes(clip)
+                start_beats: clipStart,
+                length_beats: clipEnd - clipStart,
+                /* Full note dictionaries make large Arrangements time out. */
+                note_count: 0
             });
         }
+    }
+    return clips;
+}
+
+function readArrangementTrack(trackIndex) {
+    var track = liveApi("live_set tracks " + trackIndex);
+    var total = countChildren(track, "arrangement_clips");
+    var clips = [];
+    for (var index = 0; index < total; index += 1) {
+        var clip = liveApi(
+            "live_set tracks " + trackIndex + " arrangement_clips " + index
+        );
+        var clipStart = Number(getProperty(clip, "start_time") || 0);
+        var clipEnd = Number(getProperty(clip, "end_time") || clipStart);
+        clips.push({
+            track_index: trackIndex,
+            name: String(getProperty(clip, "name") || ""),
+            start_beats: clipStart,
+            length_beats: clipEnd - clipStart,
+            note_count: 0
+        });
     }
     return clips;
 }
@@ -282,25 +326,52 @@ var AVAILABLE_DEVICES = [
     "Hybrid Reverb"
 ];
 
+function liveVersionParts() {
+    var raw = liveVersionString();
+    var match = /^(\d+)\.(\d+)/.exec(raw);
+    if (!match) {
+        return { major: 0, minor: 0 };
+    }
+    return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+function supportsInsertDevice() {
+    var version = liveVersionParts();
+    return version.major > INSERT_DEVICE_MIN_LIVE_MAJOR ||
+        (version.major === INSERT_DEVICE_MIN_LIVE_MAJOR &&
+         version.minor >= INSERT_DEVICE_MIN_LIVE_MINOR);
+}
+
+function supportsReplaceSample() {
+    var version = liveVersionParts();
+    return version.major > REPLACE_SAMPLE_MIN_LIVE_MAJOR ||
+        (version.major === REPLACE_SAMPLE_MIN_LIVE_MAJOR &&
+         version.minor >= REPLACE_SAMPLE_MIN_LIVE_MINOR);
+}
+
 function readDevices() {
     var devices = [];
+    var insertSupported = supportsInsertDevice();
     for (var index = 0; index < AVAILABLE_DEVICES.length; index += 1) {
         devices.push({
             name: AVAILABLE_DEVICES[index],
-            available: true,
+            available: insertSupported,
             category: ""
         });
     }
     return devices;
 }
 
-function readState() {
+function readState(options) {
     var song = songApi();
     var trackCount = countChildren(song, "tracks");
     var sceneCount = countChildren(song, "scenes");
+    var includeArrangement = !options || options.include_arrangement !== false;
+    var countSessionNotes = !options || options.count_session_notes !== false;
+    var includeSessionClips = !options || options.include_session_clips !== false;
     return {
         schema_version: SCHEMA_VERSION,
-        live_version: String(getProperty(liveApi("live_app"), "version") || ""),
+        live_version: liveVersionString(),
         set_name: String(getProperty(song, "name") || ""),
         set_path: String(getProperty(song, "file_path") || ""),
         tempo: Number(getProperty(song, "tempo") || 0),
@@ -310,8 +381,10 @@ function readState() {
         observed_at: new Date().toISOString(),
         tracks: readTracks(song),
         scenes: readScenes(song),
-        session_clips: readSessionClips(trackCount, sceneCount),
-        arrangement_clips: readArrangementClips(trackCount),
+        session_clips: includeSessionClips
+            ? readSessionClips(trackCount, sceneCount, countSessionNotes)
+            : [],
+        arrangement_clips: includeArrangement ? readArrangementClips(trackCount) : [],
         devices: readDevices()
     };
 }
@@ -390,6 +463,12 @@ function checkPreconditions(operation) {
             }
         }
         if (kind === "device_available") {
+            if (!supportsInsertDevice()) {
+                refuse(
+                    "automatic stock-device insertion requires Ableton Live " +
+                    "12.3 or newer"
+                );
+            }
             if (AVAILABLE_DEVICES.indexOf(args.device_name) < 0) {
                 refuse(
                     "device '" + args.device_name +
@@ -465,6 +544,9 @@ function applyOperation(operation) {
     }
     if (op === "load_live_device") {
         return loadDevice(target, args);
+    }
+    if (op === "load_drum_pad_sample") {
+        return loadDrumPadSample(target, args);
     }
     if (op === "create_locator") {
         return createLocator(song, args);
@@ -565,17 +647,18 @@ function replaceClipNotes(target, args) {
 function loadDevice(target, args) {
     var track = liveApi("live_set tracks " + target.track_index);
     var before = countChildren(track, "devices");
-    /*
-     * Device loading is driven from the patch, not from [js]: the JS side
-     * cannot browse. The patch wires this return value into the browser
-     * loader, which reports back through report_device_loaded.
-     */
-    outlet(1, "load_device", target.track_index, args.device_name);
+    if (!supportsInsertDevice()) {
+        refuse(
+            "automatic stock-device insertion requires Ableton Live 12.3 or newer"
+        );
+    }
+    /* Track.insert_device is part of the official LOM from Live 12.3. */
+    track.call("insert_device", args.device_name);
     var after = countChildren(track, "devices");
     if (after <= before) {
         refuse(
             "device '" + args.device_name +
-            "' was not loaded; see maxforlive/README.md device loader setup"
+            "' was not inserted by Ableton Live"
         );
     }
     var device = liveApi(
@@ -585,6 +668,102 @@ function loadDevice(target, args) {
         track_index: target.track_index,
         device_name: String(getProperty(device, "name") || ""),
         device_index: after - 1
+    };
+}
+
+function loadDrumPadSample(target, args) {
+    if (!supportsInsertDevice() || !supportsReplaceSample()) {
+        refuse(
+            "automatic Drum Rack sample loading requires Ableton Live 12.4 or newer"
+        );
+    }
+    var note = Number(args.note);
+    var samplePath = String(args.sample_path || "");
+    if (!note || !samplePath) {
+        refuse("load_drum_pad_sample needs note and sample_path");
+    }
+    var rack = findDrumRack(target.track_index);
+    if (!rack) {
+        refuse("track " + target.track_index + " has no Drum Rack");
+    }
+    var pad = findDrumPad(rack.path, note);
+    if (!pad) {
+        refuse("Drum Rack has no pad for note " + note);
+    }
+    if (countChildren(pad.api, "chains") > 0) {
+        return drumPadReadback(target.track_index, rack.index, note, true);
+    }
+    var before = countChildren(rack.api, "chains");
+    rack.api.call("insert_chain");
+    var after = countChildren(rack.api, "chains");
+    if (after <= before) {
+        refuse("Drum Rack chain was not inserted");
+    }
+    var chain = liveApi(rack.path + " chains " + (after - 1));
+    chain.set("in_note", note);
+    chain.call("insert_device", "Simpler");
+    var deviceCount = countChildren(chain, "devices");
+    if (deviceCount < 1) {
+        refuse("Simpler was not inserted into the Drum Rack chain");
+    }
+    var simpler = liveApi(
+        rack.path + " chains " + (after - 1) + " devices " + (deviceCount - 1)
+    );
+    simpler.call("replace_sample", samplePath);
+    return drumPadReadback(target.track_index, rack.index, note, false);
+}
+
+function findDrumRack(trackIndex) {
+    var track = liveApi("live_set tracks " + trackIndex);
+    var deviceCount = countChildren(track, "devices");
+    for (var index = 0; index < deviceCount; index += 1) {
+        var path = "live_set tracks " + trackIndex + " devices " + index;
+        var device = liveApi(path);
+        if (Number(getProperty(device, "can_have_drum_pads") || 0)) {
+            return { api: device, path: path, index: index };
+        }
+    }
+    return null;
+}
+
+function findDrumPad(rackPath, note) {
+    var rack = liveApi(rackPath);
+    var padCount = countChildren(rack, "drum_pads");
+    for (var index = 0; index < padCount; index += 1) {
+        var pad = liveApi(rackPath + " drum_pads " + index);
+        if (Number(getProperty(pad, "note")) === Number(note)) {
+            return { api: pad, index: index };
+        }
+    }
+    return null;
+}
+
+function drumPadReadback(trackIndex, deviceIndex, note, alreadyOccupied) {
+    var pad = findDrumPad(
+        "live_set tracks " + trackIndex + " devices " + deviceIndex,
+        note
+    );
+    var occupied = pad ? countChildren(pad.api, "chains") > 0 : false;
+    var samplePath = "";
+    if (occupied) {
+        var chain = liveApi(
+            "live_set tracks " + trackIndex + " devices " + deviceIndex +
+            " drum_pads " + pad.index + " chains 0"
+        );
+        if (countChildren(chain, "devices") > 0) {
+            var sample = liveApi(
+                "live_set tracks " + trackIndex + " devices " + deviceIndex +
+                " drum_pads " + pad.index + " chains 0 devices 0 sample"
+            );
+            samplePath = String(getProperty(sample, "file_path") || "");
+        }
+    }
+    return {
+        track_index: trackIndex,
+        note: note,
+        occupied: occupied,
+        already_occupied: alreadyOccupied ? true : false,
+        sample_path: samplePath
     };
 }
 
@@ -611,6 +790,451 @@ function createLocator(song, args) {
     return created;
 }
 
+function locatorAt(beats) {
+    var song = songApi();
+    var total = countChildren(song, "cue_points");
+    for (var index = 0; index < total; index += 1) {
+        var cue = liveApi("live_set cue_points " + index);
+        if (Math.abs(Number(getProperty(cue, "time")) - Number(beats)) < 0.000001) {
+            return cue;
+        }
+    }
+    return null;
+}
+
+function locatorReadback(cue) {
+    return {
+        name: String(getProperty(cue, "name") || ""),
+        beats: Number(getProperty(cue, "time"))
+    };
+}
+
+function readLocatorSummary() {
+    var song = songApi();
+    var total = countChildren(song, "cue_points");
+    var locators = [];
+    for (var index = 0; index < total; index += 1) {
+        var cue = liveApi("live_set cue_points " + index);
+        locators.push(locatorReadback(cue));
+    }
+    return locators;
+}
+
+function readDrumRackSummary(trackIndex) {
+    var track = liveApi("live_set tracks " + trackIndex);
+    var deviceCount = countChildren(track, "devices");
+    var devices = [];
+    for (var deviceIndex = 0; deviceIndex < deviceCount; deviceIndex += 1) {
+        var device = liveApi(
+            "live_set tracks " + trackIndex + " devices " + deviceIndex
+        );
+        var item = {
+            device_index: deviceIndex,
+            name: String(getProperty(device, "name") || ""),
+            class_display_name: String(
+                getProperty(device, "class_display_name") || ""
+            ),
+            can_have_drum_pads: Boolean(
+                Number(getProperty(device, "can_have_drum_pads") || 0)
+            ),
+            chain_count: countChildren(device, "chains"),
+            occupied_pads: []
+        };
+        if (item.can_have_drum_pads) {
+            var padCount = countChildren(device, "drum_pads");
+            for (var padIndex = 0; padIndex < padCount; padIndex += 1) {
+                var pad = liveApi(
+                    "live_set tracks " + trackIndex + " devices " +
+                    deviceIndex + " drum_pads " + padIndex
+                );
+                var chainCount = countChildren(pad, "chains");
+                if (chainCount > 0) {
+                    item.occupied_pads.push({
+                        note: Number(getProperty(pad, "note")),
+                        name: String(getProperty(pad, "name") || ""),
+                        chain_count: chainCount
+                    });
+                }
+            }
+        }
+        devices.push(item);
+    }
+    return {
+        track_index: trackIndex,
+        track_name: String(getProperty(track, "name") || ""),
+        devices: devices
+    };
+}
+
+function parameterValue(path) {
+    var parameter = liveApi(path);
+    return {
+        name: String(getPropertyOrNull(parameter, "name") || ""),
+        value: getPropertyOrNull(parameter, "value"),
+        display_value: getPropertyOrNull(parameter, "display_value"),
+        automation_state: getPropertyOrNull(parameter, "automation_state"),
+        is_enabled: getPropertyOrNull(parameter, "is_enabled")
+    };
+}
+
+function midiPitches(clip) {
+    if (!getPropertyOrNull(clip, "is_midi_clip")) {
+        return [];
+    }
+    var length = Number(getPropertyOrNull(clip, "length") || 0);
+    var raw = clip.call("get_notes_extended", 0, 128, 0, length);
+    var notes = [];
+    try {
+        notes = JSON.parse(raw).notes || [];
+    } catch (error) {
+        return [];
+    }
+    var seen = {};
+    var pitches = [];
+    for (var index = 0; index < notes.length; index += 1) {
+        var pitch = Number(notes[index].pitch);
+        if (!seen[pitch]) {
+            seen[pitch] = true;
+            pitches.push(pitch);
+        }
+    }
+    pitches.sort(function (left, right) { return left - right; });
+    return pitches;
+}
+
+function firstClipDiagnostic(trackIndex, childName) {
+    var track = liveApi("live_set tracks " + trackIndex);
+    var total = countChildren(track, childName);
+    for (var index = 0; index < total; index += 1) {
+        var path = "live_set tracks " + trackIndex + " " + childName + " " + index;
+        if (childName === "clip_slots") {
+            var slot = liveApi(path);
+            if (!getPropertyOrNull(slot, "has_clip")) {
+                continue;
+            }
+            path += " clip";
+        }
+        var clip = liveApi(path);
+        return {
+            name: String(getPropertyOrNull(clip, "name") || ""),
+            note_count: countNotes(clip),
+            pitches: midiPitches(clip)
+        };
+    }
+    return null;
+}
+
+function readTrackPlaybackSummary(trackIndex) {
+    var trackPath = "live_set tracks " + trackIndex;
+    var track = liveApi(trackPath);
+    var devices = [];
+    var deviceCount = countChildren(track, "devices");
+    for (var deviceIndex = 0; deviceIndex < deviceCount; deviceIndex += 1) {
+        var devicePath = trackPath + " devices " + deviceIndex;
+        var device = liveApi(devicePath);
+        var deviceItem = {
+            device_index: deviceIndex,
+            name: String(getPropertyOrNull(device, "name") || ""),
+            class_display_name: String(
+                getPropertyOrNull(device, "class_display_name") || ""
+            ),
+            is_active: getPropertyOrNull(device, "is_active"),
+            chains: []
+        };
+        var chainCount = countChildren(device, "chains");
+        for (var chainIndex = 0; chainIndex < chainCount; chainIndex += 1) {
+            var chainPath = devicePath + " chains " + chainIndex;
+            var chain = liveApi(chainPath);
+            deviceItem.chains.push({
+                chain_index: chainIndex,
+                name: String(getPropertyOrNull(chain, "name") || ""),
+                mute: getPropertyOrNull(chain, "mute"),
+                solo: getPropertyOrNull(chain, "solo"),
+                in_note: getPropertyOrNull(chain, "in_note"),
+                out_note: getPropertyOrNull(chain, "out_note"),
+                chain_activator: parameterValue(
+                    chainPath + " mixer_device chain_activator"
+                ),
+                volume: parameterValue(chainPath + " mixer_device volume"),
+                device_count: countChildren(chain, "devices")
+            });
+        }
+        devices.push(deviceItem);
+    }
+    return {
+        track_index: trackIndex,
+        track_name: String(getPropertyOrNull(track, "name") || ""),
+        mute: getPropertyOrNull(track, "mute"),
+        solo: getPropertyOrNull(track, "solo"),
+        arm: getPropertyOrNull(track, "arm"),
+        current_monitoring_state: getPropertyOrNull(
+            track, "current_monitoring_state"
+        ),
+        track_activator: parameterValue(
+            trackPath + " mixer_device track_activator"
+        ),
+        volume: parameterValue(trackPath + " mixer_device volume"),
+        session_clip: firstClipDiagnostic(trackIndex, "clip_slots"),
+        arrangement_clip: firstClipDiagnostic(trackIndex, "arrangement_clips"),
+        devices: devices
+    };
+}
+
+function readPlaybackContextSummary(trackIndexes) {
+    var song = songApi();
+    var tracks = [];
+    for (var index = 0; index < trackIndexes.length; index += 1) {
+        var trackIndex = Number(trackIndexes[index]);
+        var trackPath = "live_set tracks " + trackIndex;
+        var track = liveApi(trackPath);
+        var nestedDevices = [];
+        var rackCount = countChildren(track, "devices");
+        for (var rackIndex = 0; rackIndex < rackCount; rackIndex += 1) {
+            var rackPath = trackPath + " devices " + rackIndex;
+            var rack = liveApi(rackPath);
+            var chainCount = countChildren(rack, "chains");
+            for (var chainIndex = 0; chainIndex < chainCount; chainIndex += 1) {
+                var chainPath = rackPath + " chains " + chainIndex;
+                var chain = liveApi(chainPath);
+                var nestedCount = countChildren(chain, "devices");
+                for (var deviceIndex = 0; deviceIndex < nestedCount; deviceIndex += 1) {
+                    var nestedPath = chainPath + " devices " + deviceIndex;
+                    var nested = liveApi(nestedPath);
+                    var samplePath = nestedPath + " sample";
+                    var sample = liveApi(samplePath);
+                    nestedDevices.push({
+                        rack_index: rackIndex,
+                        chain_index: chainIndex,
+                        device_index: deviceIndex,
+                        name: String(getPropertyOrNull(nested, "name") || ""),
+                        class_display_name: String(
+                            getPropertyOrNull(nested, "class_display_name") || ""
+                        ),
+                        is_active: getPropertyOrNull(nested, "is_active"),
+                        sample_file_path: String(
+                            getPropertyOrNull(sample, "file_path") || ""
+                        )
+                    });
+                }
+            }
+        }
+        var activeArrangementClip = null;
+        var songTime = Number(getPropertyOrNull(song, "current_song_time") || 0);
+        var arrangementCount = countChildren(track, "arrangement_clips");
+        for (var clipIndex = 0; clipIndex < arrangementCount; clipIndex += 1) {
+            var clip = liveApi(trackPath + " arrangement_clips " + clipIndex);
+            var clipStart = Number(getPropertyOrNull(clip, "start_time") || 0);
+            var clipEnd = Number(getPropertyOrNull(clip, "end_time") || clipStart);
+            if (songTime >= clipStart && songTime < clipEnd) {
+                activeArrangementClip = {
+                    name: String(getPropertyOrNull(clip, "name") || ""),
+                    start_beats: clipStart,
+                    end_beats: clipEnd,
+                    muted: getPropertyOrNull(clip, "muted"),
+                    is_playing: getPropertyOrNull(clip, "is_playing"),
+                    pitches: midiPitches(clip)
+                };
+                break;
+            }
+        }
+        tracks.push({
+            track_index: trackIndex,
+            name: String(getPropertyOrNull(track, "name") || ""),
+            playing_slot_index: getPropertyOrNull(track, "playing_slot_index"),
+            fired_slot_index: getPropertyOrNull(track, "fired_slot_index"),
+            output_routing_type: getPropertyOrNull(track, "output_routing_type"),
+            output_routing_channel: getPropertyOrNull(
+                track, "output_routing_channel"
+            ),
+            output_meter_level: getPropertyOrNull(track, "output_meter_level"),
+            muted_via_solo: getPropertyOrNull(track, "muted_via_solo"),
+            active_arrangement_clip: activeArrangementClip,
+            nested_devices: nestedDevices
+        });
+    }
+    return {
+        is_playing: Boolean(getPropertyOrNull(song, "is_playing")),
+        current_song_time: Number(
+            getPropertyOrNull(song, "current_song_time") || 0
+        ),
+        back_to_arranger: getPropertyOrNull(song, "back_to_arranger"),
+        master_volume: parameterValue(
+            "live_set master_track mixer_device volume"
+        ),
+        tracks: tracks
+    };
+}
+
+function applyMaskingReduction(requestId) {
+    var targets = [
+        { index: 5, name: "Bass [KIHACHI]" },
+        { index: 7, name: "Stab [KIHACHI]" }
+    ];
+    var before = [];
+    var parameters = [];
+    for (var index = 0; index < targets.length; index += 1) {
+        var target = targets[index];
+        var track = liveApi("live_set tracks " + target.index);
+        var name = String(getProperty(track, "name") || "");
+        if (name !== target.name) {
+            respondError(requestId, "operation_failed", "mix target track mismatch");
+            return;
+        }
+        var parameter = liveApi(
+            "live_set tracks " + target.index + " mixer_device volume"
+        );
+        var value = Number(getProperty(parameter, "value"));
+        var displayValue = Number(getProperty(parameter, "display_value"));
+        var automationState = Number(
+            getPropertyOrNull(parameter, "automation_state") || 0
+        );
+        var enabled = getPropertyOrNull(parameter, "is_enabled");
+        if (
+            Math.abs(value - 0.85) > 0.0001 ||
+            !isFinite(displayValue) ||
+            automationState !== 0 ||
+            enabled === 0 ||
+            enabled === false
+        ) {
+            respondError(
+                requestId,
+                "operation_failed",
+                "mix target changed or its volume is automated/disabled"
+            );
+            return;
+        }
+        parameters.push(parameter);
+        before.push({
+            track_index: target.index,
+            track_name: name,
+            value: value,
+            display_value: displayValue
+        });
+    }
+
+    try {
+        for (var setIndex = 0; setIndex < parameters.length; setIndex += 1) {
+            parameters[setIndex].set(
+                "display_value", before[setIndex].display_value - 1.5
+            );
+        }
+    } catch (error) {
+        for (
+            var rollbackIndex = 0;
+            rollbackIndex < parameters.length;
+            rollbackIndex += 1
+        ) {
+            try {
+                parameters[rollbackIndex].set(
+                    "display_value", before[rollbackIndex].display_value
+                );
+            } catch (rollbackError) {
+                /* Report the original error; the user can inspect Live directly. */
+            }
+        }
+        respondError(
+            requestId,
+            "operation_failed",
+            error && error.message ? error.message : String(error)
+        );
+        return;
+    }
+
+    var verifyTask = new Task(function () {
+        var after = [];
+        for (
+            var verifyIndex = 0;
+            verifyIndex < targets.length;
+            verifyIndex += 1
+        ) {
+            after.push({
+                track_index: targets[verifyIndex].index,
+                track_name: targets[verifyIndex].name,
+                value: getProperty(parameters[verifyIndex], "value"),
+                display_value: getProperty(
+                    parameters[verifyIndex], "display_value"
+                )
+            });
+        }
+        respondOk(requestId, {
+            applied_delta_db: -1.5,
+            before: before,
+            after: after
+        });
+        arguments.callee.task.freepeer();
+    }, this);
+    verifyTask.schedule(100);
+}
+
+function applyLocatorAndRespond(requestId, operation) {
+    var args = operation.arguments || {};
+    var existing = locatorAt(args.beats);
+    if (existing !== null) {
+        var observed = locatorReadback(existing);
+        if (observed.name !== args.name) {
+            respondError(
+                requestId,
+                "operation_failed",
+                "locator position is already occupied by '" + observed.name + "'"
+            );
+            return;
+        }
+        respondOk(requestId, {
+            operation_id: operation.operation_id,
+            op: operation.op,
+            observed: observed
+        });
+        return;
+    }
+
+    var song = songApi();
+    var previous = Number(getProperty(song, "current_song_time") || 0);
+    song.set("current_song_time", args.beats);
+    var createTask = new Task(function () {
+        try {
+            var positioned = Number(getProperty(song, "current_song_time") || 0);
+            if (Math.abs(positioned - Number(args.beats)) >= 0.000001) {
+                song.set("current_song_time", previous);
+                respondError(
+                    requestId,
+                    "operation_failed",
+                    "Live did not move to locator beat " + args.beats
+                );
+                return;
+            }
+            song.call("set_or_delete_cue");
+            var verifyTask = new Task(function () {
+                try {
+                    var created = locatorAt(args.beats);
+                    if (created === null) {
+                        refuse("locator at beat " + args.beats + " was not created");
+                    }
+                    created.set("name", args.name);
+                    var observed = locatorReadback(created);
+                    song.set("current_song_time", previous);
+                    respondOk(requestId, {
+                        operation_id: operation.operation_id,
+                        op: operation.op,
+                        observed: observed
+                    });
+                } catch (error) {
+                    song.set("current_song_time", previous);
+                    var message = error && error.message ? error.message : String(error);
+                    respondError(requestId, "operation_failed", message);
+                }
+                arguments.callee.task.freepeer();
+            }, this);
+            verifyTask.schedule(75);
+        } catch (error) {
+            song.set("current_song_time", previous);
+            var message = error && error.message ? error.message : String(error);
+            respondError(requestId, "operation_failed", message);
+        }
+        arguments.callee.task.freepeer();
+    }, this);
+    createTask.schedule(75);
+}
+
 function placeArrangementClip(target, args) {
     var slot = liveApi(
         "live_set tracks " + target.track_index +
@@ -619,9 +1243,15 @@ function placeArrangementClip(target, args) {
     if (!getProperty(slot, "has_clip")) {
         refuse("source session clip is missing");
     }
+    var source = liveApi(
+        "live_set tracks " + target.track_index +
+        " clip_slots " + target.scene_index + " clip"
+    );
     var track = liveApi("live_set tracks " + target.track_index);
     var before = countChildren(track, "arrangement_clips");
-    slot.call("duplicate_clip_to", "live_set tracks " + target.track_index, args.start_beats);
+    track.call(
+        "duplicate_clip_to_arrangement", "id " + source.id, args.start_beats
+    );
     var after = countChildren(track, "arrangement_clips");
     if (after <= before) {
         refuse("arrangement clip was not created");
@@ -631,13 +1261,218 @@ function placeArrangementClip(target, args) {
         " arrangement_clips " + (after - 1)
     );
     clip.set("name", args.name);
+    /*
+     * The duplicated Session pattern keeps its original loop length. Moving
+     * the Arrangement clip's end marker extends its right edge so that Live
+     * repeats that pattern over the approved section duration.
+     */
+    clip.set("looping", 1);
+    clip.set("end_marker", args.length_beats);
+    var clipStart = Number(getProperty(clip, "start_time") || 0);
+    var clipEnd = Number(getProperty(clip, "end_time") || clipStart);
     return {
         track_index: target.track_index,
         name: String(getProperty(clip, "name") || ""),
-        start_beats: Number(getProperty(clip, "start_time") || 0),
-        length_beats: Number(getProperty(clip, "length") || 0),
+        start_beats: clipStart,
+        length_beats: clipEnd - clipStart,
         note_count: countNotes(clip)
     };
+}
+
+function arrangementClipAt(trackIndex, startBeats) {
+    var track = liveApi("live_set tracks " + trackIndex);
+    var total = countChildren(track, "arrangement_clips");
+    for (var index = 0; index < total; index += 1) {
+        var clip = liveApi(
+            "live_set tracks " + trackIndex + " arrangement_clips " + index
+        );
+        if (
+            Math.abs(
+                Number(getProperty(clip, "start_time")) - Number(startBeats)
+            ) < 0.000001
+        ) {
+            return clip;
+        }
+    }
+    return null;
+}
+
+function managedArrangementClip(trackIndex, name, startBeats) {
+    var clip = arrangementClipAt(trackIndex, startBeats);
+    if (clip === null) {
+        return null;
+    }
+    var observedName = String(getProperty(clip, "name") || "");
+    if (observedName !== name || !isManagedName(observedName)) {
+        return null;
+    }
+    return clip;
+}
+
+function applyArrangementDeleteAndRespond(requestId, operation) {
+    var target = operation.target || {};
+    var args = operation.arguments || {};
+    var clip = managedArrangementClip(
+        target.track_index, args.name, args.start_beats
+    );
+    if (clip === null) {
+        respondError(
+            requestId, "operation_failed", "managed arrangement clip mismatch"
+        );
+        return;
+    }
+    var track = liveApi("live_set tracks " + target.track_index);
+    track.call("delete_clip", "id " + clip.id);
+    var task = new Task(function () {
+        try {
+            if (
+                managedArrangementClip(
+                    target.track_index, args.name, args.start_beats
+                ) !== null
+            ) {
+                refuse("managed arrangement clip was not deleted");
+            }
+            respondOk(requestId, {
+                operation_id: operation.operation_id,
+                op: operation.op,
+                observed: {
+                    track_index: target.track_index,
+                    name: args.name,
+                    start_beats: args.start_beats,
+                    deleted: true
+                }
+            });
+        } catch (error) {
+            var message = error && error.message ? error.message : String(error);
+            respondError(requestId, "operation_failed", message);
+        }
+        arguments.callee.task.freepeer();
+    }, this);
+    task.schedule(75);
+}
+
+function applyLocatorDeleteAndRespond(requestId, operation) {
+    var args = operation.arguments || {};
+    var cue = locatorAt(args.beats);
+    if (
+        cue === null ||
+        String(getProperty(cue, "name") || "") !== args.name ||
+        !isManagedName(args.name)
+    ) {
+        respondError(requestId, "operation_failed", "managed locator mismatch");
+        return;
+    }
+    var song = songApi();
+    var previous = Number(getProperty(song, "current_song_time") || 0);
+    song.set("current_song_time", args.beats);
+    var moveTask = new Task(function () {
+        try {
+            var positioned = Number(getProperty(song, "current_song_time") || 0);
+            if (Math.abs(positioned - Number(args.beats)) >= 0.000001) {
+                refuse("Live did not move to locator beat " + args.beats);
+            }
+            song.call("set_or_delete_cue");
+            var verifyTask = new Task(function () {
+                try {
+                    if (locatorAt(args.beats) !== null) {
+                        refuse("managed locator was not deleted");
+                    }
+                    song.set("current_song_time", previous);
+                    respondOk(requestId, {
+                        operation_id: operation.operation_id,
+                        op: operation.op,
+                        observed: {
+                            name: args.name, beats: args.beats, deleted: true
+                        }
+                    });
+                } catch (error) {
+                    song.set("current_song_time", previous);
+                    var message = error && error.message ? error.message : String(error);
+                    respondError(requestId, "operation_failed", message);
+                }
+                arguments.callee.task.freepeer();
+            }, this);
+            verifyTask.schedule(75);
+        } catch (error) {
+            song.set("current_song_time", previous);
+            var message = error && error.message ? error.message : String(error);
+            respondError(requestId, "operation_failed", message);
+        }
+        arguments.callee.task.freepeer();
+    }, this);
+    moveTask.schedule(75);
+}
+
+function arrangementClipReadback(clip, trackIndex) {
+    var clipStart = Number(getProperty(clip, "start_time") || 0);
+    var clipEnd = Number(getProperty(clip, "end_time") || clipStart);
+    return {
+        track_index: trackIndex,
+        name: String(getProperty(clip, "name") || ""),
+        start_beats: clipStart,
+        length_beats: clipEnd - clipStart,
+        note_count: countNotes(clip)
+    };
+}
+
+function applyArrangementClipAndRespond(requestId, operation) {
+    var target = operation.target || {};
+    var args = operation.arguments || {};
+    var slot = liveApi(
+        "live_set tracks " + target.track_index +
+        " clip_slots " + target.scene_index
+    );
+    if (!getProperty(slot, "has_clip")) {
+        respondError(requestId, "operation_failed", "source session clip is missing");
+        return;
+    }
+    var source = liveApi(
+        "live_set tracks " + target.track_index +
+        " clip_slots " + target.scene_index + " clip"
+    );
+    var track = liveApi("live_set tracks " + target.track_index);
+    track.call(
+        "duplicate_clip_to_arrangement", "id " + source.id, args.start_beats
+    );
+
+    var createTask = new Task(function () {
+        try {
+            var created = arrangementClipAt(target.track_index, args.start_beats);
+            if (created === null) {
+                refuse("arrangement clip was not created");
+            }
+            created.set("name", args.name);
+            created.set("looping", 1);
+            created.set("end_marker", args.length_beats);
+            var verifyTask = new Task(function () {
+                try {
+                    var current = arrangementClipAt(
+                        target.track_index, args.start_beats
+                    );
+                    if (current === null) {
+                        refuse("arrangement clip disappeared before readback");
+                    }
+                    respondOk(requestId, {
+                        operation_id: operation.operation_id,
+                        op: operation.op,
+                        observed: arrangementClipReadback(
+                            current, target.track_index
+                        )
+                    });
+                } catch (error) {
+                    var message = error && error.message ? error.message : String(error);
+                    respondError(requestId, "operation_failed", message);
+                }
+                arguments.callee.task.freepeer();
+            }, this);
+            verifyTask.schedule(75);
+        } catch (error) {
+            var message = error && error.message ? error.message : String(error);
+            respondError(requestId, "operation_failed", message);
+        }
+        arguments.callee.task.freepeer();
+    }, this);
+    createTask.schedule(75);
 }
 
 /* ------------------------------------------------------------------ dispatch */
@@ -683,8 +1518,7 @@ function handle(request) {
         );
         return;
     }
-    if (!tokenIsValid(request.token)) {
-        /* Never echo the supplied value back; it may be a real token. */
+    if (request.bridge_authenticated !== true) {
         respondError(requestId, "unauthorized", "session token rejected");
         return;
     }
@@ -696,14 +1530,64 @@ function handle(request) {
 
     if (request.method === "ping") {
         respondOk(requestId, {
-            live_version: String(getProperty(liveApi("live_app"), "version") || ""),
+            live_version: liveVersionString(),
             protocol_version: PROTOCOL_VERSION,
             device_version: DEVICE_VERSION
         });
         return;
     }
     if (request.method === "get_state") {
-        respondOk(requestId, readState());
+        respondOk(requestId, readState(request.payload || {}));
+        return;
+    }
+    if (request.method === "get_arrangement_summary") {
+        var song = songApi();
+        respondOk(requestId, {
+            arrangement_clips: readArrangementClips(
+                countChildren(song, "tracks")
+            )
+        });
+        return;
+    }
+    if (request.method === "get_arrangement_track_summary") {
+        var payload = request.payload || {};
+        respondOk(requestId, {
+            arrangement_clips: readArrangementTrack(
+                Number(payload.track_index)
+            )
+        });
+        return;
+    }
+    if (request.method === "get_locator_summary") {
+        respondOk(requestId, { locators: readLocatorSummary() });
+        return;
+    }
+    if (request.method === "get_drum_rack_summary") {
+        var drumPayload = request.payload || {};
+        respondOk(
+            requestId,
+            readDrumRackSummary(Number(drumPayload.track_index))
+        );
+        return;
+    }
+    if (request.method === "get_track_playback_summary") {
+        var playbackPayload = request.payload || {};
+        respondOk(
+            requestId,
+            readTrackPlaybackSummary(Number(playbackPayload.track_index))
+        );
+        return;
+    }
+    if (request.method === "get_playback_context_summary") {
+        var contextPayload = request.payload || {};
+        respondOk(
+            requestId,
+            readPlaybackContextSummary(contextPayload.track_indexes || [])
+        );
+        return;
+    }
+    if (request.method === "apply_masking_reduction") {
+        applyMaskingReduction(requestId);
         return;
     }
     if (request.method === "apply_operation") {
@@ -718,6 +1602,22 @@ function applyAndRespond(requestId, request) {
     var operation = payload.operation || {};
     try {
         checkPreconditions(operation);
+        if (operation.op === "create_locator") {
+            applyLocatorAndRespond(requestId, operation);
+            return;
+        }
+        if (operation.op === "place_arrangement_clip") {
+            applyArrangementClipAndRespond(requestId, operation);
+            return;
+        }
+        if (operation.op === "delete_arrangement_clip") {
+            applyArrangementDeleteAndRespond(requestId, operation);
+            return;
+        }
+        if (operation.op === "delete_locator") {
+            applyLocatorDeleteAndRespond(requestId, operation);
+            return;
+        }
         var observed = applyOperation(operation);
         respondOk(requestId, {
             operation_id: operation.operation_id,

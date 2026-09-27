@@ -26,7 +26,6 @@ def test_statements_nothing_reads_are_listed_not_dropped() -> None:
     assert states["中間でBrakeを必ず入れドロップは派手に"] == "unread"
     assert states["BASSは最初動き少なく徐々に動きのあるものへ変化する"] == "unread"
     assert states["上物は徐々に煌びやかに"] == "unread"
-    assert "DUB ディレイをところどころにいれる" in coverage["unread"]
 
 
 def test_a_statement_read_only_in_part_says_so() -> None:
@@ -40,11 +39,16 @@ def test_a_named_genre_reads_its_statement() -> None:
         for item in read_coverage(USER_BRIEF)["clauses"]
         if item["text"] == "144小節で5分程度の重いDUB TECHNO"
     )
-    assert clause["read_as"] == ["ジャンル（今はテンポの目安のみ）", "小節数"]
+    assert clause["read_as"] == ["ジャンル", "小節数"]
 
 
-def test_a_dub_delay_is_not_a_genre_request() -> None:
-    assert "DUB ディレイをところどころにいれる" in read_coverage(USER_BRIEF)["unread"]
+def test_a_dub_delay_is_read_as_a_delay_not_a_genre() -> None:
+    clause = next(
+        item
+        for item in read_coverage(USER_BRIEF)["clauses"]
+        if item["text"] == "DUB ディレイをところどころにいれる"
+    )
+    assert clause["read_as"] == ["ディレイ（MIDIの繰り返しで表現）"]
 
 
 def test_known_unsupported_requests_are_out_of_scope_not_unread() -> None:
@@ -78,7 +82,7 @@ def test_model_filled_lists_only_ai_sourced_fields() -> None:
         drop_start_bar = SourcedValue(0, "default")
 
     assert model_filled_fields(Brief()) == [
-        {"label": "ジャンル", "value": "dub_techno", "affects_notes": False},
+        {"label": "ジャンル", "value": "dub_techno", "affects_notes": True},
         {"label": "後半のハット", "value": "dense", "affects_notes": True},
         {"label": "ベース音域", "value": "low", "affects_notes": True},
     ]

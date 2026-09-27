@@ -31,8 +31,8 @@ _LABELS = {
     "hats_first_half": "前半のハット",
     "hats_second_half": "後半のハット",
     "mood": "ムード",
-    # Until drum patterns follow the genre, all it moves is a missing tempo.
-    "genre": "ジャンル（今はテンポの目安のみ）",
+    "genre": "ジャンル",
+    "echo": "ディレイ（MIDIの繰り返しで表現）",
 }
 
 #: Model fields that change the notes, with how the UI names them.
@@ -100,8 +100,8 @@ def read_coverage(
 
 #: Mood words the MIDI builder reacts to. Any other mood is shown, not used.
 MOODS_THAT_CHANGE_NOTES = frozenset({"暗い", "ダーク"})
-#: Fields the builder does not read yet. Genre only labels the candidate.
-FIELDS_WITHOUT_EFFECT = frozenset({"genre"})
+#: Fields the builder does not read yet.
+FIELDS_WITHOUT_EFFECT: frozenset[str] = frozenset()
 
 
 def model_filled_fields(brief: Any) -> list[dict[str, Any]]:

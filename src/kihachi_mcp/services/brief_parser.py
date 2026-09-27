@@ -71,6 +71,9 @@ _HAT_RULES = (
     ("hats_second_half", "dense", rf"{_HAT}.{{0,8}}後半.{{0,8}}{_MORE}"),
 )
 _MOOD_WORDS = ("暗い", "ダーク", "明るい", "優しい", "激しい", "冷たい")
+#: A delay or echo request. KIHACHI writes MIDI, so it answers with quieter
+#: repeats of the chord stabs rather than an effect device.
+_ECHO_RE = re.compile(r"ディレイ|delay|エコー|echo", re.IGNORECASE)
 
 
 def extract_explicit(brief: str) -> dict[str, Any]:
@@ -119,6 +122,10 @@ def read_explicit(text: str) -> tuple[dict[str, Any], list[Span]]:
             fields["mood"] = word
             spans.append((position, position + len(word), "mood"))
             break
+    echo = _ECHO_RE.search(text)
+    if echo:
+        fields["echo"] = True
+        spans.append((echo.start(), echo.end(), "echo"))
     genres = match_genres(text)
     if genres:
         # The first named genre leads; the others are reported, not blended.

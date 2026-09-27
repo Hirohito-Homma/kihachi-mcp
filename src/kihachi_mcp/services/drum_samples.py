@@ -12,9 +12,12 @@ from pathlib import Path
 
 SAMPLE_RATE = 44100
 KICK_NOTE = 36
+SIDE_STICK_NOTE = 37
+SNARE_NOTE = 38
 CLAP_NOTE = 39
 HAT_NOTE = 42
 OPEN_HAT_NOTE = 46
+RIDE_NOTE = 51
 # Existing files are never rewritten: a Set that already loaded one keeps the
 # sound it was made with. New voices get new file names.
 _SAMPLES = {
@@ -22,6 +25,9 @@ _SAMPLES = {
     "kihachi-clap.wav": CLAP_NOTE,
     "kihachi-hat.wav": HAT_NOTE,
     "kihachi-open-hat.wav": OPEN_HAT_NOTE,
+    "kihachi-side-stick.wav": SIDE_STICK_NOTE,
+    "kihachi-snare.wav": SNARE_NOTE,
+    "kihachi-ride.wav": RIDE_NOTE,
 }
 
 
@@ -132,7 +138,58 @@ def _clap_frames() -> list[int]:
     return frames
 
 
+def _noise(seed: int):
+    state = seed
+    while True:
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        yield (state / 0x7FFFFFFF) * 2.0 - 1.0
+
+
+def _snare_frames() -> list[int]:
+    length = int(SAMPLE_RATE * 0.22)
+    noise = _noise(0x1357)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        tone = math.sin(2 * math.pi * 185 * t) * math.exp(-30 * t) * 0.5
+        rattle = next(noise) * math.exp(-18 * t) * 0.45
+        frames.append(_clamp(tone + rattle))
+    return frames
+
+
+def _side_stick_frames() -> list[int]:
+    length = int(SAMPLE_RATE * 0.06)
+    noise = _noise(0x2468)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        knock = math.sin(2 * math.pi * 420 * t) * math.exp(-70 * t) * 0.6
+        click = next(noise) * math.exp(-250 * t) * 0.3
+        frames.append(_clamp(knock + click))
+    return frames
+
+
+def _ride_frames() -> list[int]:
+    """A few inharmonic partials over hiss: enough to read as a cymbal."""
+    length = int(SAMPLE_RATE * 0.9)
+    noise = _noise(0x4242)
+    partials = (3150.0, 4290.0, 5810.0, 7370.0)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        bell = sum(math.sin(2 * math.pi * f * t) for f in partials) / len(partials)
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        frames.append(_clamp((bell * 0.35 + highpass * 0.15) * math.exp(-4.5 * t)))
+    return frames
+
+
 _FRAMES = {
+    SIDE_STICK_NOTE: _side_stick_frames,
+    SNARE_NOTE: _snare_frames,
+    RIDE_NOTE: _ride_frames,
     KICK_NOTE: _kick_frames,
     CLAP_NOTE: _clap_frames,
     HAT_NOTE: _hat_frames,

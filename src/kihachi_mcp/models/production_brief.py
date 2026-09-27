@@ -3,11 +3,17 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Self
 
+from kihachi_mcp.knowledge.genre_database import is_known as is_known_genre
+
 SOURCE_USER = "user"
 SOURCE_AI = "ai"
 SOURCE_DEFAULT = "default"
-FIELD_SOURCES = frozenset({SOURCE_USER, SOURCE_AI, SOURCE_DEFAULT})
+#: Taken from the genre database rather than from the brief or the model.
+SOURCE_GENRE = "genre"
+FIELD_SOURCES = frozenset({SOURCE_USER, SOURCE_AI, SOURCE_DEFAULT, SOURCE_GENRE})
 
+#: What the local model may answer for genre. A genre the brief names is read
+#: by rule from the 1020-row database instead, and any of those is valid.
 SUPPORTED_GENRES = ("tech_house", "dub_techno", "melodic_techno")
 DENSITY_VALUES = ("sparse", "normal", "dense")
 REGISTER_VALUES = ("low", "mid", "high")
@@ -114,7 +120,9 @@ class ProductionBrief:
             raise ValueError("bars must be a multiple of four")
         if self.key.value not in KEY_ENUM:
             raise ValueError("unsupported key")
-        if self.genre.value not in SUPPORTED_GENRES:
+        if self.genre.value not in SUPPORTED_GENRES and not is_known_genre(
+            str(self.genre.value)
+        ):
             raise ValueError("unsupported genre")
         for name in (
             "hats_first_half",

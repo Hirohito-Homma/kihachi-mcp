@@ -4,12 +4,15 @@ import json
 from http.client import HTTPConnection
 from typing import Any
 
+from kihachi_mcp.knowledge.genre_database import find as find_genre
+from kihachi_mcp.knowledge.genre_database import match_genres, typical_bpm
 from kihachi_mcp.models.production_brief import (
     DENSITY_VALUES,
     KEY_ENUM,
     REGISTER_VALUES,
     SOURCE_AI,
     SOURCE_DEFAULT,
+    SOURCE_GENRE,
     SOURCE_USER,
     SUPPORTED_GENRES,
     ProductionBrief,
@@ -216,7 +219,9 @@ def assemble_brief(
         if name in user_fields:
             user_value = user_fields[name]
             model_value = intent[name]
-            if model_value != user_value:
+            # The model may only answer three genres; a brief naming any of the
+            # 1020 is read by rule, and disagreeing with it is not news.
+            if model_value != user_value and name != "genre":
                 contradictions.append(
                     f"{name} は指示の {user_value} を保持し、AIの {model_value} は採用しません"
                 )
@@ -227,6 +232,8 @@ def assemble_brief(
             merged[name] = SourcedValue(default, SOURCE_DEFAULT)
         else:
             merged[name] = SourcedValue(model_value, SOURCE_AI)
+
+    genre_notes = _apply_genre(merged, str(extracted["original_text"]))
 
     mood_text = str(merged["mood"].value or "")
     if merged["mood"].source != SOURCE_USER and "暗い" in extracted["original_text"]:
@@ -243,7 +250,7 @@ def assemble_brief(
     unhandled = _unique(
         list(extracted.get("unhandled") or []) + list(intent.get("unhandled") or [])
     )
-    interpretations = build_interpretations(merged, sections)
+    interpretations = genre_notes + build_interpretations(merged, sections)
     return ProductionBrief(
         original_text=str(extracted["original_text"]),
         tempo=merged["tempo"],
@@ -263,6 +270,37 @@ def assemble_brief(
         contradictions=tuple(contradictions),
         model=model,
     )
+
+
+def _apply_genre(merged: dict[str, SourcedValue], text: str) -> list[str]:
+    """Let the database speak for tempo when nobody else did, and say so."""
+    genre = find_genre(str(merged["genre"].value))
+    if genre is None:
+        return []
+    notes: list[str] = []
+    bpm = genre.informative_bpm
+    range_text = f"{bpm[0]:g}–{bpm[1]:g} BPM" if bpm else "範囲が広く目安なし"
+    notes.append(f"ジャンル: {genre.name}（{genre.family} 系、一般的なテンポ {range_text}）")
+    tempo = merged["tempo"]
+    if tempo.source in {SOURCE_DEFAULT} and bpm is not None:
+        suggested = typical_bpm([genre.slug])
+        if suggested is not None and 60 <= suggested <= 180:
+            merged["tempo"] = SourcedValue(suggested, SOURCE_GENRE)
+            notes.append(f"テンポの指定がないため、{genre.name} の目安から {suggested} BPM にしました")
+    elif tempo.source == SOURCE_USER and bpm is not None:
+        value = float(tempo.value)
+        if not bpm[0] <= value <= bpm[1]:
+            side = "遅め" if value < bpm[0] else "速め"
+            notes.append(
+                f"{value:g} BPM は {genre.name} の一般的な範囲 {range_text} より{side}です"
+                f"（指示どおり {value:g} BPM にします）"
+            )
+    others = [match.genre.name for match in match_genres(text)[1:]]
+    if others:
+        notes.append(
+            f"ほかに名前が出たジャンル: {'、'.join(others)}（今は先頭の {genre.name} だけを使います）"
+        )
+    return notes
 
 
 def build_sections(bars: int, drop_start_bar: int) -> tuple[SectionIntent, ...]:

@@ -30,8 +30,21 @@ def test_statements_nothing_reads_are_listed_not_dropped() -> None:
 
 
 def test_a_statement_read_only_in_part_says_so() -> None:
-    states = _states(read_coverage(USER_BRIEF))
-    assert states["144小節で5分程度の重いDUB TECHNO"] == "partly_read"
+    states = _states(read_coverage("144小節で5分程度の重く揺れる感じ"))
+    assert states["144小節で5分程度の重く揺れる感じ"] == "partly_read"
+
+
+def test_a_named_genre_reads_its_statement() -> None:
+    clause = next(
+        item
+        for item in read_coverage(USER_BRIEF)["clauses"]
+        if item["text"] == "144小節で5分程度の重いDUB TECHNO"
+    )
+    assert clause["read_as"] == ["ジャンル（今はテンポの目安のみ）", "小節数"]
+
+
+def test_a_dub_delay_is_not_a_genre_request() -> None:
+    assert "DUB ディレイをところどころにいれる" in read_coverage(USER_BRIEF)["unread"]
 
 
 def test_known_unsupported_requests_are_out_of_scope_not_unread() -> None:

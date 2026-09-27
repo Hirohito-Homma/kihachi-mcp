@@ -31,6 +31,8 @@ _LABELS = {
     "hats_first_half": "前半のハット",
     "hats_second_half": "後半のハット",
     "mood": "ムード",
+    # Until drum patterns follow the genre, all it moves is a missing tempo.
+    "genre": "ジャンル（今はテンポの目安のみ）",
 }
 
 #: Model fields that change the notes, with how the UI names them.

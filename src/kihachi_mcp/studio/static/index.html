@@ -197,7 +197,7 @@
     }
 
     function sourceLabel(item) {
-      return { user: "指定", ai: "AI補完", default: "既定" }[item.source] || item.source;
+      return { user: "指定", ai: "AI補完", default: "既定", genre: "ジャンル基準" }[item.source] || item.source;
     }
 
     const COVERAGE_STATES = {
@@ -233,6 +233,7 @@
       $("regenerate").disabled = false;
       const brief = candidate.brief;
       $("spec-grid").innerHTML = [
+        ["ジャンル", brief.genre.value + " (" + sourceLabel(brief.genre) + ")"],
         ["テンポ", brief.tempo.value + " BPM (" + sourceLabel(brief.tempo) + ")"],
         ["キー", brief.key.value + " (" + sourceLabel(brief.key) + ")"],
         ["小節", brief.bars.value + " (" + sourceLabel(brief.bars) + ")"],

@@ -4,6 +4,7 @@ import re
 import unicodedata
 from typing import Any
 
+from kihachi_mcp.knowledge.genre_database import match_genres
 from kihachi_mcp.models.production_brief import KEY_ENUM, SOURCE_USER
 
 _KEY_ALIASES = {
@@ -118,6 +119,11 @@ def read_explicit(text: str) -> tuple[dict[str, Any], list[Span]]:
             fields["mood"] = word
             spans.append((position, position + len(word), "mood"))
             break
+    genres = match_genres(text)
+    if genres:
+        # The first named genre leads; the others are reported, not blended.
+        fields["genre"] = genres[0].genre.slug
+        spans.extend((match.start, match.end, "genre") for match in genres)
     return fields, spans
 
 

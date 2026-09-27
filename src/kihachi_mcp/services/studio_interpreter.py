@@ -6,6 +6,7 @@ from typing import Any
 
 from kihachi_mcp.knowledge.genre_database import find as find_genre
 from kihachi_mcp.knowledge.genre_database import match_genres, typical_bpm
+from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.production_brief import (
     DENSITY_VALUES,
     KEY_ENUM,
@@ -43,11 +44,16 @@ STUDIO_SCHEMA = {
         "bass_register": {"type": "string", "enum": list(REGISTER_VALUES)},
         "note_density": {"type": "string", "enum": list(DENSITY_VALUES)},
         "drop_start_bar": {"type": "integer", "minimum": 0, "maximum": 256},
+        "tone_brightness": {"type": "integer", "minimum": -2, "maximum": 2},
+        "tone_length": {"type": "integer", "minimum": -2, "maximum": 2},
+        "tone_delay": {"type": "integer", "minimum": -2, "maximum": 2},
         "unhandled": {"type": "array", "items": {"type": "string"}},
         "ambiguous": {"type": "array", "items": {"type": "string"}},
     },
 }
 STUDIO_SCHEMA["required"] = list(STUDIO_SCHEMA["properties"])
+#: Fields an older model reply may leave out; they default to "no change".
+OPTIONAL_INTENT_FIELDS = frozenset({"tone_brightness", "tone_length", "tone_delay"})
 
 _DEFAULTS = {
     "genre": DEFAULT_GENRE,
@@ -60,6 +66,9 @@ _DEFAULTS = {
     "bass_register": "mid",
     "note_density": "normal",
     "drop_start_bar": 0,
+    "tone_brightness": 0,
+    "tone_length": 0,
+    "tone_delay": 0,
 }
 
 _MOOD_INTERPRETATIONS = {
@@ -137,8 +146,14 @@ class OllamaClient:
 
 def validate_model_intent(value: Any) -> dict[str, Any]:
     """Reject malformed model output before any music data is built."""
-    if not isinstance(value, dict) or set(value) != set(STUDIO_SCHEMA["properties"]):
+    allowed = set(STUDIO_SCHEMA["properties"])
+    if (
+        not isinstance(value, dict)
+        or not set(value) <= allowed
+        or allowed - set(value) - OPTIONAL_INTENT_FIELDS
+    ):
         raise InterpretationError("AI応答のフィールドが許可スキーマと一致しません")
+    value = {**{name: 0 for name in OPTIONAL_INTENT_FIELDS}, **value}
     for name, spec in STUDIO_SCHEMA["properties"].items():
         item = value[name]
         if spec["type"] == "integer":
@@ -189,6 +204,9 @@ def interpret_brief(
                     "Use sparse/normal/dense for hats and note_density. "
                     "Use low bass_register for dark/暗い briefs. "
                     "drop_start_bar is 0 when unspecified. "
+                    "tone_brightness, tone_length and tone_delay are -2..2 steps "
+                    "(brighter/duller, longer/shorter notes, more/less delay); "
+                    "use 0 unless the brief describes the sound itself. "
                     "Put unsupported requests in unhandled and unclear ones in ambiguous. "
                     "Do not invent Ableton operations or executable code."
                 ),
@@ -234,6 +252,7 @@ def assemble_brief(
             merged[name] = SourcedValue(model_value, SOURCE_AI)
 
     genre_notes = _apply_genre(merged, str(extracted["original_text"]))
+    genre_notes += _tone_notes(merged)
 
     mood_text = str(merged["mood"].value or "")
     if merged["mood"].source != SOURCE_USER and "暗い" in extracted["original_text"]:
@@ -263,6 +282,9 @@ def assemble_brief(
         bass_register=merged["bass_register"],
         note_density=merged["note_density"],
         drop_start_bar=merged["drop_start_bar"],
+        tone_brightness=merged["tone_brightness"],
+        tone_length=merged["tone_length"],
+        tone_delay=merged["tone_delay"],
         sections=sections,
         interpretations=tuple(interpretations),
         unhandled=tuple(unhandled),
@@ -301,6 +323,28 @@ def _apply_genre(merged: dict[str, SourcedValue], text: str) -> list[str]:
             f"ほかに名前が出たジャンル: {'、'.join(others)}（今は先頭の {genre.name} だけを使います）"
         )
     return notes
+
+
+_TONE_WORDS = {
+    "tone_brightness": ("明るく", "こもらせて"),
+    "tone_length": ("長く", "短く"),
+    "tone_delay": ("ディレイを多く", "ディレイを少なく"),
+}
+
+
+def _tone_notes(merged: dict[str, SourcedValue]) -> list[str]:
+    """Say which tone steps were taken and whether a recipe will use them."""
+    moved = [
+        f"{_TONE_WORDS[name][0 if merged[name].value > 0 else 1]}（{abs(merged[name].value)}段階）"
+        for name in _TONE_WORDS
+        if merged[name].value
+    ]
+    if not moved:
+        return []
+    genre = str(merged["genre"].value)
+    if recipe_for(genre) is None:
+        return [f"音色: {'、'.join(moved)}。{genre} には音色レシピがないため、今は音に反映しません"]
+    return [f"音色: {'、'.join(moved)}（{genre} の音色レシピに適用、曲全体で一定）"]
 
 
 def build_sections(bars: int, drop_start_bar: int) -> tuple[SectionIntent, ...]:

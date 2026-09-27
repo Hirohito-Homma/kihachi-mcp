@@ -1,6 +1,6 @@
 ## KIHACHI Live Device
 
-`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。現在の版は `kihachi-live-device/0.2.9` です。Live 12.4 以降では空の Drum Rack パッドへ同梱サンプルを `insert_chain` と `replace_sample` で載せます。大きな Set では `get_state` に `include_arrangement=false`、`count_session_notes=false`、音源確認時は `include_session_clips=false` を付けて状態取得します。JS を更新したら Max で `reload` するかデバイスを入れ直してください。
+`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。現在の版は `kihachi-live-device/0.3.1` です。0.3.0 で、デバイスのつまみを名前で設定する `set_device_parameter` と、事前条件 `device_name_at_index` を足し、許可する純正デバイスに Analog を加えました。Live 12.4 以降では空の Drum Rack パッドへ同梱サンプルを `insert_chain` と `replace_sample` で載せます。大きな Set では `get_state` に `include_arrangement=false`、`count_session_notes=false`、音源確認時は `include_session_clips=false` を付けて状態取得します。JS を更新したら Max で `reload` するかデバイスを入れ直してください。
 
 ### 未完了部分の明示
 

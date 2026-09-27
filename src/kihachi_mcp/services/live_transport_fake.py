@@ -23,6 +23,7 @@ from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
+    OP_SET_DEVICE_PARAMETER,
     OP_SET_TEMPO,
     OP_SET_TRACK_COLOR,
     OP_SET_TRACK_NAME,
@@ -356,6 +357,13 @@ class FakeLiveTransport:
                     )
             if kind == "arrangement_range_free":
                 self._require_free_range(arguments)
+            if kind == "device_name_at_index":
+                track = self._track(int(arguments.get("track_index") or 0))
+                names = list(track["device_names"]) if track else []
+                position = int(arguments.get("device_index") or 0)
+                expected = str(arguments.get("name") or "")
+                if position >= len(names) or names[position] != expected:
+                    raise FakeLiveOperationRefused(f"device {position} is not '{expected}'")
 
     def _require_free_range(self, arguments: dict[str, Any]) -> None:
         track_index = int(arguments.get("track_index") or 0)
@@ -462,6 +470,30 @@ class FakeLiveTransport:
 
         if op == OP_PLACE_ARRANGEMENT_CLIP:
             return self._place_arrangement_clip(target, arguments)
+
+        if op == OP_SET_DEVICE_PARAMETER:
+            # The simulator knows no parameter lists: it records what was set,
+            # keyed by device position and parameter name, and reads it back.
+            track = self._require_track(int(target.get("track_index") or 0))
+            position = int(target.get("device_index") or 0)
+            names = track["device_names"]
+            if position >= len(names) or names[position] != arguments.get("device_name"):
+                raise FakeLiveOperationRefused(f"device {position} is not '{arguments.get('device_name')}'")
+            store = track.setdefault("device_parameters", {}).setdefault(str(position), {})
+            name = str(arguments.get("parameter_name") or "")
+            readback: dict[str, Any] = {
+                "track_index": track["index"],
+                "device_index": position,
+                "parameter_name": name,
+            }
+            if arguments.get("item"):
+                store[name] = str(arguments["item"])
+                readback["item"] = store[name]
+                readback["normalized_value"] = 0.0
+            else:
+                store[name] = round(float(arguments.get("value") or 0.0), 3)
+                readback["normalized_value"] = store[name]
+            return readback
 
         raise FakeLiveOperationRefused(f"simulator cannot apply '{op}'")
 

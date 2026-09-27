@@ -11,8 +11,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
+from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
 from kihachi_mcp.services.candidate_live_planner import (
     AppliedTracks,
     CandidateLivePlanner,
@@ -60,6 +62,7 @@ class StudioRuntime:
         export_dir: Path | None = None,
         start_bridge: bool = False,
         candidate_dir: Path | None = None,
+        kit_loader: AbletonGPTKitLoader | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
@@ -112,6 +115,9 @@ class StudioRuntime:
             request_id_factory=_unique_request_ids(),
         )
         self._arranged_ids: set[str] = set()
+        # Core Library kits need Live's browser, which only a Remote Script can
+        # reach. The Studio uses AbletonGPT's when it is selected in Live.
+        self._kit_loader = kit_loader or (AbletonGPTKitLoader() if start_bridge else None)
         self._export_dir = Path(
             export_dir or Path.home() / "Music" / "KIHACHI" / "exports"
         )
@@ -314,8 +320,13 @@ class StudioRuntime:
         snapshot, failure = self._snapshot()
         if snapshot is None:
             return failure or {"ok": False, "error": "Live状態を取得できません"}
+        kit_parts, kit_notes = self._kit_parts(candidate, skip_instruments)
         plan = self._planner.create_plan(
-            candidate, snapshot, change_tempo=change_tempo, skip_instruments=skip_instruments
+            candidate,
+            snapshot,
+            change_tempo=change_tempo,
+            skip_instruments=skip_instruments,
+            external_kit_parts=kit_parts,
         )
         planned_notes = _notes_from_plan(plan)
         preview_notes = _notes_from_candidate(candidate)
@@ -330,9 +341,10 @@ class StudioRuntime:
             "summary": {
                 **_apply_summary(candidate, plan, snapshot, change_tempo),
                 "skip_instruments": skip_instruments,
+                "kits": sorted(kit_parts),
             },
             "conflicts": [item.to_dict() for item in plan.conflicts],
-            "warnings": list(plan.warnings),
+            "warnings": list(plan.warnings) + kit_notes,
         }
 
     def apply(
@@ -382,12 +394,18 @@ class StudioRuntime:
             receipt = self._executor.execute(
                 plan, approved=True, approval_token=token
             )
+            kits = []
+            if receipt.status == "verified":
+                kits = self._load_kits(
+                    candidate, plan, frozenset(preview["summary"].get("kits") or [])
+                )
             coverage = self._coverage_after(candidate, receipt)
             result = {
-                "ok": receipt.status == "verified",
+                "ok": receipt.status == "verified" and all(item["ok"] for item in kits),
                 "candidate_id": candidate.candidate_id,
                 "note_fingerprint": candidate.note_fingerprint,
                 "receipt": receipt.to_dict(),
+                "kits": kits,
                 "sound_coverage": coverage,
                 "partial": receipt.status == "partially_applied",
                 "musical_quality_claimed": False,
@@ -399,6 +417,57 @@ class StudioRuntime:
             return result
         finally:
             self._apply_lock.release()
+
+    def _kit_parts(
+        self, candidate: MidiCandidate, skip_instruments: bool
+    ) -> tuple[frozenset[str], list[str]]:
+        """Drum parts whose Core Library kit AbletonGPT will load after apply."""
+        recipe = recipe_for(str(candidate.brief.genre.value))
+        if skip_instruments or recipe is None or not recipe.kits:
+            return frozenset(), []
+        if self._kit_loader is None or not self._kit_loader.available():
+            return frozenset(), [
+                (
+                    "AbletonGPT に接続できないため、付属キットの代わりに Drum Rack と同梱サンプルを使います"
+                    "（Live の Control Surface で AbletonGPT_MCP を選ぶと付属キットを使えます）"
+                )
+            ]
+        names = "、".join(f"{part}: {recipe.kits[part][0]}" for part in sorted(recipe.kits))
+        return frozenset(recipe.kits), [
+            f"適用後に AbletonGPT 経由で付属キットを読み込みます（{names}）"
+        ]
+
+    def _load_kits(
+        self, candidate: MidiCandidate, plan: Any, parts: frozenset[str]
+    ) -> list[dict[str, Any]]:
+        """One load per empty drum track, after the Live plan verified. No retry."""
+        recipe = recipe_for(str(candidate.brief.genre.value))
+        if not parts or recipe is None or self._kit_loader is None:
+            return []
+        short = candidate.candidate_id[:8]
+        indexes = {
+            str(operation.arguments.get("name")): int(operation.target["track_index"])
+            for operation in plan.operations
+            if operation.op == "create_midi_track"
+        }
+        results = []
+        for part in sorted(parts):
+            name = managed_track_name(f"KIHACHI {part} {short}")
+            index = indexes.get(name)
+            if index is None:
+                snapshot, _failure = self._coverage_snapshot()
+                track = snapshot.track_by_name(name) if snapshot is not None else None
+                index = track.index if track is not None else None
+            if index is None:
+                results.append({"part": part, "ok": False, "error": f"{name} が見つかりません"})
+                continue
+            try:
+                kit = self._kit_loader.load(index, recipe.kits[part])
+            except KitLoadError as exc:
+                results.append({"part": part, "ok": False, "error": str(exc)})
+                continue
+            results.append({"part": part, "ok": True, "kit": kit, "track_index": index})
+        return results
 
     def arrangement_preview(self, candidate_id: str) -> dict[str, Any]:
         """Show where the Session clips would go in the Arrangement. No changes."""
@@ -534,7 +603,6 @@ class StudioRuntime:
                     "error": "載せられる空の Drum Rack パッドはありません",
                     "warnings": list(plan.warnings),
                 }
-            from kihachi_mcp.models.live_mutation import LiveMutationPlan
 
             try:
                 token = self._gate.approve(plan)

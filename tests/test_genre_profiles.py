@@ -133,12 +133,14 @@ def test_ambient_holds_pads_and_has_no_backbeat() -> None:
     assert not [n for n in drums if n[2] in {38, 39}]
 
 
-def test_dub_techno_chords_echo_and_move_slowly() -> None:
+def test_dub_techno_chords_leave_the_delay_to_the_echo_device() -> None:
+    """The recipe puts a real Echo on the chords; repeats written as notes too
+    would double the delay, as they did on 2026-09-27 in Live."""
     candidate = _candidate("ダブテクノ、64小節")
     bars = _drop_bars(candidate)
     stab = _notes_in(candidate, "Stab", bars)
     loudest = max(velocity for *_x, velocity in stab)
-    assert any(velocity <= loudest * 0.6 for *_x, velocity in stab), "no quieter repeats"
+    assert all(velocity > loudest * 0.6 for *_x, velocity in stab)
     chords = [
         tuple(sorted({pitch for bar, _o, pitch, *_ in stab if bar == number}))
         for number in bars

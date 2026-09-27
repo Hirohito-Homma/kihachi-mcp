@@ -27,7 +27,7 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.2.9";
+var DEVICE_VERSION = "kihachi-live-device/0.3.1";
 var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
 var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
 var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
@@ -318,6 +318,7 @@ var AVAILABLE_DEVICES = [
     "Operator",
     "Wavetable",
     "Drift",
+    "Analog",
     "Auto Filter",
     "EQ Eight",
     "Compressor",
@@ -479,6 +480,17 @@ function checkPreconditions(operation) {
         if (kind === "arrangement_range_free") {
             requireFreeRange(args);
         }
+        if (kind === "device_name_at_index") {
+            var placed = liveApi(
+                "live_set tracks " + args.track_index + " devices " + args.device_index
+            );
+            if (String(getProperty(placed, "name") || "") !== args.name) {
+                refuse(
+                    "device " + args.device_index + " on track " + args.track_index +
+                    " is not '" + args.name + "'"
+                );
+            }
+        }
     }
 }
 
@@ -547,6 +559,9 @@ function applyOperation(operation) {
     }
     if (op === "load_drum_pad_sample") {
         return loadDrumPadSample(target, args);
+    }
+    if (op === "set_device_parameter") {
+        return setDeviceParameter(target, args);
     }
     if (op === "create_locator") {
         return createLocator(song, args);
@@ -669,6 +684,68 @@ function loadDevice(target, args) {
         device_name: String(getProperty(device, "name") || ""),
         device_index: after - 1
     };
+}
+
+/*
+ * Set one parameter of one device, found by name rather than by index so a
+ * Live update that reorders parameters cannot turn a filter cutoff into a
+ * volume. A continuous value arrives normalized to 0..1 of the parameter's
+ * min..max; a switch arrives as one of its value_items.
+ */
+function setDeviceParameter(target, args) {
+    var path = "live_set tracks " + target.track_index + " devices " + target.device_index;
+    var device = liveApi(path);
+    var deviceName = String(getProperty(device, "name") || "");
+    if (deviceName !== args.device_name) {
+        refuse("device " + target.device_index + " is '" + deviceName + "', not '" + args.device_name + "'");
+    }
+    var parameter = null;
+    var total = countChildren(device, "parameters");
+    for (var index = 0; index < total; index += 1) {
+        var candidate = liveApi(path + " parameters " + index);
+        if (String(getProperty(candidate, "name") || "") === args.parameter_name) {
+            parameter = candidate;
+            break;
+        }
+    }
+    if (!parameter) {
+        refuse("'" + args.device_name + "' has no parameter '" + args.parameter_name + "'");
+    }
+    var low = Number(getProperty(parameter, "min"));
+    var high = Number(getProperty(parameter, "max"));
+    /*
+     * Max turns an item that looks like a number into a number: Wavetable's
+     * filter slope arrives as [12, 24], not ["12", "24"]. Compare as text.
+     */
+    var raw = parameter.get("value_items") || [];
+    var items = [];
+    for (var at = 0; at < raw.length; at += 1) {
+        items.push(String(raw[at]));
+    }
+    if (args.item !== undefined && args.item !== null && args.item !== "") {
+        var position = items.indexOf(String(args.item));
+        if (position < 0) {
+            refuse("'" + args.parameter_name + "' has no setting '" + args.item + "'");
+        }
+        parameter.set("value", low + position);
+    } else {
+        var normalized = Number(args.value);
+        if (!(normalized >= 0 && normalized <= 1)) {
+            refuse("normalized value must be between 0 and 1");
+        }
+        parameter.set("value", low + normalized * (high - low));
+    }
+    var value = Number(getProperty(parameter, "value"));
+    var readback = {
+        track_index: target.track_index,
+        device_index: target.device_index,
+        parameter_name: args.parameter_name,
+        normalized_value: high > low ? Math.round((value - low) / (high - low) * 1000) / 1000 : 0
+    };
+    if (items.length) {
+        readback.item = String(items[Math.round(value - low)] || "");
+    }
+    return readback;
 }
 
 function loadDrumPadSample(target, args) {

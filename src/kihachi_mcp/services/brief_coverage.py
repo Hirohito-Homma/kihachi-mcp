@@ -17,6 +17,7 @@ is called "not reflected, as far as the rules can tell" -- never "rejected".
 
 from typing import Any
 
+from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.services.brief_parser import out_of_scope_spans, read_explicit
 
 BRIEF_COVERAGE_VERSION = "0.1"
@@ -32,7 +33,10 @@ _LABELS = {
     "hats_second_half": "後半のハット",
     "mood": "ムード",
     "genre": "ジャンル",
-    "echo": "ディレイ（MIDIの繰り返しで表現）",
+    "echo": "ディレイ",
+    "tone_brightness": "音の明るさ（曲全体）",
+    "tone_length": "音の長さ（曲全体）",
+    "tone_delay": "ディレイの量",
 }
 
 #: Model fields that change the notes, with how the UI names them.
@@ -44,7 +48,11 @@ MODEL_FIELDS = {
     "bass_register": "ベース音域",
     "note_density": "音数",
     "drop_start_bar": "ドロップ位置",
+    "tone_brightness": "音の明るさ",
+    "tone_length": "音の長さ",
+    "tone_delay": "ディレイの量",
 }
+TONE_FIELD_NAMES = frozenset({"tone_brightness", "tone_length", "tone_delay"})
 
 
 def read_coverage(
@@ -118,6 +126,9 @@ def model_filled_fields(brief: Any) -> list[dict[str, Any]]:
         affects = name not in FIELDS_WITHOUT_EFFECT and (
             name != "mood" or str(value.value) in MOODS_THAT_CHANGE_NOTES
         )
+        if name in TONE_FIELD_NAMES:
+            # A tone step only turns knobs a sound recipe sets.
+            affects = recipe_for(str(brief.genre.value)) is not None
         filled.append({"label": label, "value": str(value.value), "affects_notes": affects})
     return filled
 

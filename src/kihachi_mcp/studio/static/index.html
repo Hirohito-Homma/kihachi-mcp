@@ -461,6 +461,7 @@
         <p>結果: <b>${receipt.status || result.error}</b>${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
         <p>${result.verified_means || ""}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+        ${(result.kits || []).length ? `<ul>${result.kits.map((k) => k.ok ? `<li class="ok">${k.part}: ${k.kit} を読み込みました（AbletonGPT）</li>` : `<li class="bad">${k.part}: ${k.error}</li>`).join("")}</ul>` : ""}
         <p>今回のトラック: ${(coverage.current_tracks || []).join(", ") || "未確認"}</p>
         <p>残骸トラック: ${(coverage.leftover_tracks || []).join(", ") || "なし"}</p>
         <ul>${(coverage.issues || []).map((x) => `<li>${x.detail}${x.verified ? "" : "（未検証）"}</li>`).join("")}</ul>

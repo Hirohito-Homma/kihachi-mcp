@@ -74,6 +74,19 @@ _MOOD_WORDS = ("暗い", "ダーク", "明るい", "優しい", "激しい", "�
 #: A delay or echo request. KIHACHI writes MIDI, so it answers with quieter
 #: repeats of the chord stabs rather than an effect device.
 _ECHO_RE = re.compile(r"ディレイ|delay|エコー|echo", re.IGNORECASE)
+_STRONGER = r"(とても|かなり|すごく|もっと|めちゃくちゃ|すごい)"
+_DELAY = r"(ディレイ|エコー|delay|echo)"
+#: (field, direction, pattern). A sound word, read as a step of a recipe's tone
+#: control. 「暗い」 is not here: it is the mood, which picks minor and a low
+#: register, and reading it twice would darken the song twice.
+_TONE_RULES = (
+    ("tone_brightness", 1, r"煌びやか|きらびやか|キラキラ|きらきら|ブライト|bright|派手|抜けの?いい"),
+    ("tone_brightness", -1, r"こもった|こもらせ|くぐもった|曇った|丸い音|ローファイ|lo-?fi|dull"),
+    ("tone_length", 1, r"長め|伸びる|伸ばし|余韻|サステイン|sustain"),
+    ("tone_length", -1, r"短め|短く|タイト|歯切れ|スタッカート|staccato"),
+    ("tone_delay", 1, rf"{_DELAY}.{{0,6}}(多め|多く|強め|深め|深く|たっぷり)"),
+    ("tone_delay", -1, rf"{_DELAY}.{{0,6}}(少なめ|少なく|控えめ|弱め|薄め)"),
+)
 
 
 def extract_explicit(brief: str) -> dict[str, Any]:
@@ -122,6 +135,23 @@ def read_explicit(text: str) -> tuple[dict[str, Any], list[Span]]:
             fields["mood"] = word
             spans.append((position, position + len(word), "mood"))
             break
+    for name, direction, pattern in _TONE_RULES:
+        if name in fields:
+            # Another statement asking the same way was read too; one asking
+            # the opposite way was not, and stays unread in the coverage.
+            if (fields[name] > 0) == (direction > 0):
+                spans.extend(
+                    (match.start(), match.end(), name)
+                    for match in re.finditer(pattern, text, flags=re.IGNORECASE)
+                )
+            continue
+        matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+        if matches:
+            first = matches[0]
+            before = text[max(0, first.start() - 6):first.start()]
+            steps = 2 if re.search(_STRONGER, before) else 1
+            fields[name] = direction * steps
+            spans.extend((match.start(), match.end(), name) for match in matches)
     echo = _ECHO_RE.search(text)
     if echo:
         fields["echo"] = True

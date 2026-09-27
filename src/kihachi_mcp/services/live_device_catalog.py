@@ -41,6 +41,8 @@ STOCK_DEVICES: tuple[LiveStockDevice, ...] = (
     LiveStockDevice("Operator", CATEGORY_INSTRUMENT, "fm_synth"),
     LiveStockDevice("Wavetable", CATEGORY_INSTRUMENT, "wavetable_synth"),
     LiveStockDevice("Drift", CATEGORY_INSTRUMENT, "analog_synth"),
+    # Suite only. The availability list read from Live decides whether it loads.
+    LiveStockDevice("Analog", CATEGORY_INSTRUMENT, "analog_synth"),
     LiveStockDevice("Auto Filter", CATEGORY_EFFECT, "filter"),
     LiveStockDevice("EQ Eight", CATEGORY_EFFECT, "equaliser"),
     LiveStockDevice("Compressor", CATEGORY_EFFECT, "dynamics"),

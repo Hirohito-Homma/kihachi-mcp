@@ -16,6 +16,7 @@ from kihachi_mcp.knowledge.genre_profiles import (
     profile_for,
     swung,
 )
+from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.production_brief import STUDIO_PARTS, ProductionBrief
 from kihachi_mcp.services.brief_parser import read_explicit
@@ -289,6 +290,10 @@ class _SongPlan:
         self.harmonic_rhythm = self.profile.harmonic_rhythm_bars or 2
         self.swing = self.profile.swing or 0.5
         self.echo_requested = bool(read_explicit(brief.original_text)[0].get("echo"))
+        # A recipe that puts a real Echo on the chords does the repeats; writing
+        # them as notes as well doubles the delay.
+        recipe = recipe_for(str(brief.genre.value))
+        self.device_echo = recipe is not None and recipe.has_effect("Stab", "Echo")
 
     def section_of(self, bar: int) -> Any:
         for section in self._sections:
@@ -663,7 +668,7 @@ _ECHO_LEVELS = (0.55, 0.3)
 
 def _echoes(plan: _SongPlan, bar: _Bar) -> bool:
     """Dub chords always echo; a brief asking for delay gets it here and there."""
-    if bar.section not in {"Build", "Drop"}:
+    if bar.section not in {"Build", "Drop"} or plan.device_echo:
         return False
     if plan.articulation.echo:
         return True

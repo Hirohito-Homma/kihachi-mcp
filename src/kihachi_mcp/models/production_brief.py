@@ -108,6 +108,10 @@ class ProductionBrief:
     contradictions: tuple[str, ...] = field(default_factory=tuple)
     model: str = "gemma4:latest"
     provider: str = "local_ollama"
+    #: Tone controls, -2..+2 steps of a sound recipe. 0 leaves the recipe as is.
+    tone_brightness: SourcedValue = field(default_factory=lambda: _no_tone())
+    tone_length: SourcedValue = field(default_factory=lambda: _no_tone())
+    tone_delay: SourcedValue = field(default_factory=lambda: _no_tone())
 
     def __post_init__(self) -> None:
         if not self.original_text.strip():
@@ -140,6 +144,8 @@ class ProductionBrief:
         if drop and drop < 1:
             raise ValueError("drop_start_bar must be at least 1 when set")
         _assert_sections_cover(self.sections, int(self.bars.value))
+        for name in TONE_FIELDS:
+            _require_int(getattr(self, name), -2, 2, name)
 
     @property
     def beats_per_bar(self) -> float:
@@ -176,6 +182,7 @@ class ProductionBrief:
             "contradictions": list(self.contradictions),
             "model": self.model,
             "provider": self.provider,
+            **{name: getattr(self, name).to_dict() for name in TONE_FIELDS},
         }
 
     @classmethod
@@ -206,7 +213,21 @@ class ProductionBrief:
             contradictions=tuple(str(item) for item in data.get("contradictions") or []),
             model=str(data.get("model") or "gemma4:latest"),
             provider=str(data.get("provider") or "local_ollama"),
+            # Candidates saved before tone controls existed carry none.
+            **{
+                name: SourcedValue.from_dict(data[name])
+                if isinstance(data.get(name), dict)
+                else _no_tone()
+                for name in TONE_FIELDS
+            },
         )
+
+
+TONE_FIELDS = ("tone_brightness", "tone_length", "tone_delay")
+
+
+def _no_tone() -> SourcedValue:
+    return SourcedValue(0, SOURCE_DEFAULT)
 
 
 def _require_int(sourced: SourcedValue, minimum: int, maximum: int, name: str) -> None:

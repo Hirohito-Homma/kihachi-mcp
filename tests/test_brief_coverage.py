@@ -23,9 +23,10 @@ def test_statements_nothing_reads_are_listed_not_dropped() -> None:
     assert states["105 BPM"] == "read"
     assert states["D＃マイナー"] == "read"
     assert states["後半で増やす"] == "read"
-    assert states["中間でBrakeを必ず入れドロップは派手に"] == "unread"
     assert states["BASSは最初動き少なく徐々に動きのあるものへ変化する"] == "unread"
-    assert states["上物は徐々に煌びやかに"] == "unread"
+    # A sound word is read, 「徐々に」 is not: only part of these reaches the song.
+    assert states["中間でBrakeを必ず入れドロップは派手に"] == "partly_read"
+    assert states["上物は徐々に煌びやかに"] == "partly_read"
 
 
 def test_a_statement_read_only_in_part_says_so() -> None:
@@ -48,7 +49,7 @@ def test_a_dub_delay_is_read_as_a_delay_not_a_genre() -> None:
         for item in read_coverage(USER_BRIEF)["clauses"]
         if item["text"] == "DUB ディレイをところどころにいれる"
     )
-    assert clause["read_as"] == ["ディレイ（MIDIの繰り返しで表現）"]
+    assert clause["read_as"] == ["ディレイ"]
 
 
 def test_known_unsupported_requests_are_out_of_scope_not_unread() -> None:
@@ -96,3 +97,21 @@ def test_a_mood_the_builder_has_no_rule_for_is_not_claimed() -> None:
     assert model_filled_fields(Brief()) == [
         {"label": "ムード", "value": "heavy", "affects_notes": False}
     ]
+
+
+def test_tone_words_are_read_with_their_strength() -> None:
+    fields, _spans = read_explicit("かなり短めの音で、こもったダブ。ディレイ多めに")
+    assert fields["tone_length"] == -2
+    assert fields["tone_brightness"] == -1
+    assert fields["tone_delay"] == 1
+
+
+def test_the_mood_word_dark_is_not_also_a_tone_step() -> None:
+    fields, _spans = read_explicit("暗いテクノ")
+    assert "tone_brightness" not in fields
+
+
+def test_an_opposite_tone_word_is_left_unread() -> None:
+    coverage = read_coverage("煌びやかなダブ。こもった上物")
+    states = {clause["text"]: clause["state"] for clause in coverage["clauses"]}
+    assert states["こもった上物"] == "unread"

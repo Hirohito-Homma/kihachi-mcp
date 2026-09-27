@@ -44,6 +44,7 @@ PRECONDITION_KINDS = {
     "clip_is_managed",
     "device_available",
     "arrangement_range_free",
+    "device_name_at_index",
 }
 
 
@@ -63,6 +64,13 @@ def _js_number(source: str, name: str) -> int:
     match = re.search(rf"var {name} = (\d+);", source)
     assert match is not None, f"{name} is not declared in the device source"
     return int(match.group(1))
+
+
+def test_parameter_items_are_compared_as_text(source: str) -> None:
+    """Max hands "12"/"24" over as numbers; indexOf("24") on [12, 24] failed
+    in Live on 2026-09-27 and stopped an apply at Wavetable's filter slope."""
+    assert "items.push(String(raw[at]))" in source
+    assert "items.indexOf(String(args.item))" in source
 
 
 def test_the_device_source_exists() -> None:
@@ -95,7 +103,7 @@ def test_protocol_name_and_versions_match(source: str) -> None:
     assert _js_constant(source, "PROTOCOL_NAME") == PROTOCOL_NAME
     assert _js_number(source, "PROTOCOL_VERSION") == PROTOCOL_VERSION
     assert _js_number(source, "SCHEMA_VERSION") == SCHEMA_VERSION
-    assert _js_constant(source, "DEVICE_VERSION") == "kihachi-live-device/0.2.9"
+    assert _js_constant(source, "DEVICE_VERSION") == "kihachi-live-device/0.3.1"
     assert 'call("get_version_string")' in source
     assert "include_session_clips" in source
 

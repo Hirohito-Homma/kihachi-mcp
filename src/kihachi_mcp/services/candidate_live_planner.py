@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_LOCATOR,
     OP_CREATE_MIDI_TRACK,
@@ -16,6 +17,7 @@ from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
+    OP_SET_DEVICE_PARAMETER,
     OP_SET_TEMPO,
     canonical_hash,
     managed_clip_name,
@@ -99,6 +101,7 @@ class CandidateLivePlanner:
         snapshot: LiveStateSnapshot,
         change_tempo: bool = False,
         skip_instruments: bool = False,
+        external_kit_parts: frozenset[str] = frozenset(),
     ) -> LiveMutationPlan:
         """Return an inert plan. Conflicts block execution.
 
@@ -107,7 +110,9 @@ class CandidateLivePlanner:
         put a kit or preset there: that loader refuses a track that already has
         an instrument.
         """
-        builder = _Builder(candidate, snapshot, change_tempo, skip_instruments)
+        builder = _Builder(
+            candidate, snapshot, change_tempo, skip_instruments, external_kit_parts
+        )
         operations, conflicts, warnings = builder.build()
         request_id = self._request_id_factory()
         source_plan_hash = candidate.note_fingerprint
@@ -121,6 +126,7 @@ class CandidateLivePlanner:
                     "set_fingerprint": snapshot.set_fingerprint,
                     "change_tempo": change_tempo,
                     "skip_instruments": skip_instruments,
+                    "external_kit_parts": sorted(external_kit_parts),
                 }
             ),
             source_plan_hash=source_plan_hash,
@@ -206,11 +212,15 @@ class _Builder:
         snapshot: LiveStateSnapshot,
         change_tempo: bool,
         skip_instruments: bool = False,
+        external_kit_parts: frozenset[str] = frozenset(),
     ) -> None:
         self._candidate = candidate
         self._snapshot = snapshot
         self._change_tempo = change_tempo
         self._skip_instruments = skip_instruments
+        # Parts whose kit another loader brings: they must stay empty here,
+        # because that loader refuses a track that already has an instrument.
+        self._external_kit_parts = external_kit_parts
         self._operations: list[LiveMutationOperation] = []
         self._conflicts: list[LiveConflict] = []
         self._warnings: list[str] = []
@@ -550,8 +560,13 @@ class _Builder:
 
     def _plan_devices(self, tracks: list[dict[str, Any]]) -> None:
         available = self._snapshot.available_device_names()
+        recipe = self._sound_recipe()
         for track in tracks:
-            if track["device_names"]:
+            if track["device_names"] or track["part"] in self._external_kit_parts:
+                continue
+            part_recipe = recipe.parts.get(track["part"]) if recipe else None
+            if part_recipe is not None:
+                self._plan_recipe_chain(track, part_recipe.chain, available)
                 continue
             device_name = live_device_catalog.suggest_instrument(track["part"])
             try:
@@ -586,6 +601,71 @@ class _Builder:
                 )
             )
             track["device_names"] = [device_name]
+
+    def _sound_recipe(self):
+        brief = getattr(self._candidate, "brief", None)
+        if brief is None:
+            return None
+        recipe = recipe_for(str(brief.genre.value))
+        if recipe is None:
+            return None
+        return tuned(recipe, tone_steps(brief))
+
+    def _plan_recipe_chain(
+        self,
+        track: dict[str, Any],
+        chain: tuple[DeviceRecipe, ...],
+        available: Any,
+    ) -> None:
+        """Insert each device of the recipe, then set its knobs by name.
+
+        The track is new and empty, so the n-th inserted device sits at index n.
+        """
+        for device in chain:
+            try:
+                live_device_catalog.resolve(device.device, available)
+            except live_device_catalog.LiveDeviceUnavailableError:
+                self._warnings.append(
+                    f"{track['name']} の '{device.device}' はこのLiveでは読み込めないため、"
+                    "レシピのこの部分は使いません"
+                )
+                return
+        names: list[str] = []
+        for position, device in enumerate(chain):
+            self._operations.append(
+                LiveMutationOperation(
+                    operation_id=self._next_id(OP_LOAD_LIVE_DEVICE),
+                    op=OP_LOAD_LIVE_DEVICE,
+                    target={"track_index": track["index"]},
+                    arguments={"device_name": device.device},
+                    preconditions=[
+                        LivePrecondition("not_recording"),
+                        LivePrecondition(
+                            "track_name_at_index",
+                            {"track_index": track["index"], "name": track["name"]},
+                        ),
+                        LivePrecondition("device_available", {"device_name": device.device}),
+                    ],
+                    destructive=False,
+                    expected_readback={
+                        "track_index": track["index"],
+                        "device_name": device.device,
+                        "device_index": position,
+                    },
+                )
+            )
+            names.append(device.device)
+            for setting in device.settings:
+                self._operations.append(
+                    _parameter_operation(
+                        self._next_id(OP_SET_DEVICE_PARAMETER),
+                        track,
+                        position,
+                        device.device,
+                        setting,
+                    )
+                )
+        track["device_names"] = names
 
     def _plan_drum_samples(self, tracks: list[dict[str, Any]]) -> None:
         if not _supports_replace_sample(self._snapshot.live_version):
@@ -760,6 +840,58 @@ class _Builder:
     def _next_id(self, op: str) -> str:
         self._sequence += 1
         return f"{self._sequence:03d}-{op}"
+
+
+def tone_steps(brief: Any) -> dict[str, int]:
+    """The brief's tone controls as recipe steps; absent fields mean no change."""
+    steps: dict[str, int] = {}
+    for control in ("brightness", "length", "delay"):
+        sourced = getattr(brief, f"tone_{control}", None)
+        value = getattr(sourced, "value", 0) if sourced is not None else 0
+        if value:
+            steps[control] = int(value)
+    return steps
+
+
+def _parameter_operation(
+    operation_id: str,
+    track: dict[str, Any],
+    position: int,
+    device: str,
+    setting: Any,
+) -> LiveMutationOperation:
+    arguments: dict[str, Any] = {"device_name": device, "parameter_name": setting.parameter}
+    readback: dict[str, Any] = {
+        "track_index": track["index"],
+        "device_index": position,
+        "parameter_name": setting.parameter,
+    }
+    if setting.item is not None:
+        arguments["item"] = setting.item
+        readback["item"] = setting.item
+    else:
+        arguments["value"] = setting.value
+        # The device reads back to three decimals; Live stores 0.35 as 0.3499.
+        readback["normalized_value"] = round(float(setting.value), 3)
+    return LiveMutationOperation(
+        operation_id=operation_id,
+        op=OP_SET_DEVICE_PARAMETER,
+        target={"track_index": track["index"], "device_index": position},
+        arguments=arguments,
+        preconditions=[
+            LivePrecondition("not_recording"),
+            LivePrecondition(
+                "track_name_at_index",
+                {"track_index": track["index"], "name": track["name"]},
+            ),
+            LivePrecondition(
+                "device_name_at_index",
+                {"track_index": track["index"], "device_index": position, "name": device},
+            ),
+        ],
+        destructive=False,
+        expected_readback=readback,
+    )
 
 
 def _supports_replace_sample(live_version: str) -> bool:

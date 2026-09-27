@@ -305,7 +305,7 @@ class StudioRuntime:
         return {"ok": True, "path": str(path), "bytes": path.stat().st_size}
 
     def apply_preview(
-        self, candidate_id: str, change_tempo: bool = False
+        self, candidate_id: str, change_tempo: bool = False, skip_instruments: bool = False
     ) -> dict[str, Any]:
         """Show what would be applied without touching Live."""
         candidate = self._lookup(candidate_id)
@@ -314,7 +314,9 @@ class StudioRuntime:
         snapshot, failure = self._snapshot()
         if snapshot is None:
             return failure or {"ok": False, "error": "Live状態を取得できません"}
-        plan = self._planner.create_plan(candidate, snapshot, change_tempo=change_tempo)
+        plan = self._planner.create_plan(
+            candidate, snapshot, change_tempo=change_tempo, skip_instruments=skip_instruments
+        )
         planned_notes = _notes_from_plan(plan)
         preview_notes = _notes_from_candidate(candidate)
         notes_match = planned_notes == preview_notes and bool(preview_notes)
@@ -325,13 +327,20 @@ class StudioRuntime:
             "notes_match_preview": notes_match,
             "status": plan.status,
             "plan": plan.to_dict(),
-            "summary": _apply_summary(candidate, plan, snapshot, change_tempo),
+            "summary": {
+                **_apply_summary(candidate, plan, snapshot, change_tempo),
+                "skip_instruments": skip_instruments,
+            },
             "conflicts": [item.to_dict() for item in plan.conflicts],
             "warnings": list(plan.warnings),
         }
 
     def apply(
-        self, candidate_id: str, confirmed: bool = False, change_tempo: bool = False
+        self,
+        candidate_id: str,
+        confirmed: bool = False,
+        change_tempo: bool = False,
+        skip_instruments: bool = False,
     ) -> dict[str, Any]:
         """Apply one confirmed candidate once. Never auto-retries."""
         if not confirmed:
@@ -348,7 +357,9 @@ class StudioRuntime:
         if not self._apply_lock.acquire(blocking=False):
             return {"ok": False, "error": "別のLive適用が実行中です"}
         try:
-            preview = self.apply_preview(candidate_id, change_tempo=change_tempo)
+            preview = self.apply_preview(
+                candidate_id, change_tempo=change_tempo, skip_instruments=skip_instruments
+            )
             if not preview.get("ok"):
                 return preview
             if not preview.get("notes_match_preview"):

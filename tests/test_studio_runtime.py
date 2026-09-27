@@ -368,3 +368,19 @@ def test_the_default_runtime_expands_beside_existing_arrangement_clips(
     result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
     assert result["ok"] is True, result.get("error") or result.get("receipt")
     assert len(_arrangement_placements(transport)) == len(candidate.clips)
+
+
+def test_skip_instruments_leaves_the_tracks_for_another_loader(tmp_path: Path) -> None:
+    """AbletonGPT's kit loader refuses a track that already has an instrument."""
+    runtime, candidate, transport = _runtime(tmp_path)
+    preview = runtime.apply_preview(candidate.candidate_id, skip_instruments=True)
+    ops = {operation["op"] for operation in preview["plan"]["operations"]}
+    assert "load_live_device" not in ops
+    assert "load_drum_pad_sample" not in ops
+    assert preview["summary"]["skip_instruments"] is True
+    result = runtime.apply(candidate.candidate_id, confirmed=True, skip_instruments=True)
+    assert result["ok"] is True
+    kihachi = [t for t in transport.live_set.tracks if "[KIHACHI]" in t["name"]]
+    assert len(kihachi) == 4
+    assert all(track["device_names"] == [] for track in kihachi)
+    assert result["sound_coverage"]["has_missing_sounds"] is True

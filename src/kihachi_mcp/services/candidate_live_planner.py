@@ -98,9 +98,16 @@ class CandidateLivePlanner:
         candidate: MidiCandidate,
         snapshot: LiveStateSnapshot,
         change_tempo: bool = False,
+        skip_instruments: bool = False,
     ) -> LiveMutationPlan:
-        """Return an inert plan. Conflicts block execution."""
-        builder = _Builder(candidate, snapshot, change_tempo)
+        """Return an inert plan. Conflicts block execution.
+
+        ``skip_instruments`` leaves the new tracks without Drum Rack, synths or
+        samples, so another tool (AbletonGPT's browser loader, or the user) can
+        put a kit or preset there: that loader refuses a track that already has
+        an instrument.
+        """
+        builder = _Builder(candidate, snapshot, change_tempo, skip_instruments)
         operations, conflicts, warnings = builder.build()
         request_id = self._request_id_factory()
         source_plan_hash = candidate.note_fingerprint
@@ -113,6 +120,7 @@ class CandidateLivePlanner:
                     "note_fingerprint": source_plan_hash,
                     "set_fingerprint": snapshot.set_fingerprint,
                     "change_tempo": change_tempo,
+                    "skip_instruments": skip_instruments,
                 }
             ),
             source_plan_hash=source_plan_hash,
@@ -197,10 +205,12 @@ class _Builder:
         candidate: MidiCandidate | AppliedTracks,
         snapshot: LiveStateSnapshot,
         change_tempo: bool,
+        skip_instruments: bool = False,
     ) -> None:
         self._candidate = candidate
         self._snapshot = snapshot
         self._change_tempo = change_tempo
+        self._skip_instruments = skip_instruments
         self._operations: list[LiveMutationOperation] = []
         self._conflicts: list[LiveConflict] = []
         self._warnings: list[str] = []
@@ -217,8 +227,14 @@ class _Builder:
             return [], self._conflicts, self._warnings
         self._plan_tempo()
         tracks = self._plan_tracks()
-        self._plan_devices(tracks)
-        self._plan_drum_samples(tracks)
+        if self._skip_instruments:
+            self._warnings.append(
+                "音源は入れません。トラックは無音のままなので、キットやプリセットを"
+                "後から入れてください"
+            )
+        else:
+            self._plan_devices(tracks)
+            self._plan_drum_samples(tracks)
         scenes = self._plan_scenes()
         self._plan_clips(tracks, scenes)
         if self._conflicts:

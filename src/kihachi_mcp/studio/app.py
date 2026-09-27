@@ -143,6 +143,7 @@ def _handler_for(app: StudioApp):
                     runtime.apply_preview(
                         str(body.get("candidate_id") or ""),
                         change_tempo=bool(body.get("change_tempo")),
+                        skip_instruments=bool(body.get("skip_instruments")),
                     )
                 )
                 return
@@ -173,6 +174,7 @@ def _handler_for(app: StudioApp):
                         str(body.get("candidate_id") or ""),
                         confirmed=bool(body.get("confirmed")),
                         change_tempo=bool(body.get("change_tempo")),
+                        skip_instruments=bool(body.get("skip_instruments")),
                     )
                 )
                 return

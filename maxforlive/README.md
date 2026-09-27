@@ -125,7 +125,7 @@ Live の再生を止め、KIHACHI デバイスの編集ボタン（鉛筆アイ�
 #### 4. 保存と確認
 
 1. ⌘S で保存し、エディタを**閉じます**。エディタを開いている間は、エディタ側のコピーも `node.script` を起動するため、`udp error: bind EADDRINUSE 127.0.0.1:17771` が出ます。`kihachi.bridge.js` はポートの確保をやり直さないので、閉じるまでは異常ではありません。
-2. Max Console に `raw UDP bridge v2 ready on 127.0.0.1:17771` が再び出ることを確認します。エディタを閉じても `EADDRINUSE` が続く場合は、KIHACHI デバイスが Set に2つ入っていないか確認します。1つだけなのに Studio から Live につながらない場合は、デバイス内の `script stop`、続けて `script start` をクリックして起動し直します。
+2. Max Console に `raw UDP bridge v3 ready on 127.0.0.1:17771 (send buffer 65507)` が再び出ることを確認します。send buffer が 9216 のままだと、Session クリップが数十個ある Set の状態を返せず、Studio は 40 秒のタイムアウトになります。エディタを閉じても `EADDRINUSE` が続く場合は、KIHACHI デバイスが Set に2つ入っていないか確認します。1つだけなのに Studio から Live につながらない場合は、デバイス内の `script stop`、続けて `script start` をクリックして起動し直します。
 3. デバイスの「Studio」ボタンを押し、Studio の画面が別ウィンドウに出ることを確認します。
 4. Studio を止めた状態でボタンを押すと、接続できない旨のページが出ます。Studio を起動してからボタンを押し直してください。
 

@@ -143,6 +143,7 @@
     <section id="apply-view" class="hidden">
       <h2>Liveへ適用</h2>
       <label class="inline"><input type="checkbox" id="change-tempo"> Setのテンポも候補に合わせる（既存曲のテンポが変わります）</label>
+      <label class="inline"><input type="checkbox" id="skip-instruments"> 音源は入れない（AbletonGPT や手作業でキット・プリセットを入れる）</label>
       <div class="actions">
         <button id="preview-apply" class="secondary">適用内容を確認</button>
         <button id="apply" disabled>この内容でLiveへ適用</button>
@@ -318,7 +319,8 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           candidate_id: state.candidate.candidate_id,
-          change_tempo: $("change-tempo").checked
+          change_tempo: $("change-tempo").checked,
+          skip_instruments: $("skip-instruments").checked
         })
       });
       const s = result.summary || {};
@@ -344,7 +346,8 @@
         body: JSON.stringify({
           candidate_id: state.candidate.candidate_id,
           confirmed: true,
-          change_tempo: $("change-tempo").checked
+          change_tempo: $("change-tempo").checked,
+          skip_instruments: $("skip-instruments").checked
         })
       });
       state.applying = false;

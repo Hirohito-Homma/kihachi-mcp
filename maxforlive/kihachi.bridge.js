@@ -11,7 +11,11 @@ const LOOPBACK = "127.0.0.1";
 const DEVICE_PORT = 17771;
 const REPLY_PORT = 17772;
 const MAX_DATAGRAM_BYTES = 60000;
-const BRIDGE_VERSION = 2;
+// macOS gives a UDP socket a 9216-byte send buffer. A get_state reply for a
+// Set with a few dozen Session clips is larger than that, and the send then
+// fails with EMSGSIZE, so the Studio only ever sees a 40 s timeout.
+const SEND_BUFFER_BYTES = 65507;
+const BRIDGE_VERSION = 3;
 const socket = dgram.createSocket("udp4");
 
 function handshakePath() {
@@ -84,13 +88,24 @@ maxApi.addHandler("response", (jsonText) => {
     maxApi.outlet("status", "response exceeds UDP safety limit");
     return;
   }
-  socket.send(payload, REPLY_PORT, LOOPBACK);
+  socket.send(payload, REPLY_PORT, LOOPBACK, (error) => {
+    if (error) {
+      maxApi.outlet("status", `response of ${payload.length} bytes not sent: ${error.message}`);
+    }
+  });
 });
 
 socket.bind(DEVICE_PORT, LOOPBACK, () => {
+  let sendBuffer = 0;
+  try {
+    socket.setSendBufferSize(SEND_BUFFER_BYTES);
+    sendBuffer = socket.getSendBufferSize();
+  } catch (error) {
+    maxApi.outlet("status", `udp send buffer not raised: ${error.message}`);
+  }
   maxApi.outlet(
     "status",
-    `raw UDP bridge v${BRIDGE_VERSION} ready on ${LOOPBACK}:${DEVICE_PORT}`,
+    `raw UDP bridge v${BRIDGE_VERSION} ready on ${LOOPBACK}:${DEVICE_PORT} (send buffer ${sendBuffer})`,
   );
 });
 

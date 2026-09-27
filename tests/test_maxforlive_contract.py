@@ -75,7 +75,15 @@ def test_node_bridge_uses_raw_loopback_udp() -> None:
     assert 'require("dgram")' in source
     assert 'require("max-api")' in source
     assert 'const LOOPBACK = "127.0.0.1"' in source
-    assert "const BRIDGE_VERSION = 2" in source
+    assert "const BRIDGE_VERSION = 3" in source
+
+
+def test_node_bridge_raises_the_macos_send_buffer_for_large_replies() -> None:
+    """A get_state reply for ~50 Session clips is over macOS's 9216-byte default."""
+    source = BRIDGE_SOURCE.read_text(encoding="utf-8")
+    assert "const SEND_BUFFER_BYTES = 65507" in source
+    assert "socket.setSendBufferSize(SEND_BUFFER_BYTES)" in source
+    assert "not sent:" in source
     assert 'maxApi.outlet("request"' in source
     assert 'maxApi.addHandler("response"' in source
     assert "request.token !== handshake.token" in source

@@ -51,6 +51,86 @@ Live Intro には Max for Live がないため、KIHACHI の Live 自動操作�
    - macOS: `~/Music/Ableton/User Library/Presets/Audio Effects/Max Audio Effect/`
    - Windows: `%USERPROFILE%\Documents\Ableton\User Library\Presets\Audio Effects\Max Audio Effect\`
 
+### Studio を Live 内で開く（任意）
+
+KIHACHI デバイスに「Studio」ボタンを足すと、Live の上に Studio（`http://127.0.0.1:8765`）の別ウィンドウを開けます。Max の `jweb`（組み込みブラウザ）で表示するだけなので、Studio 側の変更は要りません。Studio は先に `python -m kihachi_mcp.studio` で起動しておきます。
+
+送受信名の `---` は、デバイス内では `001` のような番号に置き換わって表示されます。正常です。
+
+デバイス欄の中への埋め込みは高さ（169px）が足りないため、別ウィンドウにしています。Learn ビューのレッスンは静的な文章しか表示できないため、Studio の置き場所には使えません。
+
+#### 0. バックアップ
+
+作業前に今の `.amxd` をコピーしておきます。User Library の外に置くと Live のブラウザに出てきません。
+
+```bash
+mkdir -p ~/Music/KIHACHI/backups && cp -p "/Volumes/NO NAME/User Library/User Library/Presets/Audio Effects/Max Audio Effect/KIHACHI Live Device.amxd" ~/Music/KIHACHI/backups/
+```
+
+#### 1. 再生を止めてエディタを開く
+
+Live の再生を止め、KIHACHI デバイスの編集ボタン（鉛筆アイコン）で Max エディタを開きます。既存のオブジェクトと接続（`node.script` / `js` / `route` / `prepend`）には触りません。
+
+#### 2. ウィンドウ用のサブパッチを作る
+
+図の `[名前]` はオブジェクト（`N` キーで箱を出して名前を入力）、右端が `(` の `[内容(` はメッセージボックス（`M` キーで箱を出して内容だけを入力）です。`open(` を `N` キーの箱に入力すると、Console に `No such object` が出て動きません。
+
+空いている場所に `p kihachi-studio` と入力してサブパッチを作り、ダブルクリックで開きます。中に次を置きます。
+
+```
+[inlet]
+
+[loadbang]
+|
+[window size 80 80 1180 900, window exec(
+|
+[thispatcher]
+
+[r ---kihachi-studio-url]
+|
+[url http://127.0.0.1:8765/(
+|
+[jweb @url http://127.0.0.1:8765/]
+```
+
+- `[inlet]` はどこにもつなぎません。外の `[pcontrol]` を接続するためだけに要ります。`I` キーでも置けます。置くときは ⌥⌘E でプレゼンテーション表示を切っておきます。
+- `jweb` は角をドラッグして幅 1100 × 高さ 820 程度に広げます。
+- `jweb` を選んで「Add to Presentation」（⌘⇧P）し、プレゼンテーションモードで左上 (0, 0) に合わせます。
+- サブパッチの Patcher Inspector で「Open in Presentation」をオンにします。
+- `---` で始まる送受信名は、Max がデバイスごとに置き換えます。同じ名前が他のデバイスと混ざりません。
+
+サブパッチのウィンドウを閉じます。
+
+#### 3. ボタンをつなぐ
+
+メインパッチに戻り、次を置きます。
+
+```
+[button]
+|
+[t b b]
+|     \
+|      [s ---kihachi-studio-url]
+[open(
+|
+[pcontrol]
+|
+[p kihachi-studio]
+```
+
+- `[t b b]` は右から出るので、先に URL を読み直し、次にウィンドウを開きます。Studio を後から起動した場合も、ボタンを押し直せば表示されます。
+- 取り消し履歴やオートメーションに載せないため、`live.text` ではなく普通の `[button]` を使います。
+- `[button]` と、その横に置いた `[comment]`（本文「Studio」）を選んで「Add to Presentation」し、デバイス欄に見える位置へ置きます。
+
+#### 4. 保存と確認
+
+1. ⌘S で保存し、エディタを**閉じます**。エディタを開いている間は、エディタ側のコピーも `node.script` を起動するため、`udp error: bind EADDRINUSE 127.0.0.1:17771` が出ます。`kihachi.bridge.js` はポートの確保をやり直さないので、閉じるまでは異常ではありません。
+2. Max Console に `raw UDP bridge v2 ready on 127.0.0.1:17771` が再び出ることを確認します。エディタを閉じても `EADDRINUSE` が続く場合は、KIHACHI デバイスが Set に2つ入っていないか確認します。1つだけなのに Studio から Live につながらない場合は、デバイス内の `script stop`、続けて `script start` をクリックして起動し直します。
+3. デバイスの「Studio」ボタンを押し、Studio の画面が別ウィンドウに出ることを確認します。
+4. Studio を止めた状態でボタンを押すと、接続できない旨のページが出ます。Studio を起動してからボタンを押し直してください。
+
+元に戻すときは、手順0のバックアップを元の場所へコピーし直します。
+
 ### 純正デバイスローダー
 
 Live 12.3で公式 Live Object Model に [`Track.insert_device`](https://docs.cycling74.com/apiref/lom/track/#insert_device) が追加されました。`kihachi.device.js` はこのAPIで許可リスト内のLive純正デバイスを対象トラック末尾へ挿入し、デバイス数と実際のデバイス名を読み戻します。

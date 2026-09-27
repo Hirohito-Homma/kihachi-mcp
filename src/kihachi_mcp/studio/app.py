@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.studio_runtime import StudioRuntime
 
 HOST = "127.0.0.1"
@@ -19,7 +20,9 @@ class StudioApp:
     """Serve the studio page and JSON API on loopback."""
 
     def __init__(self, runtime: StudioRuntime | None = None) -> None:
-        self.runtime = runtime or StudioRuntime(start_bridge=True)
+        self.runtime = runtime or StudioRuntime(
+            start_bridge=True, candidate_dir=Path(candidate_store_dir())
+        )
 
     def serve_forever(self, host: str = HOST, port: int = PORT) -> None:
         """Start the blocking HTTP server."""

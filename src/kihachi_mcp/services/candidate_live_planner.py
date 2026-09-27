@@ -1,7 +1,9 @@
 """Turn a MIDI candidate into a Live plan without regenerating notes."""
 
+import re
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,7 +29,7 @@ from kihachi_mcp.models.live_state import TRACK_TYPE_MIDI, LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.production_brief import STUDIO_PARTS
 from kihachi_mcp.services import live_device_catalog
-from kihachi_mcp.services.drum_samples import sample_path_for_note
+from kihachi_mcp.services.drum_samples import HAT_NOTE, KICK_NOTE, sample_path_for_note
 from kihachi_mcp.services.live_approval_gate import APPROVAL_TTL_SECONDS
 
 CONFLICT_RECORDING = "live_is_recording"
@@ -35,6 +37,43 @@ CONFLICT_PLAYING = "live_is_playing"
 CONFLICT_USER_CLIP = "user_owned_clip"
 
 _TRACK_COLORS = {"Kick": "2", "Hats": "20", "Bass": "14", "Stab": "9"}
+_SHORT_ID_RE = re.compile(r"[0-9a-f]{8}")
+
+
+@dataclass(frozen=True)
+class AppliedTracks:
+    """Tracks an earlier apply left in Live, known only by their short id.
+
+    Placing the bundled one-shots needs just two facts from a candidate: the
+    short id in the track names and the drum pitches. When a restart has lost
+    the candidate, the pitches are the ones the bundled samples cover, which
+    are the only ones the candidate builder writes for Kick and Hats.
+    """
+
+    short_id: str
+
+    def __post_init__(self) -> None:
+        if not _SHORT_ID_RE.fullmatch(self.short_id):
+            raise ValueError("トラックIDは8桁の16進数で指定してください")
+
+    @property
+    def candidate_id(self) -> str:
+        """Return the short id where a candidate would give its full id."""
+        return self.short_id
+
+    @property
+    def note_fingerprint(self) -> str:
+        """Hash what the plan relies on. There are no candidate notes here."""
+        return canonical_hash(
+            {"applied_tracks": self.short_id, "pitches": _BUNDLED_PITCHES}
+        )
+
+    def used_pitches(self, part: str) -> tuple[int, ...]:
+        """Return the bundled pad for Kick and Hats, and nothing otherwise."""
+        return _BUNDLED_PITCHES.get(part, ())
+
+
+_BUNDLED_PITCHES = {"Kick": (KICK_NOTE,), "Hats": (HAT_NOTE,)}
 
 
 class CandidateLivePlanner:
@@ -84,7 +123,7 @@ class CandidateLivePlanner:
 
     def create_drum_sample_plan(
         self,
-        candidate: MidiCandidate,
+        candidate: MidiCandidate | AppliedTracks,
         snapshot: LiveStateSnapshot,
     ) -> LiveMutationPlan:
         """Plan only empty-pad sample loads. Does not create tracks or clips."""
@@ -115,7 +154,7 @@ class CandidateLivePlanner:
 class _Builder:
     def __init__(
         self,
-        candidate: MidiCandidate,
+        candidate: MidiCandidate | AppliedTracks,
         snapshot: LiveStateSnapshot,
         change_tempo: bool,
     ) -> None:

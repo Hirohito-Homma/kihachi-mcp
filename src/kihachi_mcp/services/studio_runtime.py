@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import threading
 import time
 import uuid
@@ -10,7 +13,10 @@ from typing import Any
 
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
-from kihachi_mcp.services.candidate_live_planner import CandidateLivePlanner
+from kihachi_mcp.services.candidate_live_planner import (
+    AppliedTracks,
+    CandidateLivePlanner,
+)
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
 from kihachi_mcp.services.live_bridge import LiveBridgeSession, LocalhostBridgeTransport
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
@@ -36,6 +42,9 @@ JOB_DONE = "done"
 JOB_ERROR = "error"
 JOB_CANCELLED = "cancelled"
 
+#: Candidate ids become file names, so only these characters are accepted.
+_CANDIDATE_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
 
 class StudioRuntime:
     """Own candidates, a single Ollama job, and one Live apply at a time."""
@@ -50,6 +59,7 @@ class StudioRuntime:
         ollama_factory: Any = None,
         export_dir: Path | None = None,
         start_bridge: bool = False,
+        candidate_dir: Path | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
@@ -91,6 +101,10 @@ class StudioRuntime:
         )
         self._last_apply: dict[str, Any] | None = None
         self._applied_ids: set[str] = set()
+        # None keeps candidates in memory only, as tests and the MCP server do.
+        self._candidate_dir = Path(candidate_dir) if candidate_dir else None
+        if self._candidate_dir is not None:
+            self._selected_id = _latest_saved_id(self._candidate_dir)
 
     def close(self) -> None:
         """Release the Live bridge if this runtime created it."""
@@ -232,7 +246,7 @@ class StudioRuntime:
 
     def regenerate(self, candidate_id: str) -> dict[str, Any]:
         """Build a new candidate from the same brief with a new seed."""
-        current = self._candidates.get(candidate_id)
+        current = self._lookup(candidate_id)
         if current is None:
             return {"ok": False, "error": "指定した候補がありません"}
         next_seed = current.seed + 1
@@ -257,15 +271,15 @@ class StudioRuntime:
 
     def get_candidate(self, candidate_id: str) -> MidiCandidate | None:
         """Return a stored candidate."""
-        return self._candidates.get(candidate_id)
+        return self._lookup(candidate_id)
 
     def selected_candidate(self) -> MidiCandidate | None:
         """Return the candidate currently shown as selected."""
-        return self._candidates.get(self._selected_id)
+        return self._lookup(self._selected_id)
 
     def export_midi(self, candidate_id: str, directory: Path | None = None) -> dict[str, Any]:
         """Write a Standard MIDI File for the stored candidate."""
-        candidate = self._candidates.get(candidate_id)
+        candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
         folder = Path(directory or self._export_dir)
@@ -278,7 +292,7 @@ class StudioRuntime:
         self, candidate_id: str, change_tempo: bool = False
     ) -> dict[str, Any]:
         """Show what would be applied without touching Live."""
-        candidate = self._candidates.get(candidate_id)
+        candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
         snapshot, failure = self._snapshot()
@@ -306,7 +320,7 @@ class StudioRuntime:
         """Apply one confirmed candidate once. Never auto-retries."""
         if not confirmed:
             return {"ok": False, "error": "適用内容を確認してから実行してください"}
-        if candidate_id in self._applied_ids:
+        if candidate_id in self._applied_ids or self._applied_on_disk(candidate_id):
             return {
                 "ok": False,
                 "error": (
@@ -327,7 +341,8 @@ class StudioRuntime:
                     "error": "プレビューと適用計画のノートが一致しないため中止しました",
                     "preview": preview,
                 }
-            candidate = self._candidates[candidate_id]
+            candidate = self._lookup(candidate_id)
+            assert candidate is not None  # apply_preview already found it
             from kihachi_mcp.models.live_mutation import LiveMutationPlan
 
             plan = LiveMutationPlan.from_dict(preview["plan"])
@@ -336,6 +351,7 @@ class StudioRuntime:
             except ApprovalError as exc:
                 return {"ok": False, "error": exc.message, "preview": preview}
             self._applied_ids.add(candidate_id)
+            self._mark_applied(candidate_id)
             receipt = self._executor.execute(
                 plan, approved=True, approval_token=token
             )
@@ -362,12 +378,19 @@ class StudioRuntime:
         return self._last_apply
 
     def fill_drum_samples(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
-        """Load bundled Kick/Hats samples onto empty Drum Rack pads only."""
+        """Load bundled Kick/Hats samples onto empty Drum Rack pads only.
+
+        ``candidate_id`` may also be the 8-character id in the names of tracks
+        an earlier apply left, for when a restart lost that candidate.
+        """
         if not confirmed:
             return {"ok": False, "error": "適用内容を確認してから実行してください"}
-        candidate = self._candidates.get(candidate_id)
+        candidate: MidiCandidate | AppliedTracks | None = self._lookup(candidate_id)
         if candidate is None:
-            return {"ok": False, "error": "指定した候補がありません"}
+            try:
+                candidate = AppliedTracks(candidate_id)
+            except ValueError:
+                return {"ok": False, "error": "指定した候補がありません"}
         if not self._apply_lock.acquire(blocking=False):
             return {"ok": False, "error": "別のLive適用が実行中です"}
         try:
@@ -410,7 +433,7 @@ class StudioRuntime:
 
     def inspect_coverage(self, candidate_id: str) -> dict[str, Any]:
         """Re-read instruments and leftover [KIHACHI] tracks. Does not apply."""
-        candidate = self._candidates.get(candidate_id)
+        candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
         coverage = self._coverage_after(candidate, receipt=self._last_receipt())
@@ -431,6 +454,48 @@ class StudioRuntime:
     def _store(self, candidate: MidiCandidate) -> None:
         self._candidates[candidate.candidate_id] = candidate
         self._selected_id = candidate.candidate_id
+        path = self._candidate_path(candidate.candidate_id)
+        if path is not None:
+            _write_json_atomic(path, candidate.to_dict())
+
+    def _lookup(self, candidate_id: str) -> MidiCandidate | None:
+        """Return a candidate from memory, or the one saved before a restart."""
+        candidate = self._candidates.get(candidate_id)
+        if candidate is not None:
+            return candidate
+        path = self._candidate_path(candidate_id)
+        if path is None or not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            candidate = MidiCandidate.from_dict(data)
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+        # The saved fingerprint is what the user previewed. Different notes on
+        # disk would break "preview notes equal applied notes", so refuse them.
+        if (
+            candidate.candidate_id != candidate_id
+            or data.get("note_fingerprint") != candidate.note_fingerprint
+        ):
+            return None
+        self._candidates[candidate_id] = candidate
+        return candidate
+
+    def _candidate_path(self, candidate_id: str, suffix: str = ".json") -> Path | None:
+        if self._candidate_dir is None or not _CANDIDATE_ID_RE.fullmatch(candidate_id):
+            return None
+        return self._candidate_dir / f"{candidate_id}{suffix}"
+
+    def _mark_applied(self, candidate_id: str) -> None:
+        """Remember the attempt on disk so a restart cannot apply it twice."""
+        path = self._candidate_path(candidate_id, ".applied")
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{time.time():.0f}\n", encoding="utf-8")
+
+    def _applied_on_disk(self, candidate_id: str) -> bool:
+        path = self._candidate_path(candidate_id, ".applied")
+        return path is not None and path.is_file()
 
     def _live_health(self) -> dict[str, Any]:
         if self._transport is None:
@@ -485,7 +550,9 @@ class StudioRuntime:
 
         return _Receipt()
 
-    def _coverage_after(self, candidate: MidiCandidate, receipt: Any) -> dict[str, Any]:
+    def _coverage_after(
+        self, candidate: MidiCandidate | AppliedTracks, receipt: Any
+    ) -> dict[str, Any]:
         snapshot, failure = self._coverage_snapshot()
         if snapshot is None:
             return {
@@ -561,6 +628,26 @@ class _CoverageInspector(LiveStateInspector):
             count_session_notes=False,
             include_session_clips=False,
         )
+
+
+def _latest_saved_id(directory: Path) -> str:
+    """Return the most recently saved candidate id, or "" when there is none."""
+    try:
+        saved = [path for path in directory.glob("*.json") if path.is_file()]
+    except OSError:
+        return ""
+    if not saved:
+        return ""
+    return max(saved, key=lambda path: path.stat().st_mtime).stem
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+    )
+    os.replace(temporary, path)
 
 
 def _unique_request_ids():

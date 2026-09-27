@@ -37,6 +37,15 @@
     .ok { color: var(--good); }
     .bad { color: var(--bad); }
     .warn { color: var(--warn); }
+    input[type="text"] {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 15px;
+      width: 12ch;
+    }
     textarea {
       width: 100%;
       min-height: 120px;
@@ -139,6 +148,16 @@
       </div>
       <div id="apply-summary"></div>
       <div id="apply-result"></div>
+    </section>
+
+    <section id="recover-view">
+      <h2>適用済みトラックにサンプルを入れる</h2>
+      <p class="sub">Studioを再起動して候補が消えたときに使います。Liveのトラック名「KIHACHI Kick ababf584 [KIHACHI]」の8桁を入力してください。空の Kick 36 / Hats 42 パッドにだけ入れ、既存のパッドは上書きしません。再生を止めてから押してください。</p>
+      <div class="actions">
+        <input type="text" id="track-id" placeholder="ababf584" maxlength="8" autocomplete="off" spellcheck="false">
+        <button id="fill-drums-by-id" class="secondary">このトラックにサンプルを入れる</button>
+      </div>
+      <div id="recover-result"></div>
     </section>
   </main>
   <script>
@@ -313,8 +332,34 @@
       else renderCoverage(result.sound_coverage || {}, result.error);
     };
 
-    function renderCoverage(coverage, error) {
-      $("apply-result").innerHTML = `
+    $("fill-drums-by-id").onclick = async () => {
+      const trackId = $("track-id").value.trim().toLowerCase();
+      if (!/^[0-9a-f]{8}$/.test(trackId)) {
+        $("recover-result").innerHTML = `<p class="bad">トラックIDは8桁の英数字（0-9, a-f）です</p>`;
+        return;
+      }
+      $("fill-drums-by-id").disabled = true;
+      const result = await getJson("/api/fill-drums", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: trackId, confirmed: true })
+      });
+      $("fill-drums-by-id").disabled = false;
+      if (result.receipt) {
+        renderApplyResult(result, "recover-result");
+        return;
+      }
+      // Nothing ran, so show only why. A coverage block here would claim
+      // "no leftovers" for a Set nobody inspected.
+      const warnings = (result.warnings || []).filter((x) => x !== result.error);
+      $("recover-result").innerHTML = `
+        <p class="bad">${result.error || "実行できませんでした"}</p>
+        <ul>${warnings.map((x) => `<li class="warn">${x}</li>`).join("")}</ul>
+      `;
+    };
+
+    function renderCoverage(coverage, error, target = "apply-result") {
+      $(target).innerHTML = `
         <p>${error ? `<span class="bad">${error}</span>` : "音源と残骸を再確認しました"}</p>
         <p>今回のトラック: ${(coverage.current_tracks || []).join(", ") || "未確認"}</p>
         <p>残骸トラック: ${(coverage.leftover_tracks || []).join(", ") || "なし"}</p>
@@ -326,10 +371,10 @@
       `;
     }
 
-    function renderApplyResult(result) {
+    function renderApplyResult(result, target = "apply-result") {
       const receipt = result.receipt || {};
       const coverage = result.sound_coverage || {};
-      $("apply-result").innerHTML = `
+      $(target).innerHTML = `
         <p>結果: <b>${receipt.status || result.error}</b>${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
         <p>${result.verified_means || ""}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>

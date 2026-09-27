@@ -1,21 +1,24 @@
 """Detect missing instruments and Drum Rack pads for used MIDI pitches."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kihachi_mcp.models.midi_candidate import MidiCandidate
 from kihachi_mcp.models.production_brief import STUDIO_PARTS
 from kihachi_mcp.services import live_device_catalog
 
+if TYPE_CHECKING:
+    from kihachi_mcp.services.candidate_live_planner import AppliedTracks
+
 DRUM_PARTS = frozenset({"Kick", "Hats"})
 
 
-def expected_pitches(candidate: MidiCandidate) -> dict[str, list[int]]:
+def expected_pitches(candidate: "MidiCandidate | AppliedTracks") -> dict[str, list[int]]:
     """Return the pitches each part will send to Live."""
     return {part: list(candidate.used_pitches(part)) for part in STUDIO_PARTS}
 
 
 def coverage_from_snapshot(
-    candidate: MidiCandidate,
+    candidate: "MidiCandidate | AppliedTracks",
     track_names: dict[str, str],
     device_names_by_track: dict[str, list[str]],
     drum_summaries: dict[str, dict[str, Any]] | None = None,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from live_fixtures import gate
@@ -32,7 +33,12 @@ def _candidate():
     return build_candidate(brief, seed=4, candidate_id="runtime01deadbeef")
 
 
-def _runtime(tmp_path: Path, live: FakeLiveSet | None = None, **transport_kwargs):
+def _runtime(
+    tmp_path: Path,
+    live: FakeLiveSet | None = None,
+    candidate_dir: Path | None = None,
+    **transport_kwargs,
+):
     transport = FakeLiveTransport(
         live or FakeLiveSet(live_version="12.4.3", tempo=125),
         **transport_kwargs,
@@ -48,6 +54,7 @@ def _runtime(tmp_path: Path, live: FakeLiveSet | None = None, **transport_kwargs
         executor=executor,
         gate=approvals,
         export_dir=tmp_path / "exports",
+        candidate_dir=candidate_dir,
     )
     candidate = _candidate()
     runtime._store(candidate)
@@ -128,4 +135,124 @@ def test_unconfirmed_apply_does_nothing(tmp_path: Path) -> None:
     runtime, candidate, transport = _runtime(tmp_path)
     result = runtime.apply(candidate.candidate_id, confirmed=False)
     assert result["ok"] is False
+    assert transport.applied_operation_ids == []
+
+
+def _restarted(tmp_path: Path, transport: FakeLiveTransport, candidate_dir: Path):
+    """A second runtime over the same Live and candidate folder, nothing stored."""
+    inspector = LiveStateInspector(transport)
+    approvals = gate(tmp_path)
+    return StudioRuntime(
+        transport=transport,
+        inspector=inspector,
+        executor=LiveExecutionService(
+            transport=transport, inspector=inspector, approval_gate=approvals
+        ),
+        gate=approvals,
+        export_dir=tmp_path / "exports",
+        candidate_dir=candidate_dir,
+    )
+
+
+def test_a_saved_candidate_survives_a_restart_with_the_same_notes(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _runtime_a, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    restarted = _restarted(tmp_path, transport, saved)
+    reloaded = restarted.get_candidate(candidate.candidate_id)
+    assert reloaded is not None
+    assert reloaded.note_fingerprint == candidate.note_fingerprint
+    assert restarted.selected_candidate() == reloaded
+    preview = restarted.apply_preview(candidate.candidate_id)
+    assert preview["notes_match_preview"] is True
+
+
+def test_a_restart_does_not_allow_a_second_apply(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    before = list(transport.applied_operation_ids)
+    again = _restarted(tmp_path, transport, saved).apply(
+        candidate.candidate_id, confirmed=True
+    )
+    assert again["ok"] is False
+    assert "すでに適用" in again["error"]
+    assert transport.applied_operation_ids == before
+
+
+def test_a_saved_candidate_whose_notes_changed_is_not_loaded(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _runtime_a, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    path = saved / f"{candidate.candidate_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["clips"][0]["notes"][0]["pitch"] += 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _restarted(tmp_path, transport, saved).get_candidate(candidate.candidate_id) is None
+
+
+def test_a_candidate_id_cannot_name_a_path_outside_the_folder(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, _candidate_a, _transport = _runtime(tmp_path, candidate_dir=saved)
+    (tmp_path / "outside.json").write_text("{}", encoding="utf-8")
+    assert runtime.get_candidate("../outside") is None
+
+
+def _applied_tracks_set(short_id: str, *, playing: bool = False) -> FakeLiveSet:
+    live = FakeLiveSet(live_version="12.4.3", tempo=120, is_playing=playing)
+    for part in ("Kick", "Hats", "Bass", "Stab"):
+        track = live.add_track(f"KIHACHI {part} {short_id} [KIHACHI]")
+        if part in {"Kick", "Hats"}:
+            track["device_names"].append("Drum Rack")
+    return live
+
+
+def test_samples_go_onto_applied_tracks_by_short_id_after_a_restart(tmp_path: Path) -> None:
+    live = _applied_tracks_set("abab0001")
+    runtime, _candidate_a, transport = _runtime(tmp_path, live)
+    result = runtime.fill_drum_samples("abab0001", confirmed=True)
+    assert result["ok"] is True
+    assert result["receipt"]["status"] == "verified"
+    assert result["musical_quality_claimed"] is False
+    pads = {
+        track["name"]: {int(pad["note"]) for pad in track.get("occupied_pads") or []}
+        for track in transport.live_set.tracks
+    }
+    assert pads["KIHACHI Kick abab0001 [KIHACHI]"] == {36}
+    assert pads["KIHACHI Hats abab0001 [KIHACHI]"] == {42}
+    assert pads["KIHACHI Bass abab0001 [KIHACHI]"] == set()
+
+
+def test_short_id_fill_leaves_an_occupied_pad_alone(tmp_path: Path) -> None:
+    live = _applied_tracks_set("abab0002")
+    kick = live.tracks[0]
+    kick["occupied_pads"] = [{"note": 36, "name": "user kick", "chain_count": 1}]
+    runtime, _candidate_a, transport = _runtime(tmp_path, live)
+    runtime.fill_drum_samples("abab0002", confirmed=True)
+    assert transport.live_set.tracks[0]["occupied_pads"] == [
+        {"note": 36, "name": "user kick", "chain_count": 1}
+    ]
+
+
+def test_short_id_fill_is_refused_while_live_plays(tmp_path: Path) -> None:
+    runtime, _candidate_a, transport = _runtime(
+        tmp_path, _applied_tracks_set("abab0003", playing=True)
+    )
+    result = runtime.fill_drum_samples("abab0003", confirmed=True)
+    assert result["ok"] is False
+    assert "再生" in result["error"]
+    assert transport.applied_operation_ids == []
+
+
+def test_short_id_fill_needs_confirmation_and_a_real_short_id(tmp_path: Path) -> None:
+    runtime, _candidate_a, transport = _runtime(tmp_path, _applied_tracks_set("abab0004"))
+    assert runtime.fill_drum_samples("abab0004", confirmed=False)["ok"] is False
+    assert runtime.fill_drum_samples("ABAB0004", confirmed=True)["ok"] is False
+    assert runtime.fill_drum_samples("abab", confirmed=True)["ok"] is False
+    assert transport.applied_operation_ids == []
+
+
+def test_short_id_fill_with_no_matching_tracks_says_so(tmp_path: Path) -> None:
+    runtime, _candidate_a, transport = _runtime(tmp_path, _applied_tracks_set("abab0005"))
+    result = runtime.fill_drum_samples("cdcd0005", confirmed=True)
+    assert result["ok"] is False
+    assert any("cdcd0005" in warning for warning in result["warnings"])
     assert transport.applied_operation_ids == []

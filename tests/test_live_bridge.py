@@ -17,6 +17,7 @@ from kihachi_mcp.services.live_paths import (
     SYSTEM_WINDOWS,
     bridge_handshake_path,
     bridge_state_dir,
+    candidate_store_dir,
 )
 from kihachi_mcp.services.live_transport import (
     ERROR_DUPLICATE,
@@ -341,6 +342,15 @@ def test_the_state_directory_can_be_overridden_for_tests() -> None:
     path = bridge_state_dir(SYSTEM_DARWIN, {"KIHACHI_LIVE_STATE_DIR": "/tmp/kihachi"})
 
     assert str(path) == "/tmp/kihachi"
+
+
+def test_saved_candidates_sit_beside_the_handshake_file() -> None:
+    env = {"HOME": "/Users/kihachi"}
+
+    assert candidate_store_dir(SYSTEM_DARWIN, env).parent == bridge_state_dir(
+        SYSTEM_DARWIN, env
+    )
+    assert candidate_store_dir(SYSTEM_DARWIN, env).name == "candidates"
 
 
 def test_the_handshake_filename_is_stable_across_platforms() -> None:

@@ -128,6 +128,8 @@ def test_stepped_knobs_land_on_the_intended_step() -> None:
     assert attack.expected == 0.8333
     assert int(attack.value * 6) == 5
     assert step("Glue Compressor", "Release", 6).value == 1.0
+    assert attack.shown == "10"  # ms, as the dial reads
+    assert at("EQ Eight", "2 Frequency A", 55).shown == "55 Hz"
 
 
 def test_retune_resets_the_chain_it_added_and_refuses_anything_else() -> None:

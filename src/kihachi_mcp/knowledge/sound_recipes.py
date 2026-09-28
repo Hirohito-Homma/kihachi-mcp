@@ -32,6 +32,8 @@ class Setting:
     item: str | None = None
     #: Where Live settles for a stepped knob, which floors ``value`` to a step.
     lands_at: float | None = None
+    #: The value as Live's dial shows it, e.g. "55 Hz", for people reading a plan.
+    shown: str | None = field(default=None, compare=False)
 
     @property
     def expected(self) -> float:

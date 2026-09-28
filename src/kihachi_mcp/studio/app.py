@@ -479,6 +479,8 @@ def _workflow_post(
                 confirmed=bool(body.get("confirmed")), retune=bool(body.get("retune"))
             )
         )
+    elif path == "/api/measure":
+        handler._send_json(runtime.measure_mix(str(body.get("path") or ""), candidate_id))
     elif path == "/api/ableton/effects/verify":
         handler._send_json(runtime.verify_effects(candidate_id))
     elif path == "/api/ableton/probe-devices":

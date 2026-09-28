@@ -64,7 +64,11 @@ BEFORE / AFTER、変更範囲、ノート数の変化、修正後の指摘数を
 | サイドチェイン | Sub・Bass・Pad の最後に、キック（エフェクト後・フェーダー前）をキーにしたコンプ |
 | マスタリング | マスタートラックの最後に EQ → Glue Compressor → Saturator → Utility（低域モノ）→ Limiter（True Peak, 天井 −1.2 dB） |
 
-結果が `verified` 以外なら、計画値と Live の値が食い違ったつまみを一覧します。つまみの設定し直し（`kihachi ableton retune` / `master --retune`）と音圧の測定（`kihachi measure`）は CLI と MCP で行います。→ [QUICKSTART.md](QUICKSTART.md)
+結果が `verified` 以外なら、計画値と Live の値が食い違ったつまみを一覧します。
+
+- 「エフェクトのつまみを設定し直す」: パートにチェックを入れて確認すると、変えるつまみを Live の目盛りの単位（Hz / dB / % など）で一覧します。送るのは確認した内容そのもので、確認後にチェックを変えたら確認し直しが必要です。デバイスの追加・削除はしません。
+- 「マスタリング」の「つまみを設定し直す」にチェックを入れて確認すると、マスターのつまみを同じ形で一覧します。
+- 「音圧を測る」: 書き出した WAV / AIFF / FLAC のパスを入れると、Integrated / Short-term max / Loudness range / True Peak / PLR / 120Hz以下の比率と、選択中の候補のセクション別音圧を表示します。Live には触れず、音声ファイル以外は読みません。
 
 ## システム（状態・設定・診断）
 

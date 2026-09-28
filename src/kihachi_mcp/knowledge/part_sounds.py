@@ -45,7 +45,10 @@ def _parameter(device: str, name: str) -> dict:
 
 def at(device: str, name: str, target: float) -> Setting:
     """The setting that makes the dial show ``target``, between two readings."""
-    readings = [_reading(text) for text in _parameter(device, name).get("displays") or []]
+    displays = _parameter(device, name).get("displays") or []
+    readings = [_reading(text) for text in displays]
+    unit = _NUMBER.sub("", displays[0]).strip() if displays else ""
+    shown = f"{target:g} {unit}".strip()
     if len(readings) < 2:
         raise ValueError(f"{device} {name} has no dial readings")
     steps = len(readings) - 1
@@ -59,7 +62,7 @@ def at(device: str, name: str, target: float) -> Setting:
             fraction = math.log(target / low) / math.log(high / low)
         else:
             fraction = (target - low) / (high - low)
-        return Setting(name, value=round((index + fraction) / steps, 4))
+        return Setting(name, value=round((index + fraction) / steps, 4), shown=shown)
     raise ValueError(f"{device} {name}: {target} is outside {readings[0]}..{readings[-1]}")
 
 
@@ -85,10 +88,17 @@ def step(device: str, name: str, index: int) -> Setting:
     span = round(float(parameter["max"]) - float(parameter["min"]))
     if not 0 <= index <= span:
         raise ValueError(f"{device} {name} has steps 0..{span}")
+    displays = parameter.get("displays") or []
+    last = max(len(displays) - 1, 1)
+    shown = next(
+        (text for i, text in enumerate(displays) if min(int(i / last * span), span) == index),
+        f"step {index}",
+    )
     return Setting(
         name,
         value=min(1.0, round((index + 0.5) / span, 4)),
         lands_at=round(index / span, 4),
+        shown=shown,
     )
 
 

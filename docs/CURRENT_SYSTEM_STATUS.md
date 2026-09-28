@@ -6,8 +6,8 @@
 
 | 部品 | 状態 | 根拠 |
 | --- | --- | --- |
-| kihachi-mcp（アプリ層） | READY | `uv run pytest -q` 562 passed、ruff 通過 |
-| 制作画面 | READY | 生成・レビュー・修正・承認・ドライラン・検証・エフェクト・MIX・サイドチェイン・マスタリング・診断を操作 |
+| kihachi-mcp（アプリ層） | READY | `uv run pytest -q` 564 passed、ruff 通過 |
+| 制作画面 | READY | 生成・レビュー・修正・承認・ドライラン・検証・エフェクト・つまみの設定し直し・MIX・サイドチェイン・マスタリング・音圧の測定・診断を操作 |
 | CLI `kihachi` | READY | create / projects / inspect / review / revise / approve / ableton plan・dry-run・execute・verify・effects・mix・sidechain・retune・master / measure / doctor / start |
 | MCP ツール | READY | 35 ツール（apply_ableton_effects / mix / sidechain / retune / master、measure_loudness を追加） |
 | Ollama | READY | 実モデルで構造化解釈 約58〜63秒 |
@@ -49,7 +49,6 @@
 - パートは15種類（Kick / Snare / Hats / OpenHat / Perc / Sub / Bass / Stab / Pad / Arp / Guitar / Horn / Lead / Vocal / FX）。どれが鳴るかはジャンルと指示で決まります。
 - 複数ジャンル指定は先頭ジャンルだけを使い、画面に明記します。
 - 音圧はクラブ目安（−8〜−6 LUFS）に届いていません（−12.2 LUFS）。さらに上げるにはリミッター以外（マスターの Saturator など）の調整が必要です。
-- パートのエフェクトとマスタリングのつまみの設定し直し（retune）と音圧の測定は、CLI と MCP のみで、制作画面にはまだありません。
 - Memory / Knowledge は MCP にありますが、制作画面にはまだ出していません。
 - 実機でのアレンジメント展開の読み戻しは未実施（fake Live では PASS）。
 - 音楽的な良し悪しは検証対象外です。`verified` / `PROJECT READY` は Live が計画どおり応答したことだけを意味します。

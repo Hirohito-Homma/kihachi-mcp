@@ -11,7 +11,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, SIDECHAIN_DUCKING
+from kihachi_mcp.knowledge.part_sounds import (
+    MASTER_CHAIN,
+    PART_EFFECTS,
+    SIDECHAIN_DUCKING,
+)
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
@@ -79,6 +83,7 @@ JOB_CANCELLED = "cancelled"
 _CANDIDATE_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 #: The dot keeps this file out of the candidate id pattern.
 REVISION_HISTORY_FILE = ".kihachi-revisions.json"
+AUDIO_SUFFIXES = frozenset({".wav", ".aif", ".aiff", ".flac"})
 #: A model reply that fails validation is asked for again at most this often.
 AI_ATTEMPTS = 2
 
@@ -1136,8 +1141,12 @@ class StudioRuntime:
                     "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
                     "conflicts": [item.to_dict() for item in plan.conflicts],
                 }
-            summary = {"mix": _mix_summary, "retune": _retune_summary}.get(kind, _effect_summary)
-            chains = summary(plan)
+            if kind == "retune":
+                chains = _retune_summary(plan, parts)
+            elif kind == "mix":
+                chains = _mix_summary(plan)
+            else:
+                chains = _effect_summary(plan)
             if not plan.operations:
                 return {
                     "ok": False,
@@ -1194,7 +1203,12 @@ class StudioRuntime:
 
     def measure_mix(self, path: str, candidate_id: str = "") -> dict[str, Any]:
         """Loudness and true peak of an exported file; per section with a candidate."""
-        file = Path(path).expanduser()
+        file = Path(path.strip().strip("'\"")).expanduser()
+        if file.suffix.lower() not in AUDIO_SUFFIXES:
+            return {
+                "ok": False,
+                "error": f"音声ファイル（{' / '.join(sorted(AUDIO_SUFFIXES))}）を指定してください",
+            }
         if not file.is_file():
             return {"ok": False, "error": f"ファイルがありません: {file}"}
         candidate = self._lookup(candidate_id) if candidate_id else None
@@ -1237,6 +1251,15 @@ class StudioRuntime:
                 "added": added,
                 "operations": len(plan.operations),
                 "warnings": list(plan.warnings),
+                "settings": [
+                    {
+                        "device": recipe.device,
+                        "parameter": setting.parameter,
+                        "setting": _setting_label(setting),
+                    }
+                    for recipe in MASTER_CHAIN
+                    for setting in recipe.settings
+                ],
             }
             if not plan.operations:
                 return {"ok": False, "error": "追加するマスタリングのデバイスはありません", **summary}
@@ -1638,8 +1661,13 @@ def _mix_summary(plan: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _retune_summary(plan: Any) -> list[dict[str, Any]]:
-    """The knobs a retune plan sets, in order."""
+def _retune_summary(plan: Any, parts: tuple[str, ...]) -> list[dict[str, Any]]:
+    """The knobs a retune plan sets, in order, as Live's dial would show them."""
+    settings = [
+        setting for part in parts for recipe in PART_EFFECTS[part] for setting in recipe.settings
+    ]
+    if len(settings) != len(plan.operations):
+        settings = [None] * len(plan.operations)
     return [
         {
             "track": next(
@@ -1650,10 +1678,17 @@ def _retune_summary(plan: Any) -> list[dict[str, Any]]:
             "device_index": operation.target["device_index"],
             "device": operation.arguments["device_name"],
             "parameter": operation.arguments["parameter_name"],
-            "setting": operation.arguments.get("item", operation.arguments.get("value")),
+            "setting": _setting_label(setting)
+            or operation.arguments.get("item", operation.arguments.get("value")),
         }
-        for operation in plan.operations
+        for operation, setting in zip(plan.operations, settings, strict=True)
     ]
+
+
+def _setting_label(setting: Any) -> str:
+    if setting is None:
+        return ""
+    return setting.item or setting.shown or ""
 
 
 def _effect_summary(plan: Any) -> list[dict[str, Any]]:

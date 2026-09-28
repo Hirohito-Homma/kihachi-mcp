@@ -7,7 +7,9 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 from test_studio_workflow import SMOKE_TEST, _studio
 
 from kihachi_mcp.services.reference_library import ReferenceLibrary
@@ -128,6 +130,51 @@ def test_settings_diagnostics_and_ollama_routes(studio) -> None:
     assert "installed_models" in ollama
 
 
+def test_measure_route_reads_audio_files_only(studio, tmp_path: Path) -> None:
+    port, _runtime, _live = studio
+    wav = tmp_path / "mix.wav"
+    seconds = np.arange(48000 * 5) / 48000
+    tone = 0.1 * np.sin(2 * np.pi * 1000 * seconds)
+    sf.write(wav, np.stack([tone, tone], axis=1), 48000)
+
+    _status, report = _call(port, "POST", "/api/measure", {"path": f"'{wav}'"})
+    assert report["ok"] is True
+    assert report["integrated_lufs"] < -15
+    assert report["verdict"]
+
+    secret = tmp_path / "config.json"
+    secret.write_text("{}")
+    _status, refused = _call(port, "POST", "/api/measure", {"path": str(secret)})
+    assert refused["ok"] is False
+    assert "WAV" in refused["error"] or ".wav" in refused["error"]
+
+
+def test_retune_route_needs_parts_and_previews_before_sending(studio) -> None:
+    port, runtime, live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    runtime.approve(candidate_id)
+    runtime.send_to_ableton(candidate_id, confirmed=True)
+    runtime.apply_effects(candidate_id, confirmed=True)
+    _status, empty = _call(port, "POST", "/api/ableton/retune", {"candidate_id": candidate_id})
+    assert empty["ok"] is False
+
+    before = [list(track["device_names"]) for track in live.tracks]
+    _status, preview = _call(
+        port, "POST", "/api/ableton/retune", {"candidate_id": candidate_id, "parts": ["Kick"]}
+    )
+    assert preview["ok"] is True and preview["preview"] is True
+    gain = next(row for row in preview["chains"] if row["parameter"] == "2 Gain A")
+    assert gain["setting"] == "-3 dB"
+    _status, sent = _call(
+        port,
+        "POST",
+        "/api/ableton/retune",
+        {"candidate_id": candidate_id, "parts": ["Kick"], "confirmed": True},
+    )
+    assert sent["receipt"]["status"] == "verified"
+    assert [list(track["device_names"]) for track in live.tracks] == before
+
+
 def test_page_calls_only_routes_the_server_has() -> None:
     page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     source = (Path(__file__).resolve().parents[1] / "src/kihachi_mcp/studio/app.py").read_text()
@@ -135,5 +182,5 @@ def test_page_calls_only_routes_the_server_has() -> None:
     for route in routes:
         base = route.rstrip("/")
         assert base in source or base.startswith(("/api/candidate", "/api/references")), route
-    for element in ("review-view", "revision-view", "arrangement-bar", "diagnostics-rows", "verify-result", "setting-model"):
+    for element in ("review-view", "revision-view", "arrangement-bar", "diagnostics-rows", "verify-result", "setting-model", "retune-parts", "master-retune", "measure-path"):
         assert f'id="{element}"' in page

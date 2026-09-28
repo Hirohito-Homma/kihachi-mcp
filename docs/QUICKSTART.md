@@ -49,9 +49,9 @@ Dub chord。Mutation synth。Swing 54%。約5分。
 2. 「MIX」: 各トラックの音量(dB)とパンを揃える（キックが最大、120Hz以下は中央）。
 3. 「サイドチェイン」: Sub・Bass・Pad の最後に、キックで音量を沈めるコンプを追加。
 4. 「マスタリング」: マスタートラックの最後に EQ → Glue Compressor → Saturator → Utility → Limiter を追加。
-5. Live で WAV を書き出し、`uv run kihachi measure <WAVのパス> --project <候補ID>` で音圧（LUFS）・True Peak・セクション別音圧を測ります（Live 不要）。
+5. Live で WAV を書き出し、「音圧を測る」にパスを入れて音圧（LUFS）・True Peak・セクション別音圧を測ります（Live には触れません）。CLI なら `uv run kihachi measure <WAVのパス> --project <候補ID>`。
 
-レシピ（`src/kihachi_mcp/knowledge/part_sounds.py`）を変えたときは、制作画面を再起動してから次で設定し直します。どちらもつまみだけを変え、デバイスの追加・削除はしません。
+レシピ（`src/kihachi_mcp/knowledge/part_sounds.py`）を変えたときは、制作画面を再起動してから「エフェクトのつまみを設定し直す」か、「マスタリング」の「つまみを設定し直す」で送り直します。どちらもつまみだけを変え、デバイスの追加・削除はしません。CLI では次のとおりです。
 
 ```bash
 uv run kihachi ableton retune <候補ID> --part Kick   # パートのエフェクト

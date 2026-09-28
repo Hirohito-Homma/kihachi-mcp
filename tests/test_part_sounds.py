@@ -6,12 +6,14 @@ from kihachi_mcp.knowledge.part_sounds import (
     PART_EFFECTS,
     PART_INSTRUMENTS,
     PART_MIX,
+    SIDECHAIN_DUCKING,
     at,
     step,
 )
 from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
     OP_SET_DEVICE_PARAMETER,
+    OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TRACK_MIXER,
 )
 from kihachi_mcp.models.production_brief import PART_ORDER
@@ -140,6 +142,38 @@ def test_retune_resets_the_chain_it_added_and_refuses_anything_else() -> None:
     live.master["device_names"].append("Spectrum")
     refused = planner.create_master_plan(snapshot_of(transport), retune=True)
     assert refused.status == "blocked"
+
+
+def test_sidechain_keys_a_new_compressor_from_the_kick_before_any_knob() -> None:
+    candidate = _candidate()
+    transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.5", tempo=125))
+    planner = CandidateLivePlanner()
+    assert _run(transport, planner.create_plan(candidate, snapshot_of(transport))).status == "verified"
+    before = {track["name"]: list(track["device_names"]) for track in transport.live_set.tracks}
+
+    plan = planner.create_sidechain_plan(candidate, snapshot_of(transport))
+    ducked = [p for p in candidate.parts if p in SIDECHAIN_DUCKING]
+    assert ducked
+    ops = [op.op for op in plan.operations]
+    assert ops.count(OP_SET_SIDECHAIN_SOURCE) == len(ducked)
+    for index, op in enumerate(ops):
+        if op == OP_SET_SIDECHAIN_SOURCE:
+            assert ops[index - 1] == OP_LOAD_LIVE_DEVICE
+    assert _run(transport, plan).status == "verified"
+
+    kick = next(t["name"] for t in transport.live_set.tracks if " Kick " in t["name"])
+    for track in transport.live_set.tracks:
+        part = track["name"].split()[1]
+        kept = before[track["name"]]
+        assert track["device_names"][: len(kept)] == kept
+        if part in SIDECHAIN_DUCKING:
+            assert track["device_names"][len(kept):] == ["Compressor"]
+            assert track["sidechains"] == {str(len(kept)): kick}
+        else:
+            assert track["device_names"] == kept
+
+    again = planner.create_sidechain_plan(candidate, snapshot_of(transport), frozenset(ducked))
+    assert again.operations == []
 
 
 def test_master_is_refused_while_live_records() -> None:

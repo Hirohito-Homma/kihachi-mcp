@@ -312,6 +312,15 @@
       <div id="mix-summary"></div>
       <div id="mix-result"></div>
 
+      <h2>サイドチェイン（キックで低域を沈める）</h2>
+      <p class="sub">Sub・Bass・Pad の最後にコンプを追加し、キックが鳴る瞬間だけ音量を下げます。キーはキックのエフェクト後・フェーダー前なので、MIXの音量を変えても効き方は変わりません。既存のデバイスは変えません。</p>
+      <div class="actions">
+        <button id="preview-sidechain" class="secondary">追加内容を確認</button>
+        <button id="sidechain" disabled>この内容でサイドチェインを追加</button>
+      </div>
+      <div id="sidechain-summary"></div>
+      <div id="sidechain-result"></div>
+
       <h2>マスタリング</h2>
       <p class="sub">Setのマスタートラックに EQ → Glue Compressor → Saturator → Utility（低域モノ）→ Limiter（True Peak, -1dB）を追加します。マスターに既にあるデバイスは消さず、その後ろに入れます。毎回確認してから送ります。</p>
       <div class="actions">
@@ -926,10 +935,11 @@
 
     const stageRow = {
       effects: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}`,
-      mix: (row) => `${escapeHtml(row.track)}: ${row.volume_db.toFixed(1)} dB / pan ${row.panning.toFixed(2)}`
+      mix: (row) => `${escapeHtml(row.track)}: ${row.volume_db.toFixed(1)} dB / pan ${row.panning.toFixed(2)}`,
+      sidechain: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}（キーはキック）`
     };
 
-    for (const stage of ["effects", "mix"]) {
+    for (const stage of ["effects", "mix", "sidechain"]) {
       $(`preview-${stage}`).onclick = async () => {
         if (!state.candidate) return;
         $(stage).disabled = true;

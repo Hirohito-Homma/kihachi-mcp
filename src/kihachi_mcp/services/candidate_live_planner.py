@@ -12,6 +12,7 @@ from kihachi_mcp.knowledge.part_sounds import (
     PART_EFFECTS,
     PART_INSTRUMENTS,
     PART_MIX,
+    SIDECHAIN_DUCKING,
 )
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
@@ -24,6 +25,7 @@ from kihachi_mcp.models.live_contract import (
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
     OP_SET_DEVICE_PARAMETER,
+    OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TEMPO,
     OP_SET_TRACK_MIXER,
     canonical_hash,
@@ -247,6 +249,40 @@ class CandidateLivePlanner:
     ) -> LiveMutationPlan:
         """Plan fader and pan settings on tracks an earlier apply created."""
         return self._stage_plan(candidate, snapshot, "mix")
+
+    def create_sidechain_plan(
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+        already_ducked: frozenset[str] = frozenset(),
+    ) -> LiveMutationPlan:
+        """Append a kick-keyed Compressor to the low parts. Adds only.
+
+        ``already_ducked`` names parts whose track already has a Compressor
+        keyed from this kick; they are left alone.
+        """
+        builder = _Builder(candidate, snapshot, change_tempo=False)
+        operations, conflicts, warnings = builder.build_sidechain_only(already_ducked)
+        request_id = self._request_id_factory()
+        return LiveMutationPlan(
+            request_id=request_id,
+            idempotency_key=canonical_hash(
+                {
+                    "request_id": request_id,
+                    "candidate_id": candidate.candidate_id,
+                    "kind": "sidechain",
+                    "set_fingerprint": snapshot.set_fingerprint,
+                }
+            ),
+            source_plan_hash=candidate.note_fingerprint,
+            set_fingerprint=snapshot.set_fingerprint,
+            expires_at=(
+                self._clock() + timedelta(seconds=self._ttl_seconds)
+            ).isoformat(),
+            operations=operations,
+            conflicts=conflicts,
+            warnings=warnings,
+        )
 
     def create_master_plan(
         self, snapshot: LiveStateSnapshot, retune: bool = False
@@ -682,6 +718,75 @@ class _Builder:
             )
         if not self._operations:
             self._warnings.append("追加するエフェクトはありません（すべて載っています）")
+        return self._operations, self._conflicts, self._warnings
+
+    def build_sidechain_only(
+        self, already_ducked: frozenset[str]
+    ) -> tuple[list[LiveMutationOperation], list[LiveConflict], list[str]]:
+        self._guard_transport()
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        kick = managed_track_name(f"KIHACHI Kick {self._short_id}")
+        if self._snapshot.track_by_name(kick) is None:
+            self._warnings.append(f"{kick} が無いのでサイドチェインは組めません")
+            return [], self._conflicts, self._warnings
+        available = self._snapshot.available_device_names()
+        for part in self._candidate.parts:
+            recipe = SIDECHAIN_DUCKING.get(part)
+            if recipe is None:
+                continue
+            if part in already_ducked:
+                self._warnings.append(f"{part} は既にキックでダッキングされています")
+                continue
+            name = managed_track_name(f"KIHACHI {part} {self._short_id}")
+            existing = self._snapshot.track_by_name(name)
+            if existing is None:
+                self._warnings.append(f"{name} が無いのでサイドチェインは組めません")
+                continue
+            track = {
+                "name": name,
+                "index": existing.index,
+                "created": False,
+                "part": part,
+                "device_names": list(existing.device_names),
+            }
+            position = len(existing.device_names)
+            before = len(self._operations)
+            self._plan_recipe_chain(track, (recipe,), available, first_index=position)
+            if len(self._operations) == before:
+                continue
+            # Route the key right after loading, before any knob is set, so a
+            # refusal leaves an unkeyed Compressor with S/C off, not a pumping one.
+            self._operations.insert(
+                before + 1,
+                LiveMutationOperation(
+                    operation_id=self._next_id(OP_SET_SIDECHAIN_SOURCE),
+                    op=OP_SET_SIDECHAIN_SOURCE,
+                    target={"track_index": existing.index, "device_index": position},
+                    arguments={"device_name": recipe.device, "source_name": kick},
+                    preconditions=[
+                        LivePrecondition("not_recording"),
+                        LivePrecondition(
+                            "track_name_at_index",
+                            {"track_index": existing.index, "name": name},
+                        ),
+                        LivePrecondition(
+                            "device_name_at_index",
+                            {
+                                "track_index": existing.index,
+                                "device_index": position,
+                                "name": recipe.device,
+                            },
+                        ),
+                    ],
+                    destructive=False,
+                    expected_readback={
+                        "track_index": existing.index,
+                        "device_index": position,
+                        "input_routing_type": kick,
+                    },
+                ),
+            )
         return self._operations, self._conflicts, self._warnings
 
     def build_mix_only(

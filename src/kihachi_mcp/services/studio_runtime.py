@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS
+from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, SIDECHAIN_DUCKING
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
@@ -1077,6 +1077,27 @@ class StudioRuntime:
         """Set each [KIHACHI] track's fader and pan. Previews unless confirmed."""
         return self._apply_stage("mix", candidate_id, confirmed)
 
+    def apply_sidechain(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
+        """Duck Sub, Bass and Pad from the kick. Previews unless confirmed."""
+        return self._apply_stage("sidechain", candidate_id, confirmed)
+
+    def _ducked_parts(self, candidate: MidiCandidate, snapshot: Any) -> frozenset[str]:
+        """Parts whose track already has a Compressor keyed from this kick."""
+        short_id = candidate.candidate_id[:8]
+        kick = managed_track_name(f"KIHACHI Kick {short_id}")
+        ducked = set()
+        for part in SIDECHAIN_DUCKING:
+            track = snapshot.track_by_name(managed_track_name(f"KIHACHI {part} {short_id}"))
+            if track is None:
+                continue
+            for position, name in enumerate(track.device_names):
+                if name != "Compressor":
+                    continue
+                reply = self._inspector.device_parameters(position, track.index)
+                if (reply.get("sidechain") or {}).get("input_routing_type") == kick:
+                    ducked.add(part)
+        return frozenset(ducked)
+
     def _apply_stage(self, kind: str, candidate_id: str, confirmed: bool) -> dict[str, Any]:
         candidate = self._lookup(candidate_id)
         if candidate is None:
@@ -1087,23 +1108,31 @@ class StudioRuntime:
             snapshot, failure = self._snapshot()
             if snapshot is None:
                 return failure or {"ok": False, "error": "Live状態を取得できません"}
-            create = (
-                self._planner.create_effects_plan
-                if kind == "effects"
-                else self._planner.create_mix_plan
-            )
-            plan = create(candidate, snapshot)
+            if kind == "sidechain":
+                try:
+                    ducked = self._ducked_parts(candidate, snapshot)
+                except LiveTransportError as exc:
+                    return {"ok": False, "error": f"Liveから読めません（{exc.code}）: {exc.message}"}
+                plan = self._planner.create_sidechain_plan(candidate, snapshot, ducked)
+            elif kind == "effects":
+                plan = self._planner.create_effects_plan(candidate, snapshot)
+            else:
+                plan = self._planner.create_mix_plan(candidate, snapshot)
             if plan.status == "blocked":
                 return {
                     "ok": False,
                     "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
                     "conflicts": [item.to_dict() for item in plan.conflicts],
                 }
-            chains = _effect_summary(plan) if kind == "effects" else _mix_summary(plan)
+            chains = _mix_summary(plan) if kind == "mix" else _effect_summary(plan)
             if not plan.operations:
                 return {
                     "ok": False,
-                    "error": "追加するエフェクトはありません" if kind == "effects" else "MIXするトラックがありません",
+                    "error": {
+                        "effects": "追加するエフェクトはありません",
+                        "mix": "MIXするトラックがありません",
+                        "sidechain": "サイドチェインを追加するトラックはありません",
+                    }[kind],
                     "warnings": list(plan.warnings),
                 }
             if not confirmed:
@@ -1134,6 +1163,20 @@ class StudioRuntime:
             }
         finally:
             self._apply_lock.release()
+
+    def read_device(self, track_name: str, device_index: int) -> dict[str, Any]:
+        """One device's parameters (and sidechain routing) on a named track. Read-only."""
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        track = snapshot.track_by_name(track_name)
+        if track is None:
+            return {"ok": False, "error": f"トラック '{track_name}' がありません"}
+        try:
+            reply = self._inspector.device_parameters(device_index, track.index)
+        except LiveTransportError as exc:
+            return {"ok": False, "error": f"{exc.code}: {exc.message}"}
+        return {"ok": True, "track": track.name, **reply}
 
     def measure_mix(self, path: str, candidate_id: str = "") -> dict[str, Any]:
         """Loudness and true peak of an exported file; per section with a candidate."""

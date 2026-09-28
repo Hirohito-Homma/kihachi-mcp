@@ -112,6 +112,12 @@ def _parser() -> argparse.ArgumentParser:
     mix.add_argument("project")
     mix.add_argument("--yes", action="store_true", help="確認の質問を省略する")
     mix.set_defaults(handler=_ableton_effects, stage="mix")
+    sidechain = steps.add_parser(
+        "sidechain", help="Sub・Bass・Pad の最後にキックでダッキングするコンプを追加します"
+    )
+    sidechain.add_argument("project")
+    sidechain.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    sidechain.set_defaults(handler=_ableton_effects, stage="sidechain")
     master = steps.add_parser(
         "master", help="マスタートラックの既存デバイスの後ろにクラブ向けマスタリングを追加します"
     )
@@ -150,7 +156,8 @@ def _ableton_effects(args: argparse.Namespace) -> int:
         for row in preview["chains"]:
             print(f"  {row['track']}: {row['volume_db']:+.1f} dB / pan {row['panning']:+.2f}")
     else:
-        print(f"追加するエフェクト（{preview['operations']} 操作。既存のデバイスは変えません）")
+        label = "キックで沈めるコンプ" if args.stage == "sidechain" else "エフェクト"
+        print(f"追加する{label}（{preview['operations']} 操作。既存のデバイスは変えません）")
         for chain in preview["chains"]:
             print(f"  {chain['track']}: {' → '.join(chain['devices'])}")
     for line in preview.get("warnings") or []:

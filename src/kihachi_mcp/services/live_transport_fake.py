@@ -25,6 +25,7 @@ from kihachi_mcp.models.live_contract import (
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
     OP_SET_DEVICE_PARAMETER,
+    OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TEMPO,
     OP_SET_TRACK_COLOR,
     OP_SET_TRACK_MIXER,
@@ -207,18 +208,22 @@ class FakeLiveTransport:
             return self._failure(request_id, ERROR_OPERATION_FAILED, f"no device {position}")
         name = names[position]
         known = self.live_set.device_parameters.get(name) or {}
-        return self._ok(
-            request_id,
-            {
-                "device_index": position,
-                "device_name": name,
-                "class_name": str(known.get("class_name") or ""),
-                "parameters": [
-                    {**item, "value": item.get("default")}
-                    for item in known.get("parameters") or []
-                ],
-            },
-        )
+        reply: dict[str, Any] = {
+            "device_index": position,
+            "device_name": name,
+            "class_name": str(known.get("class_name") or ""),
+            "parameters": [
+                {**item, "value": item.get("default")}
+                for item in known.get("parameters") or []
+            ],
+        }
+        if name == "Compressor":
+            reply["sidechain"] = {
+                "available_types": [item["name"] for item in self.live_set.tracks],
+                "input_routing_type": (track.get("sidechains") or {}).get(str(position), "No Input"),
+                "input_routing_channel": "Post FX",
+            }
+        return self._ok(request_id, reply)
 
     def _drum_rack_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
         index = int(payload.get("track_index") or 0)
@@ -522,6 +527,23 @@ class FakeLiveTransport:
 
         if op == OP_PLACE_ARRANGEMENT_CLIP:
             return self._place_arrangement_clip(target, arguments)
+
+        if op == OP_SET_SIDECHAIN_SOURCE:
+            track, owner = self._owner(target)
+            position = int(target.get("device_index") or 0)
+            names = track["device_names"]
+            if position >= len(names) or names[position] != arguments.get("device_name"):
+                raise FakeLiveOperationRefused(f"device {position} is not '{arguments.get('device_name')}'")
+            source = str(arguments.get("source_name") or "")
+            if not any(item["name"] == source for item in live.tracks):
+                raise FakeLiveOperationRefused(f"'{source}' is not offered as a sidechain source")
+            track.setdefault("sidechains", {})[str(position)] = source
+            return {
+                **owner,
+                "device_index": position,
+                "input_routing_type": source,
+                "input_routing_channel": "Post FX",
+            }
 
         if op == OP_SET_TRACK_MIXER:
             track = self._require_track(int(target.get("track_index") or 0))

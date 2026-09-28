@@ -214,6 +214,29 @@ PART_MIX: dict[str, tuple[float, float]] = {
     "FX": (-18.0, 0.0),
 }
 
+def _ducker(threshold_db: float, ratio: float, release_ms: float) -> DeviceRecipe:
+    cp = "Compressor"
+    return DeviceRecipe(
+        cp,
+        (
+            item(cp, "S/C On", "On"),
+            at(cp, "Threshold", threshold_db),
+            at(cp, "Ratio", ratio),
+            at(cp, "Attack", 1.0),
+            at(cp, "Release", release_ms),
+        ),
+    )
+
+
+#: A Compressor keyed from the kick, appended last on each of these tracks, so
+#: the low end gets out of the kick's way. The key is the kick track after its
+#: effects and before its fader, so MIX levels do not change the ducking.
+SIDECHAIN_DUCKING: dict[str, DeviceRecipe] = {
+    "Sub": _ducker(-20, 5, 127),
+    "Bass": _ducker(-18, 3.33, 127),
+    "Pad": _ducker(-14, 2, 258),
+}
+
 #: Club mastering on the master track, first to last. Glue Compressor's
 #: Attack, Ratio and Release move in steps: Attack 0.01/0.1/0.3/1/3/10/30 ms,
 #: Ratio 2/4/10, Release 0.1/0.2/0.4/0.6/0.8/1.2 s/Auto.

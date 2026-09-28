@@ -455,8 +455,16 @@ def _workflow_post(
         handler._send_json(
             runtime.apply_effects(candidate_id, confirmed=bool(body.get("confirmed")))
         )
+    elif path == "/api/ableton/sidechain":
+        handler._send_json(
+            runtime.apply_sidechain(candidate_id, confirmed=bool(body.get("confirmed")))
+        )
     elif path == "/api/ableton/mix":
         handler._send_json(runtime.apply_mix(candidate_id, confirmed=bool(body.get("confirmed"))))
+    elif path == "/api/ableton/device":
+        handler._send_json(
+            runtime.read_device(str(body.get("track") or ""), int(body.get("device_index") or 0))
+        )
     elif path == "/api/ableton/master":
         handler._send_json(
             runtime.apply_master(

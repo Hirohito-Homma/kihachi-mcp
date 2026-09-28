@@ -27,7 +27,7 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.3.4";
+var DEVICE_VERSION = "kihachi-live-device/0.3.5";
 var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
 var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
 var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
@@ -586,6 +586,9 @@ function applyOperation(operation) {
     if (op === "set_track_mixer") {
         return setTrackMixer(target, args);
     }
+    if (op === "set_sidechain_source") {
+        return setSidechainSource(target, args);
+    }
     if (op === "create_locator") {
         return createLocator(song, args);
     }
@@ -1062,12 +1065,101 @@ function readDeviceParameters(payload) {
         }
         parameters.push(item);
     }
-    return {
+    var reply = {
         device_index: deviceIndex,
         device_name: String(getProperty(device, "name") || ""),
         class_name: String(getPropertyOrNull(device, "class_name") || ""),
         parameters: parameters
     };
+    var sidechain = readSidechainRouting(device);
+    if (sidechain) {
+        reply.sidechain = sidechain;
+    }
+    return reply;
+}
+
+/*
+ * LiveAPI hands a routing property over as a JSON string wrapped in an array,
+ * keyed by the property's own name.
+ */
+function routingProperty(device, name) {
+    var raw = device.get(name);
+    if (raw === null || raw === undefined) {
+        return null;
+    }
+    var text = raw instanceof Array ? raw.join(" ") : String(raw);
+    var parsed = JSON.parse(text);
+    return parsed && parsed[name] !== undefined ? parsed[name] : parsed;
+}
+
+/*
+ * Route a Compressor's sidechain input from the track named args.source_name.
+ * Max's JS bridge has taken a routing both as an object and as JSON text in
+ * different versions, so each form is tried and only a read-back that names
+ * the source counts as success.
+ */
+function setSidechainSource(target, args) {
+    var path = trackPathOf(target) + " devices " + target.device_index;
+    var device = liveApi(path);
+    if (String(getProperty(device, "name") || "") !== args.device_name) {
+        refuse("device " + target.device_index + " is not '" + args.device_name + "'");
+    }
+    var types = routingProperty(device, "available_input_routing_types") || [];
+    var chosen = null;
+    for (var index = 0; index < types.length; index += 1) {
+        if (String(types[index].display_name || "") === args.source_name) {
+            chosen = types[index];
+        }
+    }
+    if (!chosen) {
+        refuse("'" + args.source_name + "' is not offered as a sidechain source");
+    }
+    var attempts = [
+        { identifier: chosen.identifier },
+        JSON.stringify({ identifier: chosen.identifier }),
+        JSON.stringify({ input_routing_type: { identifier: chosen.identifier } })
+    ];
+    var current = "";
+    for (var at = 0; at < attempts.length && current !== args.source_name; at += 1) {
+        try {
+            device.set("input_routing_type", attempts[at]);
+        } catch (setError) {
+            /* try the next form */
+        }
+        current = String((routingProperty(device, "input_routing_type") || {}).display_name || "");
+    }
+    if (current !== args.source_name) {
+        refuse("Live did not accept '" + args.source_name + "' as the sidechain source");
+    }
+    return {
+        track_index: target.track_index,
+        device_index: target.device_index,
+        input_routing_type: current,
+        input_routing_channel: String((routingProperty(device, "input_routing_channel") || {}).display_name || "")
+    };
+}
+
+/* Compressor and other sidechain devices expose these from Live 11; null otherwise. */
+function readSidechainRouting(device) {
+    try {
+        var types = routingProperty(device, "available_input_routing_types");
+        if (!types || !types.length) {
+            return null;
+        }
+        var names = [];
+        for (var index = 0; index < types.length; index += 1) {
+            names.push(String(types[index].display_name || ""));
+        }
+        var current = routingProperty(device, "input_routing_type") || {};
+        var channel = routingProperty(device, "input_routing_channel") || {};
+        return {
+            available_types: names,
+            input_routing_type: String(current.display_name || ""),
+            input_routing_channel: String(channel.display_name || "")
+        };
+    } catch (routingError) {
+        return null;
+    }
 }
 
 function parameterValue(path) {

@@ -116,6 +116,21 @@ def apply_ableton_effects(candidate_id: str, confirmed: bool = False) -> dict[st
     )
 
 
+def apply_ableton_sidechain(candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
+    """Duck Sub, Bass and Pad from the kick with a sidechained Compressor on each.
+
+    Without confirmed=True this only lists what would be added. Confirmed, it
+    sends once; existing devices are unchanged.
+    """
+    if not confirmed:
+        return studio_post("/api/ableton/sidechain", {"candidate_id": candidate_id})
+    return studio_post(
+        "/api/ableton/sidechain",
+        {"candidate_id": candidate_id, "confirmed": True},
+        timeout=SEND_TIMEOUT_SECONDS,
+    )
+
+
 def apply_ableton_mix(candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
     """Set each [KIHACHI] track's fader (dB) and pan for a club mix.
 

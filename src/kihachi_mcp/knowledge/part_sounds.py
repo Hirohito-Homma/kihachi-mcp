@@ -198,8 +198,8 @@ PART_EFFECTS: dict[str, tuple[DeviceRecipe, ...]] = {
 #: under it so the master keeps about 6 dB of headroom for mastering.
 PART_MIX: dict[str, tuple[float, float]] = {
     "Kick": (-6.0, 0.0),
-    "Sub": (-9.0, 0.0),
-    "Bass": (-10.0, 0.0),
+    "Sub": (-12.0, 0.0),
+    "Bass": (-13.0, 0.0),
     "Snare": (-10.0, 0.0),
     "Hats": (-16.0, 0.15),
     "OpenHat": (-18.0, -0.15),

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, PART_INSTRUMENTS
+from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, PART_INSTRUMENTS, PART_MIX
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_LOCATOR,
@@ -20,6 +20,7 @@ from kihachi_mcp.models.live_contract import (
     OP_REPLACE_CLIP_NOTES,
     OP_SET_DEVICE_PARAMETER,
     OP_SET_TEMPO,
+    OP_SET_TRACK_MIXER,
     canonical_hash,
     managed_clip_name,
     managed_track_name,
@@ -232,8 +233,22 @@ class CandidateLivePlanner:
         snapshot: LiveStateSnapshot,
     ) -> LiveMutationPlan:
         """Plan effect chains on tracks an earlier apply created. Adds only."""
+        return self._stage_plan(candidate, snapshot, "effects")
+
+    def create_mix_plan(
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+    ) -> LiveMutationPlan:
+        """Plan fader and pan settings on tracks an earlier apply created."""
+        return self._stage_plan(candidate, snapshot, "mix")
+
+    def _stage_plan(
+        self, candidate: MidiCandidate, snapshot: LiveStateSnapshot, kind: str
+    ) -> LiveMutationPlan:
         builder = _Builder(candidate, snapshot, change_tempo=False)
-        operations, conflicts, warnings = builder.build_effects_only()
+        build = builder.build_effects_only if kind == "effects" else builder.build_mix_only
+        operations, conflicts, warnings = build()
         request_id = self._request_id_factory()
         return LiveMutationPlan(
             request_id=request_id,
@@ -241,7 +256,7 @@ class CandidateLivePlanner:
                 {
                     "request_id": request_id,
                     "candidate_id": candidate.candidate_id,
-                    "kind": "effects",
+                    "kind": kind,
                     "set_fingerprint": snapshot.set_fingerprint,
                 }
             ),
@@ -550,6 +565,45 @@ class _Builder:
             )
         if not self._operations:
             self._warnings.append("追加するエフェクトはありません（すべて載っています）")
+        return self._operations, self._conflicts, self._warnings
+
+    def build_mix_only(
+        self,
+    ) -> tuple[list[LiveMutationOperation], list[LiveConflict], list[str]]:
+        """Set fader and pan on each [KIHACHI] track of the candidate. Nothing else."""
+        self._guard_transport()
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        for part in self._candidate.parts:
+            if part not in PART_MIX:
+                continue
+            name = managed_track_name(f"KIHACHI {part} {self._short_id}")
+            existing = self._snapshot.track_by_name(name)
+            if existing is None:
+                self._warnings.append(f"{name} が無いのでMIXしません")
+                continue
+            volume_db, panning = PART_MIX[part]
+            self._operations.append(
+                LiveMutationOperation(
+                    operation_id=self._next_id(OP_SET_TRACK_MIXER),
+                    op=OP_SET_TRACK_MIXER,
+                    target={"track_index": existing.index},
+                    arguments={"volume_db": volume_db, "panning": panning},
+                    preconditions=[
+                        LivePrecondition("not_recording"),
+                        LivePrecondition(
+                            "track_name_at_index",
+                            {"track_index": existing.index, "name": name},
+                        ),
+                    ],
+                    destructive=False,
+                    expected_readback={
+                        "track_index": existing.index,
+                        "volume_db": volume_db,
+                        "panning": panning,
+                    },
+                )
+            )
         return self._operations, self._conflicts, self._warnings
 
     def _guard_transport(self) -> None:

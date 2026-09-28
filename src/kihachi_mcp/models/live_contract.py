@@ -44,6 +44,7 @@ OP_REPLACE_CLIP_NOTES = "replace_clip_notes"
 OP_LOAD_LIVE_DEVICE = "load_live_device"
 OP_LOAD_DRUM_PAD_SAMPLE = "load_drum_pad_sample"
 OP_SET_DEVICE_PARAMETER = "set_device_parameter"
+OP_SET_TRACK_MIXER = "set_track_mixer"
 OP_CREATE_LOCATOR = "create_locator"
 OP_PLACE_ARRANGEMENT_CLIP = "place_arrangement_clip"
 OP_DELETE_LOCATOR = "delete_locator"
@@ -62,6 +63,7 @@ SUPPORTED_OPS = frozenset(
         OP_LOAD_LIVE_DEVICE,
         OP_LOAD_DRUM_PAD_SAMPLE,
         OP_SET_DEVICE_PARAMETER,
+        OP_SET_TRACK_MIXER,
         OP_CREATE_LOCATOR,
         OP_PLACE_ARRANGEMENT_CLIP,
         OP_DELETE_LOCATOR,

@@ -302,6 +302,15 @@
       </div>
       <div id="effects-summary"></div>
       <div id="effects-result"></div>
+
+      <h2>MIX</h2>
+      <p class="sub">各トラックの音量(dB)とパンをクラブ向けに揃えます。キックを一番上に、120Hz以下のパートは中央、マスターに約6dBの余裕を残します。音量とパン以外は変えません。</p>
+      <div class="actions">
+        <button id="preview-mix" class="secondary">MIX内容を確認</button>
+        <button id="mix" disabled>この内容でMIXする</button>
+      </div>
+      <div id="mix-summary"></div>
+      <div id="mix-result"></div>
     </section>
 
     <section id="recover-view">
@@ -898,43 +907,53 @@
       return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     }
 
-    async function postEffects(confirmed) {
-      return getJson("/api/ableton/effects", {
+    async function postStage(stage, confirmed) {
+      return getJson(`/api/ableton/${stage}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidate_id: state.candidate.candidate_id, confirmed })
       });
     }
 
-    $("preview-effects").onclick = async () => {
-      if (!state.candidate) return;
-      $("effects").disabled = true;
-      $("effects-result").innerHTML = "";
-      const result = await postEffects(false);
-      if (!result.ok) {
-        $("effects-summary").innerHTML = `<p class="bad">${escapeHtml(result.error || "")}</p>`;
-        return;
-      }
-      $("effects-summary").innerHTML = `
-        <p>${result.operations} 操作（約 ${Math.ceil(result.operations / 3)} 秒）</p>
-        <ul>${result.chains.map((chain) => `<li>${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}</li>`).join("")}</ul>
-        ${(result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("")}
-      `;
-      $("effects").disabled = false;
+    const stageRow = {
+      effects: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}`,
+      mix: (row) => `${escapeHtml(row.track)}: ${row.volume_db.toFixed(1)} dB / pan ${row.panning.toFixed(2)}`
     };
 
-    $("effects").onclick = async () => {
-      if (!state.candidate) return;
-      $("effects").disabled = true;
-      $("effects-result").innerHTML = "<p>Liveへ送っています…</p>";
-      const result = await postEffects(true);
+    for (const stage of ["effects", "mix"]) {
+      $(`preview-${stage}`).onclick = async () => {
+        if (!state.candidate) return;
+        $(stage).disabled = true;
+        $(`${stage}-result`).innerHTML = "";
+        const result = await postStage(stage, false);
+        if (!result.ok) {
+          $(`${stage}-summary`).innerHTML = `<p class="bad">${escapeHtml(result.error || "")}</p>`;
+          return;
+        }
+        $(`${stage}-summary`).innerHTML = `
+          <p>${result.operations} 操作（約 ${Math.ceil(result.operations / 3)} 秒）</p>
+          <ul>${result.chains.map((row) => `<li>${stageRow[stage](row)}</li>`).join("")}</ul>
+          ${(result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("")}
+        `;
+        $(stage).disabled = false;
+      };
+      $(stage).onclick = async () => {
+        if (!state.candidate) return;
+        $(stage).disabled = true;
+        $(`${stage}-result`).innerHTML = "<p>Liveへ送っています…</p>";
+        const result = await postStage(stage, true);
+        renderStageResult(stage, result);
+      };
+    }
+
+    function renderStageResult(stage, result) {
       const receipt = result.receipt || {};
-      $("effects-result").innerHTML = `
+      $(`${stage}-result`).innerHTML = `
         <p>結果: <b>${escapeHtml(receipt.status || "")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
         <ul>${(receipt.mismatches || []).map((m) => `<li class="warn">${escapeHtml(m.operation_id)} ${escapeHtml(m.field_name)}: 計画 ${escapeHtml(JSON.stringify(m.expected))} / Live ${escapeHtml(JSON.stringify(m.observed))}</li>`).join("")}</ul>
       `;
-    };
+    }
 
     $("fill-drums").onclick = async () => {
       if (!state.candidate) return;

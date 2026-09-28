@@ -107,7 +107,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     effects.add_argument("project")
     effects.add_argument("--yes", action="store_true", help="確認の質問を省略する")
-    effects.set_defaults(handler=_ableton_effects)
+    effects.set_defaults(handler=_ableton_effects, stage="effects")
+    mix = steps.add_parser("mix", help="送信済みトラックの音量(dB)とパンをクラブ向けに揃えます")
+    mix.add_argument("project")
+    mix.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    mix.set_defaults(handler=_ableton_effects, stage="mix")
     probe = steps.add_parser(
         "probe-devices",
         help="エフェクトを専用トラックに1つずつ入れ、つまみの名前を読んで保存します",
@@ -122,13 +126,19 @@ def _ableton_effects(args: argparse.Namespace) -> int:
     if not studio_running():
         print(NOT_RUNNING, file=sys.stderr)
         return 1
-    preview = studio_post("/api/ableton/effects", {"candidate_id": candidate_id})
+    route = f"/api/ableton/{args.stage}"
+    preview = studio_post(route, {"candidate_id": candidate_id})
     if not preview.get("ok"):
         print(preview.get("error"), file=sys.stderr)
         return 1
-    print(f"追加するエフェクト（{preview['operations']} 操作。既存のデバイスは変えません）")
-    for chain in preview["chains"]:
-        print(f"  {chain['track']}: {' → '.join(chain['devices'])}")
+    if args.stage == "mix":
+        print(f"MIX（{preview['operations']} トラック。音量とパンだけを変えます）")
+        for row in preview["chains"]:
+            print(f"  {row['track']}: {row['volume_db']:+.1f} dB / pan {row['panning']:+.2f}")
+    else:
+        print(f"追加するエフェクト（{preview['operations']} 操作。既存のデバイスは変えません）")
+        for chain in preview["chains"]:
+            print(f"  {chain['track']}: {' → '.join(chain['devices'])}")
     for line in preview.get("warnings") or []:
         print(f"  ! {line}")
     if not args.yes:
@@ -137,7 +147,7 @@ def _ableton_effects(args: argparse.Namespace) -> int:
             print("送信しませんでした。")
             return 1
     result = studio_post(
-        "/api/ableton/effects",
+        route,
         {"candidate_id": candidate_id, "confirmed": True},
         timeout=SEND_TIMEOUT_SECONDS,
     )

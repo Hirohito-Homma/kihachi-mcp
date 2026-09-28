@@ -455,6 +455,8 @@ def _workflow_post(
         handler._send_json(
             runtime.apply_effects(candidate_id, confirmed=bool(body.get("confirmed")))
         )
+    elif path == "/api/ableton/mix":
+        handler._send_json(runtime.apply_mix(candidate_id, confirmed=bool(body.get("confirmed"))))
     elif path == "/api/ableton/effects/verify":
         handler._send_json(runtime.verify_effects(candidate_id))
     elif path == "/api/ableton/probe-devices":

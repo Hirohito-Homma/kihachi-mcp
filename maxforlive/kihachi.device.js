@@ -27,7 +27,7 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.3.2";
+var DEVICE_VERSION = "kihachi-live-device/0.3.3";
 var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
 var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
 var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
@@ -567,6 +567,9 @@ function applyOperation(operation) {
     if (op === "set_device_parameter") {
         return setDeviceParameter(target, args);
     }
+    if (op === "set_track_mixer") {
+        return setTrackMixer(target, args);
+    }
     if (op === "create_locator") {
         return createLocator(song, args);
     }
@@ -750,6 +753,48 @@ function setDeviceParameter(target, args) {
         readback.item = String(items[Math.round(value - low)] || "");
     }
     return readback;
+}
+
+function decibelsOf(text) {
+    var shown = String(text || "");
+    if (shown.indexOf("inf") >= 0) {
+        return -1000;
+    }
+    var parsed = parseFloat(shown);
+    return isNaN(parsed) ? -1000 : parsed;
+}
+
+/*
+ * Set a track's fader in dB and its pan in -1..1. The fader curve is not
+ * published, so the value is found by bisection on Live's own dB display.
+ */
+function setTrackMixer(target, args) {
+    var path = "live_set tracks " + target.track_index + " mixer_device";
+    var volume = liveApi(path + " volume");
+    var panning = liveApi(path + " panning");
+    var wanted = Number(args.volume_db);
+    var pan = Number(args.panning);
+    if (isNaN(wanted) || wanted > 6 || !(pan >= -1 && pan <= 1)) {
+        refuse("volume_db must be at most +6 dB and panning within -1..1");
+    }
+    var low = Number(getProperty(volume, "min"));
+    var high = Number(getProperty(volume, "max"));
+    for (var step = 0; step < 30; step += 1) {
+        var middle = (low + high) / 2;
+        if (decibelsOf(volume.call("str_for_value", middle)) < wanted) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    volume.set("value", high);
+    panning.set("value", pan);
+    var shown = decibelsOf(volume.call("str_for_value", Number(getProperty(volume, "value"))));
+    return {
+        track_index: target.track_index,
+        volume_db: Math.round(shown * 10) / 10,
+        panning: Math.round(Number(getProperty(panning, "value")) * 100) / 100
+    };
 }
 
 function loadDrumPadSample(target, args) {

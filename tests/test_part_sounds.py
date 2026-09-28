@@ -1,10 +1,16 @@
 from live_fixtures import executor, gate, snapshot_of
 from test_candidate_live_planner import _candidate
 
-from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, PART_INSTRUMENTS, at
+from kihachi_mcp.knowledge.part_sounds import (
+    PART_EFFECTS,
+    PART_INSTRUMENTS,
+    PART_MIX,
+    at,
+)
 from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
     OP_SET_DEVICE_PARAMETER,
+    OP_SET_TRACK_MIXER,
 )
 from kihachi_mcp.models.production_brief import PART_ORDER
 from kihachi_mcp.services import live_device_catalog
@@ -67,6 +73,31 @@ def test_effects_append_after_the_instrument_and_a_second_run_adds_nothing() -> 
 
     again = planner.create_effects_plan(candidate, snapshot_of(transport))
     assert again.operations == []
+
+
+def test_mix_sets_only_fader_and_pan_on_the_candidate_tracks() -> None:
+    candidate = _candidate()
+    transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.5", tempo=125))
+    planner = CandidateLivePlanner()
+    assert _run(transport, planner.create_plan(candidate, snapshot_of(transport))).status == "verified"
+    devices = {track["name"]: list(track["device_names"]) for track in transport.live_set.tracks}
+
+    plan = planner.create_mix_plan(candidate, snapshot_of(transport))
+    assert {op.op for op in plan.operations} == {OP_SET_TRACK_MIXER}
+    assert len(plan.operations) == len(candidate.parts)
+    assert _run(transport, plan).status == "verified"
+
+    for track in transport.live_set.tracks:
+        part = track["name"].split()[1]
+        volume_db, panning = PART_MIX[part]
+        assert track["mixer"] == {"volume_db": volume_db, "panning": panning}
+        assert track["device_names"] == devices[track["name"]]
+
+
+def test_the_kick_leads_and_low_parts_stay_centred() -> None:
+    assert max(PART_MIX.values())[0] == PART_MIX["Kick"][0]
+    for part in ("Kick", "Sub", "Bass"):
+        assert PART_MIX[part][1] == 0.0
 
 
 def test_effects_are_refused_while_live_plays() -> None:

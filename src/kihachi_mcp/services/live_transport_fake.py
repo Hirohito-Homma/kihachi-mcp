@@ -26,6 +26,7 @@ from kihachi_mcp.models.live_contract import (
     OP_SET_DEVICE_PARAMETER,
     OP_SET_TEMPO,
     OP_SET_TRACK_COLOR,
+    OP_SET_TRACK_MIXER,
     OP_SET_TRACK_NAME,
     SCHEMA_VERSION,
     is_managed_name,
@@ -498,6 +499,15 @@ class FakeLiveTransport:
 
         if op == OP_PLACE_ARRANGEMENT_CLIP:
             return self._place_arrangement_clip(target, arguments)
+
+        if op == OP_SET_TRACK_MIXER:
+            track = self._require_track(int(target.get("track_index") or 0))
+            volume_db = float(arguments.get("volume_db"))
+            panning = float(arguments.get("panning"))
+            if volume_db > 6 or not -1 <= panning <= 1:
+                raise FakeLiveOperationRefused("volume_db must be at most +6 dB and panning within -1..1")
+            track["mixer"] = {"volume_db": round(volume_db, 1), "panning": round(panning, 2)}
+            return {"track_index": track["index"], **track["mixer"]}
 
         if op == OP_SET_DEVICE_PARAMETER:
             # The simulator knows no parameter lists: it records what was set,

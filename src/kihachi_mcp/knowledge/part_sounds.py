@@ -176,6 +176,27 @@ PART_EFFECTS: dict[str, tuple[DeviceRecipe, ...]] = {
     "FX": (_eq(40), _reverb(30, 4900, 80)),
 }
 
+#: Fader (dB) and pan (-1 left .. 1 right) per part, for a club mix. The kick
+#: sits highest and everything below 120 Hz stays centred; the rest is set
+#: under it so the master keeps about 6 dB of headroom for mastering.
+PART_MIX: dict[str, tuple[float, float]] = {
+    "Kick": (-6.0, 0.0),
+    "Sub": (-9.0, 0.0),
+    "Bass": (-10.0, 0.0),
+    "Snare": (-10.0, 0.0),
+    "Hats": (-16.0, 0.15),
+    "OpenHat": (-18.0, -0.15),
+    "Perc": (-18.0, -0.3),
+    "Stab": (-14.0, 0.0),
+    "Pad": (-18.0, 0.0),
+    "Arp": (-18.0, 0.3),
+    "Guitar": (-16.0, -0.35),
+    "Horn": (-14.0, 0.25),
+    "Lead": (-14.0, 0.0),
+    "Vocal": (-15.0, 0.0),
+    "FX": (-18.0, 0.0),
+}
+
 #: A playable patch for parts no genre recipe covers. The instrument named here
 #: must be the one live_device_catalog.suggest_instrument picks for the part.
 PART_INSTRUMENTS: dict[str, DeviceRecipe] = {

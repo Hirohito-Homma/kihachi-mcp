@@ -1070,6 +1070,13 @@ class StudioRuntime:
         Unconfirmed, this only plans and lists what would be added. Confirmed,
         it runs once; a device already on a track is never touched or removed.
         """
+        return self._apply_stage("effects", candidate_id, confirmed)
+
+    def apply_mix(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
+        """Set each [KIHACHI] track's fader and pan. Previews unless confirmed."""
+        return self._apply_stage("mix", candidate_id, confirmed)
+
+    def _apply_stage(self, kind: str, candidate_id: str, confirmed: bool) -> dict[str, Any]:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
@@ -1079,18 +1086,23 @@ class StudioRuntime:
             snapshot, failure = self._snapshot()
             if snapshot is None:
                 return failure or {"ok": False, "error": "Live状態を取得できません"}
-            plan = self._planner.create_effects_plan(candidate, snapshot)
+            create = (
+                self._planner.create_effects_plan
+                if kind == "effects"
+                else self._planner.create_mix_plan
+            )
+            plan = create(candidate, snapshot)
             if plan.status == "blocked":
                 return {
                     "ok": False,
                     "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
                     "conflicts": [item.to_dict() for item in plan.conflicts],
                 }
-            chains = _effect_summary(plan)
+            chains = _effect_summary(plan) if kind == "effects" else _mix_summary(plan)
             if not plan.operations:
                 return {
                     "ok": False,
-                    "error": "追加するエフェクトはありません",
+                    "error": "追加するエフェクトはありません" if kind == "effects" else "MIXするトラックがありません",
                     "warnings": list(plan.warnings),
                 }
             if not confirmed:
@@ -1107,7 +1119,7 @@ class StudioRuntime:
             except ApprovalError as exc:
                 return {"ok": False, "error": exc.message}
             receipt = self._executor.execute(plan, approved=True, approval_token=token)
-            path = self._candidate_path(candidate.candidate_id, ".effects-receipt.json")
+            path = self._candidate_path(candidate.candidate_id, f".{kind}-receipt.json")
             if path is not None:
                 _write_json_atomic(path, receipt.to_dict())
             return {
@@ -1485,6 +1497,22 @@ def _setting_reading(parameter: dict[str, Any] | None, setting: Any) -> Any:
         position = round(current - low)
         return items[position] if 0 <= position < len(items) else None
     return round((current - low) / (high - low), 4) if high > low else 0.0
+
+
+def _mix_summary(plan: Any) -> list[dict[str, Any]]:
+    """Fader and pan per track, as the plan sets them."""
+    rows = []
+    for operation in plan.operations:
+        track = next(
+            (
+                item.arguments.get("name", "")
+                for item in operation.preconditions
+                if item.kind == "track_name_at_index"
+            ),
+            "",
+        )
+        rows.append({"track": track, **operation.arguments})
+    return rows
 
 
 def _effect_summary(plan: Any) -> list[dict[str, Any]]:

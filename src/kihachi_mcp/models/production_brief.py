@@ -20,7 +20,18 @@ REGISTER_VALUES = ("low", "mid", "high")
 STUDIO_PARTS = ("Kick", "Hats", "Bass", "Stab")
 #: Parts every genre gets when its rules write notes for them. Lead stays
 #: mutation_funk only.
-ARRANGEMENT_PARTS = ("Snare", "OpenHat", "Perc", "Sub", "Pad", "Arp", "Vocal", "FX")
+ARRANGEMENT_PARTS = (
+    "Snare",
+    "OpenHat",
+    "Perc",
+    "Sub",
+    "Pad",
+    "Arp",
+    "Guitar",
+    "Horn",
+    "Vocal",
+    "FX",
+)
 OPTIONAL_STUDIO_PARTS = ("Lead", *ARRANGEMENT_PARTS)
 #: Live track order, top to bottom: drums, low end, harmony, top line, effects.
 PART_ORDER = (
@@ -34,6 +45,8 @@ PART_ORDER = (
     "Stab",
     "Pad",
     "Arp",
+    "Guitar",
+    "Horn",
     "Lead",
     "Vocal",
     "FX",

@@ -75,6 +75,8 @@ _ROLE_BY_TRACK_KEYWORD: tuple[tuple[str, str], ...] = (
     ("arp", "Drift"),
     ("pluck", "Drift"),
     ("vocal", "Wavetable"),
+    ("guitar", "Drift"),
+    ("horn", "Analog"),
 )
 
 DEFAULT_INSTRUMENT = "Simpler"

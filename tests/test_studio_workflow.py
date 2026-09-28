@@ -241,6 +241,7 @@ def test_kihachi_golden_path_shapes_the_notes(tmp_path: Path) -> None:
     labels = {track["label"] for track in project["tracks"]}
     assert {"KICK", "HATS", "SLAP BASS", "DUB CHORDS", "MUTATION SYNTH"} <= labels
     assert {"SNARE / CLAP", "PERC", "SUB BASS", "PAD", "ARP", "VOCAL CHOP", "FX"} <= labels
+    assert {"GUITAR", "HORN"} <= labels
     preview = runtime.apply_preview(candidate_id)
     assert preview["ok"] is True
     assert len(preview["plan"]["operations"]) <= MAX_PLAN_OPERATIONS

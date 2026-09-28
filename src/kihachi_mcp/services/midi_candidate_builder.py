@@ -48,7 +48,7 @@ HAT_PITCHES = frozenset({HAT_PITCH, OPEN_HAT_PITCH, RIDE})
 #: Side stick, snare and clap: the backbeat voices, played on their own track.
 SNARE_PITCHES = frozenset({37, 38, CLAP_PITCH})
 #: Written by a generator of their own, after the original parts.
-_GENERATED_EXTRAS = ("Perc", "Pad", "Arp", "Vocal", "FX")
+_GENERATED_EXTRAS = ("Perc", "Pad", "Arp", "Vocal", "FX", "Guitar", "Horn")
 #: The sub sits in this octave whatever register the bass plays in.
 SUB_LOWEST_PITCH = 24
 MAX_CLIP_BARS = 16
@@ -292,6 +292,10 @@ def _notes_for_part(
         notes = _vocal_notes(plan)
     elif part == "FX":
         notes = _fx_notes(plan)
+    elif part == "Guitar":
+        notes = _guitar_notes(plan)
+    elif part == "Horn":
+        notes = _horn_notes(plan)
     else:
         notes = _lead_notes(plan)
     return [_inside_bar(note, beats) for note in notes]
@@ -1126,6 +1130,77 @@ def _fx_notes(plan: _SongPlan) -> list[MidiNote]:
         start = max(0.0, round((target - riser_beats) * 4) / 4)
         notes.append(MidiNote(RISER_NOTE, round(start, 6), round(target - start, 6), 100))
         notes.append(MidiNote(IMPACT_NOTE, round(target, 6), 1.0, plan.velocity(112, 3)))
+    return notes
+
+
+# Sixteenth steps of a funk cutting pattern: accented chops, the rest muted.
+_GUITAR_CHOPS = ((2, 6, 10, 14), (2, 7, 10, 15), (3, 6, 11, 14))
+
+
+def _guitar_notes(plan: _SongPlan) -> list[MidiNote]:
+    """Funk cutting: muted sixteenth strums with open chord chops on the offbeats."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=1)
+    notes: list[MidiNote] = []
+    chops: dict[tuple[str, int], tuple[int, ...]] = {}
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        if bar.breakdown or bar.section not in {*_PEAK_SECTIONS, "VerseB", "Outro"}:
+            continue
+        if bar.section == "Outro" and bar.in_section >= PHRASE_BARS:
+            continue
+        key = (bar.section, bar.phrase)
+        if key not in chops:
+            chops[key] = plan.rng.choice(_GUITAR_CHOPS)
+        chord = _voiced_chord(plan, tonic + 12, plan.chord_degree(bar))
+        muted = bar.section in _PEAK_SECTIONS
+        for step in range(plan.steps):
+            if step in chops[key]:
+                notes.extend(
+                    _chord_notes(chord, plan.at(bar, step / 4), 0.15, plan.velocity(86, 4))
+                )
+            elif muted and step % 4 == 1:
+                # A muted strum reads as the top string, barely pitched.
+                notes.append(
+                    MidiNote(chord[-1], plan.at(bar, step / 4), 0.06, plan.velocity(42, 4))
+                )
+    return notes
+
+
+# Two-hit brass figures, and the phrase-end fall into the next bar.
+_HORN_FIGURES = ((1.5, 1.75), (0.5, 2.5), (2.75, 3.0), (1.0, 3.5))
+
+
+def _horn_notes(plan: _SongPlan) -> list[MidiNote]:
+    """Short brass stabs at the peaks, answering the chords rather than doubling them."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=2)
+    notes: list[MidiNote] = []
+    figures: dict[tuple[str, int], tuple[float, ...]] = {}
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        if bar.breakdown:
+            continue
+        if bar.section in _PEAK_SECTIONS:
+            if bar.in_section % 2 == 1 and not bar.phrase_end:
+                continue  # every other bar, so the figure is a call, not a loop
+        elif not (bar.section == "VerseB" and bar.phrase_end):
+            continue
+        key = (bar.section, bar.phrase)
+        if key not in figures:
+            figures[key] = plan.rng.choice(_HORN_FIGURES)
+        chord = _voiced_chord(plan, tonic, plan.chord_degree(bar))
+        hits = [hit for hit in figures[key] if hit < plan.beats]
+        if bar.phrase_end:
+            hits = [hit for hit in hits if hit < plan.beats - 1] + [plan.beats - 0.75]
+        for index, hit in enumerate(hits):
+            last = index == len(hits) - 1
+            notes.extend(
+                _chord_notes(
+                    chord,
+                    plan.at(bar, hit),
+                    0.35 if last else 0.18,
+                    plan.velocity(96 if last else 88, 4),
+                )
+            )
     return notes
 
 

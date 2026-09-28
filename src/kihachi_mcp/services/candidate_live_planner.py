@@ -53,6 +53,8 @@ _TRACK_COLORS = {
     "Stab": "9",
     "Pad": "10",
     "Arp": "17",
+    "Guitar": "18",
+    "Horn": "12",
     "Lead": "16",
     "Vocal": "25",
     "FX": "26",

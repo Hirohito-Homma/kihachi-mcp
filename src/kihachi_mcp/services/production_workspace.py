@@ -19,6 +19,8 @@ _PART_LABELS = {
     "Stab": "CHORDS",
     "Pad": "PAD",
     "Arp": "ARP",
+    "Guitar": "GUITAR",
+    "Horn": "HORN",
     "Lead": "LEAD",
     "Vocal": "VOCAL CHOP",
     "FX": "FX",

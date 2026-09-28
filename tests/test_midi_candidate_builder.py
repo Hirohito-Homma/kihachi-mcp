@@ -222,8 +222,23 @@ def test_the_bass_stays_in_its_register() -> None:
 
 def test_every_arrangement_part_is_written_in_track_order() -> None:
     candidate = build_candidate(_brief(), seed=5)
-    assert candidate.parts == PART_ORDER[:10] + ("Vocal", "FX")
+    assert candidate.parts == tuple(part for part in PART_ORDER if part != "Lead")
     assert "Lead" not in candidate.parts  # still mutation_funk only
+
+
+def test_guitar_cuts_sixteenths_and_the_horn_stabs_at_the_peaks() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    guitar = _part_notes(candidate, "Guitar")
+    horn = _part_notes(candidate, "Horn")
+    assert guitar and horn
+    assert all(round(beat * 4, 6) == round(beat * 4) for beat, *_ in guitar)
+    assert {velocity < 60 for *_, velocity in guitar} == {True, False}, "muted and open"
+    drop = range(57, 97)
+    assert all(_bar_of(beat, beats) in drop for beat, *_ in horn)
+    d_minor = {2, 4, 5, 7, 9, 10, 0}
+    for notes in (guitar, horn):
+        assert {pitch % 12 for _beat, pitch, _velocity in notes} <= d_minor
 
 
 def _digest(candidate, parts) -> str:

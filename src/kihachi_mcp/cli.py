@@ -143,6 +143,8 @@ def _ableton_effects(args: argparse.Namespace) -> int:
     )
     receipt = result.get("receipt") or {}
     print(f"\n結果: {receipt.get('status') or result.get('error')}")
+    for item in receipt.get("mismatches") or []:
+        print(f"  ! {item.get('operation_id')} {item.get('field_name')}: 計画 {item.get('expected')} / Live {item.get('observed')}")
     return 0 if result.get("ok") else 1
 
 

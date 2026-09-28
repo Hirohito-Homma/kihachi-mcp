@@ -932,6 +932,7 @@
       $("effects-result").innerHTML = `
         <p>結果: <b>${escapeHtml(receipt.status || "")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+        <ul>${(receipt.mismatches || []).map((m) => `<li class="warn">${escapeHtml(m.operation_id)} ${escapeHtml(m.field_name)}: 計画 ${escapeHtml(JSON.stringify(m.expected))} / Live ${escapeHtml(JSON.stringify(m.observed))}</li>`).join("")}</ul>
       `;
     };
 

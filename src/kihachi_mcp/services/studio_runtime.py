@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
@@ -1106,6 +1107,9 @@ class StudioRuntime:
             except ApprovalError as exc:
                 return {"ok": False, "error": exc.message}
             receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            path = self._candidate_path(candidate.candidate_id, ".effects-receipt.json")
+            if path is not None:
+                _write_json_atomic(path, receipt.to_dict())
             return {
                 "ok": receipt.status == "verified",
                 "candidate_id": candidate.candidate_id,
@@ -1117,6 +1121,66 @@ class StudioRuntime:
             }
         finally:
             self._apply_lock.release()
+
+    def verify_effects(self, candidate_id: str) -> dict[str, Any]:
+        """Read each recipe knob back from Live and list any that differ. Read-only."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        short_id = candidate.candidate_id[:8]
+        differences: list[dict[str, Any]] = []
+        largest: dict[str, Any] = {"drift": 0.0}
+        checked = 0
+        for part in candidate.parts:
+            track = snapshot.track_by_name(managed_track_name(f"KIHACHI {part} {short_id}"))
+            if track is None:
+                continue
+            for recipe in PART_EFFECTS.get(part, ()):
+                if recipe.device not in track.device_names:
+                    differences.append({"track": track.name, "device": recipe.device, "missing": True})
+                    continue
+                position = track.device_names.index(recipe.device)
+                try:
+                    reply = self._inspector.device_parameters(position, track.index)
+                except LiveTransportError as exc:
+                    return {"ok": False, "error": f"Liveから読み戻せません（{exc.code}）: {exc.message}"}
+                observed = {item["name"]: item for item in reply.get("parameters") or []}
+                for setting in recipe.settings:
+                    checked += 1
+                    actual = _setting_reading(observed.get(setting.parameter), setting)
+                    wanted = setting.item if setting.item is not None else setting.value
+                    if setting.item is None and isinstance(actual, float):
+                        drift = round(abs(actual - float(setting.value)), 4)
+                        if drift > largest["drift"]:
+                            largest = {
+                                "drift": drift,
+                                "where": f"{part} {recipe.device} {setting.parameter}",
+                                "planned": setting.value,
+                                "live": actual,
+                            }
+                    if actual != wanted and not (
+                        setting.item is None
+                        and isinstance(actual, float)
+                        and abs(actual - float(setting.value)) <= 0.0015
+                    ):
+                        differences.append(
+                            {
+                                "track": track.name,
+                                "device": recipe.device,
+                                "parameter": setting.parameter,
+                                "planned": wanted,
+                                "live": actual,
+                            }
+                        )
+        return {
+            "ok": not differences,
+            "checked": checked,
+            "differences": differences,
+            "largest_drift": largest,
+        }
 
     def probe_device_parameters(self, confirmed: bool = False) -> dict[str, Any]:
         """Insert each effect once on a probe track and save its parameter names.
@@ -1408,6 +1472,19 @@ def _latest_saved_id(directory: Path) -> str:
     if not saved:
         return ""
     return max(saved, key=lambda path: path.stat().st_mtime).stem
+
+
+def _setting_reading(parameter: dict[str, Any] | None, setting: Any) -> Any:
+    """What Live holds for one recipe setting: the switch item, or 0..1."""
+    if parameter is None:
+        return None
+    low, high = float(parameter["min"]), float(parameter["max"])
+    current = float(parameter["value"])
+    if setting.item is not None:
+        items = [str(item) for item in parameter.get("value_items") or []]
+        position = round(current - low)
+        return items[position] if 0 <= position < len(items) else None
+    return round((current - low) / (high - low), 4) if high > low else 0.0
 
 
 def _effect_summary(plan: Any) -> list[dict[str, Any]]:

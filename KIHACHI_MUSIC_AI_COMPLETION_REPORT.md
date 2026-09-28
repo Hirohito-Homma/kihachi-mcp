@@ -10,17 +10,24 @@
 
 | Repository | Branch | Commit |
 | --- | --- | --- |
-| kihachi-mcp（本体・正本） | `feature/issue-0020-ableton-live-automation` | HEAD `0c88f20`。今回の変更は未コミット（下記 Remaining External Actions） |
+| kihachi-mcp（本体・正本） | `feature/studio-integration`（`0c88f20` から分岐） | 下記 Commits |
 | AbletonGPT（https://github.com/Hirohito-Homma/AbletonGPT0.2） | `main` | `5fcf063`（変更なし） |
 | KIHACHI MUSIC AI（https://github.com/Hirohito-Homma/KIHACHI.git） | `wip/explicit-bar-count` | `25b044f`（変更なし） |
 
 ## Commits
 
-未実施（ユーザー確認待ち）。
+| Commit | 内容 |
+| --- | --- |
+| `d35afa9` | ジャンル知識・スイング・ドラムサンプルをノートに反映 |
+| `6eb5922` | 参考音源ライブラリとサンプル索引 |
+| `fbb3194` | オンデバイス短時間音声入力と対話 |
+| `460ad63` | 制作画面を制作の中枢に（AI provider、レビュー・修正・承認、ドライラン、送信、読み戻し検証、状態・設定・診断） |
+| `813dc61` | `kihachi` CLI と MCP ツール（共有 StudioRuntime） |
+| `ec24140` | セットアップ・画面・Ollama・Ableton・現状の文書とスクリプト |
 
 ## PRs
 
-未作成（ユーザー確認待ち）。
+[#9 Make the KIHACHI Studio the production control centre](https://github.com/Hirohito-Homma/kihachi-mcp/pull/9)（base `main`）。CI は GitHub アカウントの請求問題でジョブが開始されず失敗（`main` も 2026-09-27 から同じ理由で失敗）。同じ手順（`uv sync --locked` / pytest / ruff / `fastmcp list`）を Python 3.12 でローカル実行し、すべて通過。
 
 ## Studio
 

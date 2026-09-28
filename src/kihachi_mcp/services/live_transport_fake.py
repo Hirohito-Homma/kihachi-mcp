@@ -36,6 +36,7 @@ from kihachi_mcp.services.live_transport import (
     ERROR_OPERATION_FAILED,
     ERROR_PROTOCOL,
     METHOD_APPLY_OPERATION,
+    METHOD_GET_DEVICE_PARAMETERS,
     METHOD_GET_DRUM_RACK_SUMMARY,
     METHOD_GET_STATE,
     METHOD_PING,
@@ -91,6 +92,8 @@ class FakeLiveSet:
     available_devices: list[str] = field(
         default_factory=lambda: list(DEFAULT_SUITE_DEVICES)
     )
+    #: Parameter lists by device name, in the shape device_probe saves.
+    device_parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def add_track(
         self, name: str, track_type: str = "midi", color: str = ""
@@ -149,6 +152,8 @@ class FakeLiveTransport:
             return self._ok(request_id, self.snapshot_payload(payload))
         if method == METHOD_GET_DRUM_RACK_SUMMARY:
             return self._ok(request_id, self._drum_rack_summary(payload))
+        if method == METHOD_GET_DEVICE_PARAMETERS:
+            return self._device_parameters(request_id, payload)
         if method == METHOD_APPLY_OPERATION:
             return self._apply(request_id, payload)
         raise LiveTransportError(ERROR_PROTOCOL, f"unsupported method '{method}'")
@@ -179,6 +184,29 @@ class FakeLiveTransport:
             "protocol_version": PROTOCOL_VERSION,
             "device_version": "kihachi-live-device/0.1.0",
         }
+
+    def _device_parameters(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Answer from the parameter table real Live gave, per device name."""
+        index = int(payload.get("track_index") or 0)
+        position = int(payload.get("device_index") or 0)
+        track = next((item for item in self.live_set.tracks if item["index"] == index), None)
+        names = (track or {}).get("device_names") or []
+        if position >= len(names):
+            return self._failure(request_id, ERROR_OPERATION_FAILED, f"no device {position}")
+        name = names[position]
+        known = self.live_set.device_parameters.get(name) or {}
+        return self._ok(
+            request_id,
+            {
+                "device_index": position,
+                "device_name": name,
+                "class_name": str(known.get("class_name") or ""),
+                "parameters": [
+                    {**item, "value": item.get("default")}
+                    for item in known.get("parameters") or []
+                ],
+            },
+        )
 
     def _drum_rack_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
         index = int(payload.get("track_index") or 0)

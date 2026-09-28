@@ -20,6 +20,13 @@ from kihachi_mcp.services.candidate_live_planner import (
     AppliedTracks,
     CandidateLivePlanner,
 )
+from kihachi_mcp.services.device_probe import (
+    PARAMETER_FILE,
+    PROBE_TRACK,
+    create_probe_plan,
+    save_parameters,
+    summarize,
+)
 from kihachi_mcp.services.diagnostics import (
     DiagnosticsService,
     default_settings,
@@ -27,6 +34,7 @@ from kihachi_mcp.services.diagnostics import (
 )
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
 from kihachi_mcp.services.live_bridge import LiveBridgeSession, LocalhostBridgeTransport
+from kihachi_mcp.services.live_device_catalog import STOCK_DEVICE_NAMES
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import (
     LiveStateInspector,
@@ -88,7 +96,9 @@ class StudioRuntime:
         start_bridge: bool = False,
         candidate_dir: Path | None = None,
         kit_loader: AbletonGPTKitLoader | None = None,
+        parameter_file: Path = PARAMETER_FILE,
     ) -> None:
+        self._parameter_file = parameter_file
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
         self._apply_lock = threading.Lock()
@@ -1053,6 +1063,122 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
+    def apply_effects(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
+        """Append each part's effect chain to the tracks an apply created.
+
+        Unconfirmed, this only plans and lists what would be added. Confirmed,
+        it runs once; a device already on a track is never touched or removed.
+        """
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            snapshot, failure = self._snapshot()
+            if snapshot is None:
+                return failure or {"ok": False, "error": "Live状態を取得できません"}
+            plan = self._planner.create_effects_plan(candidate, snapshot)
+            if plan.status == "blocked":
+                return {
+                    "ok": False,
+                    "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
+                    "conflicts": [item.to_dict() for item in plan.conflicts],
+                }
+            chains = _effect_summary(plan)
+            if not plan.operations:
+                return {
+                    "ok": False,
+                    "error": "追加するエフェクトはありません",
+                    "warnings": list(plan.warnings),
+                }
+            if not confirmed:
+                return {
+                    "ok": True,
+                    "preview": True,
+                    "candidate_id": candidate.candidate_id,
+                    "operations": len(plan.operations),
+                    "chains": chains,
+                    "warnings": list(plan.warnings),
+                }
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message}
+            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            return {
+                "ok": receipt.status == "verified",
+                "candidate_id": candidate.candidate_id,
+                "chains": chains,
+                "receipt": receipt.to_dict(),
+                "partial": receipt.status == "partially_applied",
+                "warnings": list(plan.warnings),
+                "musical_quality_claimed": False,
+            }
+        finally:
+            self._apply_lock.release()
+
+    def probe_device_parameters(self, confirmed: bool = False) -> dict[str, Any]:
+        """Insert each effect once on a probe track and save its parameter names.
+
+        Instruments already on [KIHACHI] tracks are read too. Nothing is set,
+        and the probe track stays: KIHACHI never deletes tracks.
+        """
+        if not confirmed:
+            return {"ok": False, "error": "内容を確認してから実行してください"}
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            snapshot, failure = self._snapshot()
+            if snapshot is None:
+                return failure or {"ok": False, "error": "Live状態を取得できません"}
+            plan = create_probe_plan(snapshot)
+            if plan.conflicts:
+                return {"ok": False, "error": plan.conflicts[0].detail}
+            receipt = None
+            if plan.operations:
+                try:
+                    token = self._gate.approve(plan)
+                except ApprovalError as exc:
+                    return {"ok": False, "error": exc.message}
+                receipt = self._executor.execute(plan, approved=True, approval_token=token)
+                if receipt.status != "verified":
+                    return {
+                        "ok": False,
+                        "error": "プローブ用トラックの準備が完了しませんでした",
+                        "receipt": receipt.to_dict(),
+                    }
+                snapshot, failure = self._snapshot()
+                if snapshot is None:
+                    return failure or {"ok": False, "error": "Live状態を取得できません"}
+            devices: dict[str, Any] = {}
+            errors: list[str] = []
+            for track in snapshot.tracks:
+                if track.name != PROBE_TRACK and not track.is_managed:
+                    continue
+                for position, name in enumerate(track.device_names):
+                    if name not in STOCK_DEVICE_NAMES or name in devices:
+                        continue
+                    try:
+                        reply = self._inspector.device_parameters(
+                            position, track.index, displays=track.name == PROBE_TRACK
+                        )
+                    except LiveTransportError as exc:
+                        errors.append(f"{name}: {exc.message}")
+                        continue
+                    devices[name] = summarize(reply)
+            if devices:
+                save_parameters(snapshot.live_version, devices, self._parameter_file)
+            return {
+                "ok": bool(devices) and not errors,
+                "devices": {name: len(item["parameters"]) for name, item in devices.items()},
+                "errors": errors,
+                "warnings": list(plan.warnings),
+                "receipt": receipt.to_dict() if receipt is not None else None,
+            }
+        finally:
+            self._apply_lock.release()
+
     def inspect_coverage(self, candidate_id: str) -> dict[str, Any]:
         """Re-read instruments and leftover [KIHACHI] tracks. Does not apply."""
         candidate = self._lookup(candidate_id)
@@ -1282,6 +1408,24 @@ def _latest_saved_id(directory: Path) -> str:
     if not saved:
         return ""
     return max(saved, key=lambda path: path.stat().st_mtime).stem
+
+
+def _effect_summary(plan: Any) -> list[dict[str, Any]]:
+    """The devices a plan adds, per track, in chain order."""
+    chains: dict[str, list[str]] = {}
+    for operation in plan.operations:
+        if operation.op != "load_live_device":
+            continue
+        track = next(
+            (
+                item.arguments.get("name", "")
+                for item in operation.preconditions
+                if item.kind == "track_name_at_index"
+            ),
+            "",
+        )
+        chains.setdefault(track, []).append(operation.arguments["device_name"])
+    return [{"track": track, "devices": devices} for track, devices in chains.items()]
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

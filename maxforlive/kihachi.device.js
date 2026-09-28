@@ -27,7 +27,7 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.3.1";
+var DEVICE_VERSION = "kihachi-live-device/0.3.2";
 var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
 var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
 var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
@@ -324,7 +324,11 @@ var AVAILABLE_DEVICES = [
     "Compressor",
     "Saturator",
     "Echo",
-    "Hybrid Reverb"
+    "Hybrid Reverb",
+    "Utility",
+    "Glue Compressor",
+    "Drum Buss",
+    "Limiter"
 ];
 
 function liveVersionParts() {
@@ -940,6 +944,68 @@ function readDrumRackSummary(trackIndex) {
         track_index: trackIndex,
         track_name: String(getProperty(track, "name") || ""),
         devices: devices
+    };
+}
+
+/*
+ * Every parameter of one device, read only: what set_device_parameter will
+ * accept by name, and the value_items a switch takes. Recipes are checked
+ * against this before a device knob is ever set.
+ */
+function readDeviceParameters(payload) {
+    var base = payload.master === true
+        ? "live_set master_track"
+        : "live_set tracks " + Number(payload.track_index);
+    var owner = liveApi(base);
+    var deviceIndex = Number(payload.device_index);
+    if (!(deviceIndex >= 0 && deviceIndex < countChildren(owner, "devices"))) {
+        refuse("no device " + payload.device_index + " on " + base);
+    }
+    var path = base + " devices " + deviceIndex;
+    var device = liveApi(path);
+    var total = countChildren(device, "parameters");
+    var parameters = [];
+    for (var index = 0; index < total; index += 1) {
+        var parameter = liveApi(path + " parameters " + index);
+        var raw = parameter.get("value_items") || [];
+        var items = [];
+        for (var at = 0; at < raw.length; at += 1) {
+            items.push(String(raw[at]));
+        }
+        var low = Number(getPropertyOrNull(parameter, "min"));
+        var high = Number(getPropertyOrNull(parameter, "max"));
+        var quantized = Boolean(Number(getPropertyOrNull(parameter, "is_quantized") || 0));
+        var item = {
+            name: String(getPropertyOrNull(parameter, "name") || ""),
+            min: low,
+            max: high,
+            is_quantized: quantized,
+            value_items: items,
+            value: Number(getPropertyOrNull(parameter, "value"))
+        };
+        /*
+         * What Live's dial shows at eleven even steps of the range, so a
+         * recipe can be written in dB, Hz or ms instead of guessing the curve.
+         */
+        if (payload.displays === true && !quantized) {
+            item.displays = [];
+            for (var step = 0; step <= 10; step += 1) {
+                var shown = "";
+                try {
+                    shown = String(parameter.call("str_for_value", low + (high - low) * step / 10));
+                } catch (displayError) {
+                    shown = "";
+                }
+                item.displays.push(shown);
+            }
+        }
+        parameters.push(item);
+    }
+    return {
+        device_index: deviceIndex,
+        device_name: String(getProperty(device, "name") || ""),
+        class_name: String(getPropertyOrNull(device, "class_name") || ""),
+        parameters: parameters
     };
 }
 
@@ -1645,6 +1711,18 @@ function handle(request) {
             requestId,
             readDrumRackSummary(Number(drumPayload.track_index))
         );
+        return;
+    }
+    if (request.method === "get_device_parameters") {
+        try {
+            respondOk(requestId, readDeviceParameters(request.payload || {}));
+        } catch (error) {
+            respondError(
+                requestId,
+                "operation_failed",
+                error && error.message ? error.message : String(error)
+            );
+        }
         return;
     }
     if (request.method === "get_track_playback_summary") {

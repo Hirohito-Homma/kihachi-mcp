@@ -293,6 +293,15 @@
       </div>
       <div id="arrange-summary"></div>
       <div id="arrange-result"></div>
+
+      <h2>エフェクト処理</h2>
+      <p class="sub">適用済みの各トラックの音源の後ろに、パートごとのEQ・コンプ・サチュレーター・リバーブ・ディレイを追加します。既に載っているデバイスは変えず、同じデバイスは二重に入れません。再生を止めてから実行してください。</p>
+      <div class="actions">
+        <button id="preview-effects" class="secondary">追加内容を確認</button>
+        <button id="effects" disabled>この内容でエフェクトを追加</button>
+      </div>
+      <div id="effects-summary"></div>
+      <div id="effects-result"></div>
     </section>
 
     <section id="recover-view">
@@ -881,6 +890,47 @@
       $("arrange-result").innerHTML = `
         <p>結果: <b>${receipt.status || ""}</b>${result.error ? ` <span class="bad">${result.error}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
         <p>${result.verified_means || ""}</p>
+        <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+      `;
+    };
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    }
+
+    async function postEffects(confirmed) {
+      return getJson("/api/ableton/effects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: state.candidate.candidate_id, confirmed })
+      });
+    }
+
+    $("preview-effects").onclick = async () => {
+      if (!state.candidate) return;
+      $("effects").disabled = true;
+      $("effects-result").innerHTML = "";
+      const result = await postEffects(false);
+      if (!result.ok) {
+        $("effects-summary").innerHTML = `<p class="bad">${escapeHtml(result.error || "")}</p>`;
+        return;
+      }
+      $("effects-summary").innerHTML = `
+        <p>${result.operations} 操作（約 ${Math.ceil(result.operations / 3)} 秒）</p>
+        <ul>${result.chains.map((chain) => `<li>${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}</li>`).join("")}</ul>
+        ${(result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("")}
+      `;
+      $("effects").disabled = false;
+    };
+
+    $("effects").onclick = async () => {
+      if (!state.candidate) return;
+      $("effects").disabled = true;
+      $("effects-result").innerHTML = "<p>Liveへ送っています…</p>";
+      const result = await postEffects(true);
+      const receipt = result.receipt || {};
+      $("effects-result").innerHTML = `
+        <p>結果: <b>${escapeHtml(receipt.status || "")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}${result.partial ? "（部分適用。残りは自動再実行しません）" : ""}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
       `;
     };

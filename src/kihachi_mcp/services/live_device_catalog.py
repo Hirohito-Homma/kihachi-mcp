@@ -49,6 +49,10 @@ STOCK_DEVICES: tuple[LiveStockDevice, ...] = (
     LiveStockDevice("Saturator", CATEGORY_EFFECT, "saturation"),
     LiveStockDevice("Echo", CATEGORY_EFFECT, "delay"),
     LiveStockDevice("Hybrid Reverb", CATEGORY_EFFECT, "reverb"),
+    LiveStockDevice("Utility", CATEGORY_EFFECT, "gain_width"),
+    LiveStockDevice("Glue Compressor", CATEGORY_EFFECT, "bus_compressor"),
+    LiveStockDevice("Drum Buss", CATEGORY_EFFECT, "drum_bus"),
+    LiveStockDevice("Limiter", CATEGORY_EFFECT, "limiter"),
 )
 
 STOCK_DEVICE_NAMES = frozenset(device.name for device in STOCK_DEVICES)

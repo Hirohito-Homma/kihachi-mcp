@@ -13,6 +13,7 @@ PROTOCOL_VERSION = 1
 METHOD_PING = "ping"
 METHOD_GET_STATE = "get_state"
 METHOD_GET_DRUM_RACK_SUMMARY = "get_drum_rack_summary"
+METHOD_GET_DEVICE_PARAMETERS = "get_device_parameters"
 METHOD_APPLY_OPERATION = "apply_operation"
 
 SUPPORTED_METHODS = frozenset(
@@ -20,6 +21,7 @@ SUPPORTED_METHODS = frozenset(
         METHOD_PING,
         METHOD_GET_STATE,
         METHOD_GET_DRUM_RACK_SUMMARY,
+        METHOD_GET_DEVICE_PARAMETERS,
         METHOD_APPLY_OPERATION,
     }
 )

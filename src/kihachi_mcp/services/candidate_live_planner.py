@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, PART_INSTRUMENTS
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_LOCATOR,
@@ -212,6 +213,35 @@ class CandidateLivePlanner:
                     "request_id": request_id,
                     "candidate_id": candidate.candidate_id,
                     "kind": "drum_samples",
+                    "set_fingerprint": snapshot.set_fingerprint,
+                }
+            ),
+            source_plan_hash=candidate.note_fingerprint,
+            set_fingerprint=snapshot.set_fingerprint,
+            expires_at=(
+                self._clock() + timedelta(seconds=self._ttl_seconds)
+            ).isoformat(),
+            operations=operations,
+            conflicts=conflicts,
+            warnings=warnings,
+        )
+
+    def create_effects_plan(
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+    ) -> LiveMutationPlan:
+        """Plan effect chains on tracks an earlier apply created. Adds only."""
+        builder = _Builder(candidate, snapshot, change_tempo=False)
+        operations, conflicts, warnings = builder.build_effects_only()
+        request_id = self._request_id_factory()
+        return LiveMutationPlan(
+            request_id=request_id,
+            idempotency_key=canonical_hash(
+                {
+                    "request_id": request_id,
+                    "candidate_id": candidate.candidate_id,
+                    "kind": "effects",
                     "set_fingerprint": snapshot.set_fingerprint,
                 }
             ),
@@ -483,6 +513,45 @@ class _Builder:
             self._warnings.append("載せられる空の Drum Rack パッドはありません")
         return self._operations, self._conflicts, self._warnings
 
+    def build_effects_only(
+        self,
+    ) -> tuple[list[LiveMutationOperation], list[LiveConflict], list[str]]:
+        """Append each part's effect chain after whatever its track already holds.
+
+        A device already on the track (a genre recipe's Echo, or an earlier run
+        of this plan) is left as it is, so running twice adds nothing.
+        """
+        self._guard_transport()
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        available = self._snapshot.available_device_names()
+        for part in self._candidate.parts:
+            chain = PART_EFFECTS.get(part)
+            if not chain:
+                continue
+            name = managed_track_name(f"KIHACHI {part} {self._short_id}")
+            existing = self._snapshot.track_by_name(name)
+            if existing is None:
+                self._warnings.append(f"{name} が無いのでエフェクトは載せません")
+                continue
+            present = set(existing.device_names)
+            missing = tuple(device for device in chain if device.device not in present)
+            if not missing:
+                continue
+            track = {
+                "name": name,
+                "index": existing.index,
+                "created": False,
+                "part": part,
+                "device_names": list(existing.device_names),
+            }
+            self._plan_recipe_chain(
+                track, missing, available, first_index=len(existing.device_names)
+            )
+        if not self._operations:
+            self._warnings.append("追加するエフェクトはありません（すべて載っています）")
+        return self._operations, self._conflicts, self._warnings
+
     def _guard_transport(self) -> None:
         if self._snapshot.is_recording:
             self._conflicts.append(
@@ -592,6 +661,10 @@ class _Builder:
                 self._plan_recipe_chain(track, part_recipe.chain, available)
                 continue
             device_name = live_device_catalog.suggest_instrument(track["part"])
+            patch = PART_INSTRUMENTS.get(track["part"])
+            if patch is not None and patch.device == device_name:
+                self._plan_recipe_chain(track, (patch,), available)
+                continue
             try:
                 live_device_catalog.resolve(device_name, available)
             except live_device_catalog.LiveDeviceUnavailableError:
@@ -639,10 +712,13 @@ class _Builder:
         track: dict[str, Any],
         chain: tuple[DeviceRecipe, ...],
         available: Any,
+        first_index: int = 0,
     ) -> None:
         """Insert each device of the recipe, then set its knobs by name.
 
-        The track is new and empty, so the n-th inserted device sits at index n.
+        Live appends an inserted device to the end of the chain, so on a track
+        holding ``first_index`` devices the n-th new one sits at index
+        ``first_index + n``.
         """
         for device in chain:
             try:
@@ -653,8 +729,8 @@ class _Builder:
                     "レシピのこの部分は使いません"
                 )
                 return
-        names: list[str] = []
-        for position, device in enumerate(chain):
+        names: list[str] = list(track["device_names"]) if first_index else []
+        for position, device in enumerate(chain, start=first_index):
             self._operations.append(
                 LiveMutationOperation(
                     operation_id=self._next_id(OP_LOAD_LIVE_DEVICE),

@@ -103,7 +103,7 @@ def test_protocol_name_and_versions_match(source: str) -> None:
     assert _js_constant(source, "PROTOCOL_NAME") == PROTOCOL_NAME
     assert _js_number(source, "PROTOCOL_VERSION") == PROTOCOL_VERSION
     assert _js_number(source, "SCHEMA_VERSION") == SCHEMA_VERSION
-    assert _js_constant(source, "DEVICE_VERSION") == "kihachi-live-device/0.3.1"
+    assert _js_constant(source, "DEVICE_VERSION") == "kihachi-live-device/0.3.2"
     assert 'call("get_version_string")' in source
     assert "include_session_clips" in source
 

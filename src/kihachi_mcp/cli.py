@@ -101,7 +101,74 @@ def _parser() -> argparse.ArgumentParser:
         if name == "execute":
             step.add_argument("--yes", action="store_true", help="確認の質問を省略する")
         step.set_defaults(handler=_ableton_live, step=name)
+    effects = steps.add_parser(
+        "effects",
+        help="送信済みトラックの後ろにパートごとのEQ・コンプ・リバーブ等を追加します",
+    )
+    effects.add_argument("project")
+    effects.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    effects.set_defaults(handler=_ableton_effects)
+    probe = steps.add_parser(
+        "probe-devices",
+        help="エフェクトを専用トラックに1つずつ入れ、つまみの名前を読んで保存します",
+    )
+    probe.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    probe.set_defaults(handler=_probe_devices)
     return parser
+
+
+def _ableton_effects(args: argparse.Namespace) -> int:
+    candidate_id = _resolve(_runtime(), args.project)
+    if not studio_running():
+        print(NOT_RUNNING, file=sys.stderr)
+        return 1
+    preview = studio_post("/api/ableton/effects", {"candidate_id": candidate_id})
+    if not preview.get("ok"):
+        print(preview.get("error"), file=sys.stderr)
+        return 1
+    print(f"追加するエフェクト（{preview['operations']} 操作。既存のデバイスは変えません）")
+    for chain in preview["chains"]:
+        print(f"  {chain['track']}: {' → '.join(chain['devices'])}")
+    for line in preview.get("warnings") or []:
+        print(f"  ! {line}")
+    if not args.yes:
+        answer = input("\nこの内容でLiveへ1回だけ送ります。よろしいですか？ [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("送信しませんでした。")
+            return 1
+    result = studio_post(
+        "/api/ableton/effects",
+        {"candidate_id": candidate_id, "confirmed": True},
+        timeout=SEND_TIMEOUT_SECONDS,
+    )
+    receipt = result.get("receipt") or {}
+    print(f"\n結果: {receipt.get('status') or result.get('error')}")
+    return 0 if result.get("ok") else 1
+
+
+def _probe_devices(args: argparse.Namespace) -> int:
+    if not studio_running():
+        print(NOT_RUNNING, file=sys.stderr)
+        return 1
+    if not args.yes:
+        answer = input(
+            "Liveに「KIHACHI Device Probe [KIHACHI]」を作り、純正エフェクトを入れて"
+            "つまみの名前を読みます。よろしいですか？ [y/N] "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            print("実行しませんでした。")
+            return 1
+    result = studio_post(
+        "/api/ableton/probe-devices", {"confirmed": True}, timeout=SEND_TIMEOUT_SECONDS
+    )
+    for name, count in (result.get("devices") or {}).items():
+        print(f"  {name:<16} {count} パラメータ")
+    for line in [*(result.get("warnings") or []), *(result.get("errors") or [])]:
+        print(f"  ! {line}")
+    if not result.get("ok"):
+        print(f"結果: {result.get('error') or '一部を読めませんでした'}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _runtime() -> StudioRuntime:

@@ -101,6 +101,21 @@ def execute_ableton_plan(
     )
 
 
+def apply_ableton_effects(candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
+    """Add each part's EQ, compressor, reverb and other effects after its instrument.
+
+    Without confirmed=True this only lists what would be added. Confirmed, it
+    sends once; devices already on a track are never changed or removed.
+    """
+    if not confirmed:
+        return studio_post("/api/ableton/effects", {"candidate_id": candidate_id})
+    return studio_post(
+        "/api/ableton/effects",
+        {"candidate_id": candidate_id, "confirmed": True},
+        timeout=SEND_TIMEOUT_SECONDS,
+    )
+
+
 def verify_ableton_project(candidate_id: str) -> dict[str, Any]:
     """Read tempo, tracks, clips, notes and arrangement back from Live and compare."""
     return studio_post("/api/ableton/verify", {"candidate_id": candidate_id})

@@ -12,6 +12,7 @@ from typing import Any
 from kihachi_mcp.models.live_contract import SCHEMA_VERSION
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.services.live_transport import (
+    METHOD_GET_DEVICE_PARAMETERS,
     METHOD_GET_DRUM_RACK_SUMMARY,
     METHOD_GET_STATE,
     METHOD_PING,
@@ -112,6 +113,24 @@ class LiveStateInspector:
                 f"minimum {MIN_SUPPORTED_LIVE_MAJOR}; KIHACHI will not mutate it"
             )
         return snapshot
+
+    def device_parameters(
+        self, device_index: int, track_index: int | None = None, displays: bool = False
+    ) -> dict[str, Any]:
+        """Read every parameter name, range and switch item of one device.
+
+        ``track_index=None`` reads the Master track. ``displays`` adds what
+        the dial shows at eleven steps of each continuous range; it makes the
+        reply large, so it is for effects. Does not mutate Live.
+        """
+        target: dict[str, Any] = (
+            {"master": True} if track_index is None else {"track_index": track_index}
+        )
+        return self._exchange(
+            METHOD_GET_DEVICE_PARAMETERS,
+            self._next_request_id(),
+            {**target, "device_index": device_index, "displays": displays},
+        )
 
     def drum_rack_summary(self, track_index: int) -> dict[str, Any]:
         """Read Drum Rack pad occupancy for one track. Does not mutate Live."""

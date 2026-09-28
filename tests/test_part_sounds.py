@@ -7,6 +7,7 @@ from kihachi_mcp.knowledge.part_sounds import (
     PART_INSTRUMENTS,
     PART_MIX,
     at,
+    step,
 )
 from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
@@ -117,6 +118,28 @@ def test_master_chain_goes_after_existing_master_devices_and_keeps_them() -> Non
     assert all(track.get("mixer") is None for track in live.tracks)
 
     assert planner.create_master_plan(snapshot_of(transport)).operations == []
+
+
+def test_stepped_knobs_land_on_the_intended_step() -> None:
+    """Live 12.4.5 floored Glue Attack 0.8333 (4.9998 of 0..6) to 3 ms, not 10 ms."""
+    attack = step("Glue Compressor", "Attack", 5)
+    assert attack.expected == 0.8333
+    assert int(attack.value * 6) == 5
+    assert step("Glue Compressor", "Release", 6).value == 1.0
+
+
+def test_retune_resets_the_chain_it_added_and_refuses_anything_else() -> None:
+    live = FakeLiveSet(live_version="12.4.5")
+    transport = FakeLiveTransport(live)
+    planner = CandidateLivePlanner()
+    assert _run(transport, planner.create_master_plan(snapshot_of(transport))).status == "verified"
+    retune = planner.create_master_plan(snapshot_of(transport), retune=True)
+    assert {op.op for op in retune.operations} == {OP_SET_DEVICE_PARAMETER}
+    assert _run(transport, retune).status == "verified"
+
+    live.master["device_names"].append("Spectrum")
+    refused = planner.create_master_plan(snapshot_of(transport), retune=True)
+    assert refused.status == "blocked"
 
 
 def test_master_is_refused_while_live_records() -> None:

@@ -248,16 +248,42 @@ class CandidateLivePlanner:
         """Plan fader and pan settings on tracks an earlier apply created."""
         return self._stage_plan(candidate, snapshot, "mix")
 
-    def create_master_plan(self, snapshot: LiveStateSnapshot) -> LiveMutationPlan:
+    def create_master_plan(
+        self, snapshot: LiveStateSnapshot, retune: bool = False
+    ) -> LiveMutationPlan:
         """Append the club mastering chain to the master track.
 
         Devices already on the master stay where they are and are never
         changed; a chain device that is already there is not added twice.
+        ``retune`` sets the chain's knobs again, and only when the master ends
+        with exactly this chain, which is how an earlier run left it.
         """
         conflicts = _transport_conflicts(snapshot)
         operations: list[LiveMutationOperation] = []
         warnings: list[str] = []
         present = list(snapshot.master_device_names)
+        chain = [recipe.device for recipe in MASTER_CHAIN]
+        if retune:
+            if present[-len(chain):] != chain:
+                conflicts.append(
+                    LiveConflict(
+                        "master_chain_not_found",
+                        "マスターの最後が KIHACHI のマスタリング "
+                        f"（{' → '.join(chain)}）ではないため、つまみは変えません",
+                    )
+                )
+            start = len(present) - len(chain)
+            for offset, recipe in enumerate(MASTER_CHAIN):
+                for setting in recipe.settings:
+                    operations.append(
+                        _master_parameter_operation(
+                            f"{len(operations) + 1:03d}-{OP_SET_DEVICE_PARAMETER}",
+                            start + offset,
+                            recipe.device,
+                            setting,
+                        )
+                    )
+            return self._master_plan(snapshot, operations, conflicts, warnings, "master_retune")
         missing = [recipe for recipe in MASTER_CHAIN if recipe.device not in present]
         available = snapshot.available_device_names()
         unavailable = [
@@ -304,13 +330,23 @@ class CandidateLivePlanner:
                     )
             if not missing and not unavailable:
                 warnings.append("マスタリングのデバイスはすべて載っています")
+        return self._master_plan(snapshot, operations, conflicts, warnings, "master")
+
+    def _master_plan(
+        self,
+        snapshot: LiveStateSnapshot,
+        operations: list[LiveMutationOperation],
+        conflicts: list[LiveConflict],
+        warnings: list[str],
+        kind: str,
+    ) -> LiveMutationPlan:
         request_id = self._request_id_factory()
         return LiveMutationPlan(
             request_id=request_id,
             idempotency_key=canonical_hash(
                 {
                     "request_id": request_id,
-                    "kind": "master",
+                    "kind": kind,
                     "set_fingerprint": snapshot.set_fingerprint,
                 }
             ),
@@ -1111,7 +1147,7 @@ def _master_parameter_operation(
         readback["item"] = setting.item
     else:
         arguments["value"] = setting.value
-        readback["normalized_value"] = round(float(setting.value), 3)
+        readback["normalized_value"] = round(setting.expected, 3)
     return LiveMutationOperation(
         operation_id=operation_id,
         op=OP_SET_DEVICE_PARAMETER,
@@ -1148,7 +1184,7 @@ def _parameter_operation(
     else:
         arguments["value"] = setting.value
         # The device reads back to three decimals; Live stores 0.35 as 0.3499.
-        readback["normalized_value"] = round(float(setting.value), 3)
+        readback["normalized_value"] = round(setting.expected, 3)
     return LiveMutationOperation(
         operation_id=operation_id,
         op=OP_SET_DEVICE_PARAMETER,

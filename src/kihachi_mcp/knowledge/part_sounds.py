@@ -75,6 +75,23 @@ def value(device: str, name: str, amount: float) -> Setting:
     return Setting(name, value=amount)
 
 
+def step(device: str, name: str, index: int) -> Setting:
+    """Step ``index`` of a knob that moves in whole steps over min..max.
+
+    Live floors a stepped knob, and 5/6 in floating point lands just under
+    step 5, so this aims at the middle of the step and expects its start.
+    """
+    parameter = _parameter(device, name)
+    span = round(float(parameter["max"]) - float(parameter["min"]))
+    if not 0 <= index <= span:
+        raise ValueError(f"{device} {name} has steps 0..{span}")
+    return Setting(
+        name,
+        value=min(1.0, round((index + 0.5) / span, 4)),
+        lands_at=round(index / span, 4),
+    )
+
+
 def _eq(high_pass_hz: float, low_pass_hz: float | None = None) -> DeviceRecipe:
     """Band 1 as a 12 dB high-pass; band 8 as a 12 dB low-pass when asked."""
     eq = "EQ Eight"
@@ -198,8 +215,8 @@ PART_MIX: dict[str, tuple[float, float]] = {
 }
 
 #: Club mastering on the master track, first to last. Glue Compressor's
-#: Attack, Ratio and Release move in steps (0..6, 0..2, 0..6), so those are
-#: positions: Attack 5/6 = 10 ms, Ratio 0 = 2:1, Release 1.0 = Auto.
+#: Attack, Ratio and Release move in steps: Attack 0.01/0.1/0.3/1/3/10/30 ms,
+#: Ratio 2/4/10, Release 0.1/0.2/0.4/0.6/0.8/1.2 s/Auto.
 MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
     DeviceRecipe(
         "EQ Eight",
@@ -212,9 +229,9 @@ MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
         "Glue Compressor",
         (
             at("Glue Compressor", "Threshold", -12),
-            value("Glue Compressor", "Ratio", 0.0),
-            value("Glue Compressor", "Attack", round(5 / 6, 4)),
-            value("Glue Compressor", "Release", 1.0),
+            step("Glue Compressor", "Ratio", 0),
+            step("Glue Compressor", "Attack", 5),
+            step("Glue Compressor", "Release", 6),
         ),
     ),
     _saturator(2, "Soft Sine", 30),

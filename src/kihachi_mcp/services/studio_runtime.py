@@ -1134,11 +1134,12 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
-    def apply_master(self, confirmed: bool = False) -> dict[str, Any]:
+    def apply_master(self, confirmed: bool = False, retune: bool = False) -> dict[str, Any]:
         """Append the club mastering chain to the Set's master track.
 
         Unconfirmed, this lists the master's current devices and what would
         follow them. Confirmed, it sends once. Nothing on the master is removed.
+        ``retune`` re-sets the knobs of a chain an earlier run added.
         """
         if not self._apply_lock.acquire(blocking=False):
             return {"ok": False, "error": "別のLive適用が実行中です"}
@@ -1146,7 +1147,7 @@ class StudioRuntime:
             snapshot, failure = self._snapshot()
             if snapshot is None:
                 return failure or {"ok": False, "error": "Live状態を取得できません"}
-            plan = self._planner.create_master_plan(snapshot)
+            plan = self._planner.create_master_plan(snapshot, retune=retune)
             if plan.status == "blocked":
                 return {
                     "ok": False,
@@ -1213,7 +1214,7 @@ class StudioRuntime:
                     actual = _setting_reading(observed.get(setting.parameter), setting)
                     wanted = setting.item if setting.item is not None else setting.value
                     if setting.item is None and isinstance(actual, float):
-                        drift = round(abs(actual - float(setting.value)), 4)
+                        drift = round(abs(actual - setting.expected), 4)
                         if drift > largest["drift"]:
                             largest = {
                                 "drift": drift,
@@ -1224,7 +1225,7 @@ class StudioRuntime:
                     if actual != wanted and not (
                         setting.item is None
                         and isinstance(actual, float)
-                        and abs(actual - float(setting.value)) <= 0.0015
+                        and abs(actual - setting.expected) <= 0.0015
                     ):
                         differences.append(
                             {

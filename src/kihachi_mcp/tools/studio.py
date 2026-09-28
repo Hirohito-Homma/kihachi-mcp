@@ -130,15 +130,20 @@ def apply_ableton_mix(candidate_id: str, confirmed: bool = False) -> dict[str, A
     )
 
 
-def apply_ableton_master(confirmed: bool = False) -> dict[str, Any]:
+def apply_ableton_master(confirmed: bool = False, retune: bool = False) -> dict[str, Any]:
     """Append club mastering (EQ, Glue, Saturator, Utility, Limiter) to the master track.
 
     Without confirmed=True this only lists the master's devices and what would
     be added after them. Confirmed, it sends once; nothing is removed.
+    retune=True sets the knobs of a chain an earlier run added, again.
     """
     if not confirmed:
-        return studio_post("/api/ableton/master", {})
-    return studio_post("/api/ableton/master", {"confirmed": True}, timeout=SEND_TIMEOUT_SECONDS)
+        return studio_post("/api/ableton/master", {"retune": retune})
+    return studio_post(
+        "/api/ableton/master",
+        {"confirmed": True, "retune": retune},
+        timeout=SEND_TIMEOUT_SECONDS,
+    )
 
 
 def verify_ableton_project(candidate_id: str) -> dict[str, Any]:

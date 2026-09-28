@@ -9,6 +9,7 @@ It is not a Live emulator. Passing tests against this simulator do not mean the
 Max device has been verified on a real machine.
 """
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,15 @@ class FakeLiveSet:
     #: Parameter lists by device name, in the shape device_probe saves.
     device_parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
     master: dict[str, Any] = field(default_factory=lambda: {"device_names": []})
+    #: Knobs Live moves in whole steps, by (device, parameter): the step count.
+    #: Live floors a value set between steps, as Glue Compressor did in 12.4.5.
+    stepped: dict[tuple[str, str], int] = field(
+        default_factory=lambda: {
+            ("Glue Compressor", "Attack"): 6,
+            ("Glue Compressor", "Ratio"): 2,
+            ("Glue Compressor", "Release"): 6,
+        }
+    )
 
     def add_track(
         self, name: str, track_type: str = "midi", color: str = ""
@@ -542,7 +552,11 @@ class FakeLiveTransport:
                 readback["item"] = store[name]
                 readback["normalized_value"] = 0.0
             else:
-                store[name] = round(float(arguments.get("value") or 0.0), 3)
+                amount = float(arguments.get("value") or 0.0)
+                span = live.stepped.get((str(arguments.get("device_name")), name))
+                if span:
+                    amount = math.floor(amount * span + 1e-9) / span
+                store[name] = round(amount, 3)
                 readback["normalized_value"] = store[name]
             return readback
 

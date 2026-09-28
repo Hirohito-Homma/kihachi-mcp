@@ -30,6 +30,13 @@ class Setting:
     value: float | None = None
     #: One of the parameter's value_items, for a switch.
     item: str | None = None
+    #: Where Live settles for a stepped knob, which floors ``value`` to a step.
+    lands_at: float | None = None
+
+    @property
+    def expected(self) -> float:
+        """The 0..1 position Live reads back after ``value`` is set."""
+        return float(self.lands_at if self.lands_at is not None else self.value)
 
     def __post_init__(self) -> None:
         if (self.value is None) == (self.item is None):

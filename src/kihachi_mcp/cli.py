@@ -116,6 +116,9 @@ def _parser() -> argparse.ArgumentParser:
         "master", help="マスタートラックの既存デバイスの後ろにクラブ向けマスタリングを追加します"
     )
     master.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    master.add_argument(
+        "--retune", action="store_true", help="以前追加したマスタリングのつまみを設定し直す"
+    )
     master.set_defaults(handler=_ableton_master)
     probe = steps.add_parser(
         "probe-devices",
@@ -167,12 +170,16 @@ def _ableton_master(args: argparse.Namespace) -> int:
     if not studio_running():
         print(NOT_RUNNING, file=sys.stderr)
         return 1
-    preview = studio_post("/api/ableton/master", {})
+    body = {"retune": args.retune}
+    preview = studio_post("/api/ableton/master", body)
     if not preview.get("ok"):
         print(preview.get("error"), file=sys.stderr)
         return 1
     existing = " → ".join(preview["existing"]) or "（なし）"
-    print(f"マスター: {existing} の後ろに {' → '.join(preview['added'])} を追加（{preview['operations']} 操作）")
+    if args.retune:
+        print(f"マスター: {existing} のマスタリングのつまみを設定し直します（{preview['operations']} 操作）")
+    else:
+        print(f"マスター: {existing} の後ろに {' → '.join(preview['added'])} を追加（{preview['operations']} 操作）")
     for line in preview.get("warnings") or []:
         print(f"  ! {line}")
     if not args.yes:
@@ -180,7 +187,9 @@ def _ableton_master(args: argparse.Namespace) -> int:
         if answer not in {"y", "yes"}:
             print("送信しませんでした。")
             return 1
-    result = studio_post("/api/ableton/master", {"confirmed": True}, timeout=SEND_TIMEOUT_SECONDS)
+    result = studio_post(
+        "/api/ableton/master", {**body, "confirmed": True}, timeout=SEND_TIMEOUT_SECONDS
+    )
     receipt = result.get("receipt") or {}
     print(f"\n結果: {receipt.get('status') or result.get('error')}")
     for item in receipt.get("mismatches") or []:

@@ -7,6 +7,7 @@ from dataclasses import replace
 from random import Random
 from typing import Any
 
+from kihachi_mcp.knowledge.genre_database import find as find_genre
 from kihachi_mcp.knowledge.genre_profiles import (
     RIDE,
     bass_role,
@@ -49,6 +50,39 @@ HAT_PITCHES = frozenset({HAT_PITCH, OPEN_HAT_PITCH, RIDE})
 SNARE_PITCHES = frozenset({37, 38, CLAP_PITCH})
 #: Written by a generator of their own, after the original parts.
 _GENERATED_EXTRAS = ("Perc", "Pad", "Arp", "Vocal", "FX", "Guitar", "Horn")
+_BAND_FAMILIES = frozenset(
+    {
+        "R&B / Soul / Funk",
+        "Disco",
+        "Jazz",
+        "Blues",
+        "Brazilian",
+        "Latin",
+        "Rock",
+        "Punk / Hardcore",
+        "Metal",
+        "Country / Americana",
+        "Folk",
+        "Reggae / Dub / Ska",
+        "Hip-Hop / Rap",
+    }
+)
+#: Parts only some families play, and the families besides the band ones.
+#: Funk guitar and brass in a tech house track crowd the groove.
+_FAMILY_PARTS = {
+    "Guitar": frozenset(),
+    "Horn": frozenset(),
+    "Vocal": frozenset({"House", "UK Garage / Bass", "EDM / Future Bass"}),
+}
+#: Words that ask for a part the genre would leave out.
+_PART_WORDS = {
+    "Guitar": ("ギター", "guitar"),
+    "Horn": ("ホーン", "ブラス", "horn", "brass"),
+    "Vocal": ("ボイス", "ボーカルチョップ", "vocal chop"),
+}
+# Scale degrees for the Break, ending on the chord that leads back to i or I.
+_BREAK_MINOR = (5, 6, 3, 4)
+_BREAK_MAJOR = (3, 4, 5, 4)
 #: The sub sits in this octave whatever register the bass plays in.
 SUB_LOWEST_PITCH = 24
 MAX_CLIP_BARS = 16
@@ -131,7 +165,10 @@ def build_candidate(
     )
     song: dict[str, list[MidiNote]] = {}
     for part in (*parts, *_GENERATED_EXTRAS):
-        song[part] = _notes_for_part(part, brief, bars, beats, rng, progression)
+        # Generated even when left out, so the parts after it keep their draws.
+        notes = _notes_for_part(part, brief, bars, beats, rng, progression)
+        if _genre_plays(part, brief):
+            song[part] = notes
     song.update(_split_drums(song.pop("Hats")))
     song["Sub"] = _sub_notes(song["Bass"], brief, beats)
     for part in PART_ORDER:
@@ -168,6 +205,18 @@ def seed_from_brief(text: str) -> int:
     """Return the default seed for a brief so identical input is reproducible."""
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return int(digest[:8], 16)
+
+
+def _genre_plays(part: str, brief: ProductionBrief) -> bool:
+    """Whether the genre's family plays this part, or the brief asks for it."""
+    if part not in _FAMILY_PARTS:
+        return True
+    genre = find_genre(str(brief.genre.value))
+    family = genre.family if genre is not None else ""
+    if family in _BAND_FAMILIES or family in _FAMILY_PARTS[part]:
+        return True
+    text = brief.original_text.lower()
+    return any(word in text for word in _PART_WORDS[part])
 
 
 def _resolve_seed(text: str, seed: int | None) -> int:
@@ -394,8 +443,13 @@ class _SongPlan:
         }
         self.scale = _MINOR_SCALE if self.minor else _MAJOR_SCALE
         self.progression = progression
+        self.break_progression = _BREAK_MINOR if self.minor else _BREAK_MAJOR
         self.breakdown = _breakdown_bars(brief)
         self._sections = tuple(brief.sections)
+        self._first_drop = next(
+            (section.start_bar for section in self._sections if section.name == "Drop"),
+            0,
+        )
         # What the genre's family plays. An unknown genre gets four on the
         # floor with offbeat stabs, which is what every genre used to get.
         self.profile = profile_for(str(brief.genre.value))
@@ -424,6 +478,15 @@ class _SongPlan:
 
     def bar(self, number: int) -> _Bar:
         return _Bar(self, number)
+
+    def second_drop(self, bar: _Bar) -> bool:
+        """A Drop after the Break: the return, which should give a little more."""
+        section = self.section_of(bar.number)
+        return (
+            bar.section == "Drop"
+            and section is not None
+            and section.start_bar > self._first_drop
+        )
 
     def energy(self, bar: _Bar) -> float:
         """How much of each pattern plays: low in the Intro, full in the Drop."""
@@ -467,6 +530,12 @@ class _SongPlan:
                 return (3, 4)[(bar.in_section // 4) % 2]
             if bar.section == "Break":
                 return 4 if bar.left_in_section < 2 else 0
+        if bar.section == "Break":
+            # Away from the loop the Drops play, and back towards its tonic.
+            lift = self.break_progression
+            length = bar.in_section + bar.left_in_section + 1
+            bars_per_chord = max(1, length // len(lift))
+            return lift[len(lift) - 1 - (bar.left_in_section // bars_per_chord) % len(lift)]
         in_drop = bar.section in {"Drop", "ChorusA", "ChorusB"} and not bar.breakdown
         bars_per_chord = self.harmonic_rhythm * (1 if in_drop else 2)
         index = (bar.in_section // bars_per_chord) % len(self.progression)
@@ -1057,7 +1126,8 @@ def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
             orders[key] = plan.rng.choice(_ARP_ORDERS)
         order = orders[key]
         degree = plan.chord_degree(bar)
-        tones = [tonic + plan.degree_offset(degree + k) for k in (0, 2, 4, 7)]
+        lift = 12 if plan.second_drop(bar) else 0
+        tones = [tonic + lift + plan.degree_offset(degree + k) for k in (0, 2, 4, 7)]
         count = int(plan.beats / step)
         for index in range(count):
             base = 84 if index % 4 == 0 else 60

@@ -1,4 +1,5 @@
 import hashlib
+from itertools import pairwise
 
 from kihachi_mcp.models.production_brief import (
     ARRANGEMENT_PARTS,
@@ -32,9 +33,13 @@ BRIEF = (
 )
 
 
-def _brief():
+#: Where the Drops of BRIEF fall, around the Break at 73-76.
+DROP_BARS = (*range(57, 73), *range(77, 93))
+
+
+def _brief(text: str = BRIEF):
     return assemble_brief(
-        extract_explicit(BRIEF),
+        extract_explicit(text),
         {
             "genre": "tech_house",
             "tempo": 125,
@@ -136,7 +141,7 @@ def test_the_kick_drops_out_for_a_breakdown_before_the_drop() -> None:
 
 def test_the_drop_has_a_clap_on_two_and_four() -> None:
     hats = _bars(build_candidate(_brief(), seed=5), "Snare", {CLAP_PITCH})
-    for bar in range(57, 81):
+    for bar in DROP_BARS:
         offsets = {offset for offset, _pitch in hats[bar]}
         assert {1.0, 3.0} <= offsets
 
@@ -152,8 +157,8 @@ def test_the_intro_starts_with_the_kick_alone() -> None:
 
 def test_phrase_ends_are_marked_by_a_fill() -> None:
     kick = _bars(build_candidate(_brief(), seed=5), "Kick")
-    # Bar 72 closes the Drop's first 16-bar phrase; bar 71 is an ordinary bar.
-    assert kick[72] != kick[71]
+    # Bar 32 closes the groove's first 16-bar phrase; bar 31 is an ordinary bar.
+    assert kick[32] != kick[31]
     hats = _bars(build_candidate(_brief(), seed=5), "Hats", {HAT_PITCH})
     assert hats[64] != hats[63]
 
@@ -182,7 +187,7 @@ def test_the_drop_is_not_one_bar_repeated() -> None:
     candidate = build_candidate(_brief(), seed=5)
     for part in ("Hats", "Bass", "Stab"):
         bars = _bars(candidate, part)
-        distinct = {bars[bar] for bar in range(57, 81) if bar in bars}
+        distinct = {bars[bar] for bar in DROP_BARS if bar in bars}
         assert len(distinct) >= 3, part
 
 
@@ -220,22 +225,34 @@ def test_the_bass_stays_in_its_register() -> None:
     assert min(pitches) >= 12
 
 
-def test_every_arrangement_part_is_written_in_track_order() -> None:
+def test_every_part_the_genre_plays_is_written_in_track_order() -> None:
     candidate = build_candidate(_brief(), seed=5)
-    assert candidate.parts == tuple(part for part in PART_ORDER if part != "Lead")
-    assert "Lead" not in candidate.parts  # still mutation_funk only
+    left_out = {"Lead", "Guitar", "Horn", "Vocal"}
+    assert candidate.parts == tuple(part for part in PART_ORDER if part not in left_out)
+
+
+def test_a_brief_that_asks_for_a_part_gets_it() -> None:
+    candidate = build_candidate(_brief(BRIEF + "。ギターとホーンも入れて"), seed=5)
+    assert {"Guitar", "Horn"} <= set(candidate.parts)
+    assert "Vocal" not in candidate.parts
+
+
+def test_leaving_a_part_out_keeps_the_others_note_for_note() -> None:
+    plain = build_candidate(_brief(), seed=5)
+    asked = build_candidate(_brief(BRIEF + "。ギターとホーンも入れて"), seed=5)
+    for part in plain.parts:
+        assert _part_notes(plain, part) == _part_notes(asked, part), part
 
 
 def test_guitar_cuts_sixteenths_and_the_horn_stabs_at_the_peaks() -> None:
-    candidate = build_candidate(_brief(), seed=5)
+    candidate = build_candidate(_brief(BRIEF + "。ギターとホーンも入れて"), seed=5)
     beats = candidate.brief.beats_per_bar
     guitar = _part_notes(candidate, "Guitar")
     horn = _part_notes(candidate, "Horn")
     assert guitar and horn
     assert all(round(beat * 4, 6) == round(beat * 4) for beat, *_ in guitar)
     assert {velocity < 60 for *_, velocity in guitar} == {True, False}, "muted and open"
-    drop = range(57, 97)
-    assert all(_bar_of(beat, beats) in drop for beat, *_ in horn)
+    assert all(_bar_of(beat, beats) in DROP_BARS for beat, *_ in horn)
     d_minor = {2, 4, 5, 7, 9, 10, 0}
     for notes in (guitar, horn):
         assert {pitch % 12 for _beat, pitch, _velocity in notes} <= d_minor
@@ -258,12 +275,12 @@ def _digest(candidate, parts) -> str:
 
 
 def test_new_parts_leave_the_original_four_note_for_note() -> None:
-    """Digests taken before the new parts existed, when Hats held the clap."""
+    """Digests retaken when the song gained its Break and second Drop."""
     candidate = build_candidate(_brief(), seed=5)
-    assert _digest(candidate, ["Kick"]) == "c90869c03358bf75"
-    assert _digest(candidate, ["Hats", "Snare", "OpenHat"]) == "f55e567fcd364dd1"
-    assert _digest(candidate, ["Bass"]) == "fff5ca50a2e51fb5"
-    assert _digest(candidate, ["Stab"]) == "592b603ad2396ede"
+    assert _digest(candidate, ["Kick"]) == "736ae1d6d4ad9349"
+    assert _digest(candidate, ["Hats", "Snare", "OpenHat"]) == "3a18de034441f1e5"
+    assert _digest(candidate, ["Bass"]) == "85eb376ee4a0b14e"
+    assert _digest(candidate, ["Stab"]) == "4b37f36f71950fc8"
     snare = {pitch for _beat, pitch, _velocity in _part_notes(candidate, "Snare")}
     assert snare <= SNARE_PITCHES
 
@@ -310,7 +327,7 @@ def test_the_riser_ends_on_the_drop_and_the_impact_lands_on_it() -> None:
 
 
 def test_arp_and_vocal_play_chord_tones_at_the_peaks_only() -> None:
-    candidate = build_candidate(_brief(), seed=5)
+    candidate = build_candidate(_brief(BRIEF + "。ボーカルチョップも"), seed=5)
     beats = candidate.brief.beats_per_bar
     intro = range(1, 17)
     for part in ("Arp", "Vocal"):
@@ -321,3 +338,70 @@ def test_arp_and_vocal_play_chord_tones_at_the_peaks_only() -> None:
         d_minor = {2, 4, 5, 7, 9, 10, 0}
         assert pitch_classes <= d_minor
 
+
+
+def test_a_song_for_listening_breaks_between_two_drops() -> None:
+    sections = [
+        (section.name, section.start_bar, section.end_bar)
+        for section in build_candidate(_brief(), seed=5).brief.sections
+    ]
+    assert sections == [
+        ("Intro", 1, 16),
+        ("VerseA", 17, 40),
+        ("Build", 41, 56),
+        ("Drop", 57, 72),
+        ("Break", 73, 76),
+        ("Drop", 77, 92),
+        ("Outro", 93, 96),
+    ]
+
+
+def test_the_break_leaves_the_drop_loop_and_leads_back_to_the_tonic() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    pad: dict[int, set[int]] = {}
+    for beat, pitch, _velocity in _part_notes(candidate, "Pad"):
+        pad.setdefault(_bar_of(beat, beats), set()).add(pitch % 12)
+    break_chords = [frozenset(pad[bar]) for bar in range(73, 77)]
+    assert len(set(break_chords)) == 4
+    assert {10, 2, 5} <= break_chords[0]  # VI: B-flat major
+    assert {9, 0, 4} <= break_chords[-1]  # v: A minor, back to D minor next
+
+
+def test_the_arp_climbs_an_octave_when_the_drop_returns() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    arp = _part_notes(candidate, "Arp")
+    first = [pitch for beat, pitch, _v in arp if _bar_of(beat, beats) in range(57, 73)]
+    second = [pitch for beat, pitch, _v in arp if _bar_of(beat, beats) in range(77, 93)]
+    assert first and second
+    assert min(second) >= min(first) + 12
+
+
+def test_sections_for_a_64_bar_song_with_or_without_a_drop_bar() -> None:
+    from kihachi_mcp.services.studio_interpreter import build_sections
+
+    def shape(sections):
+        return [(section.name, section.start_bar, section.length_bars) for section in sections]
+
+    assert shape(build_sections(64, 33)) == [
+        ("Intro", 1, 16),
+        ("Build", 17, 16),
+        ("Drop", 33, 16),
+        ("Break", 49, 4),
+        ("Drop", 53, 8),
+        ("Outro", 61, 4),
+    ]
+    assert shape(build_sections(64, 0)) == [
+        ("Intro", 1, 8),
+        ("Build", 9, 8),
+        ("Drop", 17, 16),
+        ("Break", 33, 8),
+        ("Drop", 41, 16),
+        ("Outro", 57, 8),
+    ]
+    for bars, drop in ((16, 0), (32, 9), (48, 17), (128, 65), (96, 1)):
+        sections = build_sections(bars, drop)
+        assert sections[0].start_bar == 1 and sections[-1].end_bar == bars
+        for before, after in pairwise(sections):
+            assert after.start_bar == before.end_bar + 1

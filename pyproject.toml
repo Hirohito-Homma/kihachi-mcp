@@ -10,8 +10,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=4.0.3",
+    "numpy>=2.0,<3",
     "pyyaml>=6.0.3",
 ]
+
+[project.scripts]
+kihachi = "kihachi_mcp.cli:main"
 
 [dependency-groups]
 dev = [
@@ -36,3 +40,4 @@ packages = ["src/kihachi_mcp"]
 "src/kihachi_mcp/resources/genres/melodic_techno.yaml" = "kihachi_mcp/resources/genres/melodic_techno.yaml"
 "src/kihachi_mcp/resources/genre_database.json" = "kihachi_mcp/resources/genre_database.json"
 "src/kihachi_mcp/studio/static/index.html" = "kihachi_mcp/studio/static/index.html"
+"src/kihachi_mcp/studio/static/references.html" = "kihachi_mcp/studio/static/references.html"

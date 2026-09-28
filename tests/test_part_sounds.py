@@ -43,6 +43,16 @@ def test_every_setting_names_a_parameter_live_reported() -> None:
                 assert 0.0 <= setting.value <= 1.0
 
 
+def test_knob_positions_have_the_three_decimals_live_reads_back() -> None:
+    """Live 12.4.5 read a planned 0.3225 back as 0.322 and failed verification."""
+    recipes = [device for chain in PART_EFFECTS.values() for device in chain]
+    recipes += list(MASTER_CHAIN) + list(SIDECHAIN_DUCKING.values())
+    for recipe in recipes:
+        for setting in recipe.settings:
+            if setting.value is not None:
+                assert round(setting.value, 3) == setting.value, (recipe.device, setting)
+
+
 def test_dial_readings_convert_to_the_positions_live_showed() -> None:
     assert at("Compressor", "Threshold", -18).value == 0.4
     assert at("Hybrid Reverb", "Decay", 2320).value == 0.4

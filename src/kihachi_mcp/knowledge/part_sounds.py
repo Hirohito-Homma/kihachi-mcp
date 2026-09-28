@@ -62,7 +62,8 @@ def at(device: str, name: str, target: float) -> Setting:
             fraction = math.log(target / low) / math.log(high / low)
         else:
             fraction = (target - low) / (high - low)
-        return Setting(name, value=round((index + fraction) / steps, 4), shown=shown)
+        # Three decimals, as the device reads back: 0.3225 would come back 0.322.
+        return Setting(name, value=round((index + fraction) / steps, 3), shown=shown)
     raise ValueError(f"{device} {name}: {target} is outside {readings[0]}..{readings[-1]}")
 
 
@@ -96,7 +97,7 @@ def step(device: str, name: str, index: int) -> Setting:
     )
     return Setting(
         name,
-        value=min(1.0, round((index + 0.5) / span, 4)),
+        value=min(1.0, round((index + 0.5) / span, 3)),
         lands_at=round(index / span, 4),
         shown=shown,
     )

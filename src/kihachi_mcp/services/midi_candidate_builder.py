@@ -17,6 +17,17 @@ from kihachi_mcp.knowledge.genre_profiles import (
     profile_for,
     swung,
 )
+from kihachi_mcp.knowledge.music_theory import (
+    MINOR_MODES,
+    MODES,
+    Chord,
+    degree_offset,
+    diatonic,
+    fit_to_chord,
+    mode_from_text,
+    parse_numeral,
+    progressions_for,
+)
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.production_brief import (
@@ -144,16 +155,17 @@ def build_candidate(
     """Return one candidate whose preview notes are the apply notes."""
     resolved_seed = _resolve_seed(brief.original_text, seed)
     rng = Random(resolved_seed)
-    minor = is_minor(str(brief.key.value)) or str(brief.mood.value) in {
-        "暗い",
-        "ダーク",
-    }
-    progression = rng.choice(
-        _MUTATION_PROGRESSIONS
-        if str(brief.genre.value) == "mutation_funk" and minor
-        else _MINOR_PROGRESSIONS
-        if minor
-        else _MAJOR_PROGRESSIONS
+    minor = _is_minor_brief(brief)
+    styled = progressions_for(profile_for(str(brief.genre.value)).harmony or "", minor)
+    progression: tuple[int, ...] | tuple[str, ...] = rng.choice(
+        styled
+        or (
+            _MUTATION_PROGRESSIONS
+            if str(brief.genre.value) == "mutation_funk" and minor
+            else _MINOR_PROGRESSIONS
+            if minor
+            else _MAJOR_PROGRESSIONS
+        )
     )
     beats = brief.beats_per_bar
     bars = int(brief.bars.value)
@@ -205,6 +217,18 @@ def seed_from_brief(text: str) -> int:
     """Return the default seed for a brief so identical input is reproducible."""
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return int(digest[:8], 16)
+
+
+def _is_minor_brief(brief: ProductionBrief) -> bool:
+    mode = _mode_of(brief)
+    if mode is not None:
+        return mode in MINOR_MODES
+    return is_minor(str(brief.key.value)) or str(brief.mood.value) in {"暗い", "ダーク"}
+
+
+def _mode_of(brief: ProductionBrief) -> str | None:
+    """The mode the brief names, else the genre's own, else none stated."""
+    return mode_from_text(brief.original_text) or profile_for(str(brief.genre.value)).mode
 
 
 def _genre_plays(part: str, brief: ProductionBrief) -> bool:
@@ -437,12 +461,15 @@ class _SongPlan:
         self.steps = max(1, round(beats * 4))
         self.rng = rng
         self.density = str(brief.note_density.value)
-        self.minor = is_minor(str(brief.key.value)) or str(brief.mood.value) in {
-            "暗い",
-            "ダーク",
-        }
-        self.scale = _MINOR_SCALE if self.minor else _MAJOR_SCALE
-        self.progression = progression
+        self.minor = _is_minor_brief(brief)
+        mode = _mode_of(brief)
+        self.scale = (
+            MODES[mode] if mode else _MINOR_SCALE if self.minor else _MAJOR_SCALE
+        )
+        self.progression = tuple(
+            parse_numeral(item, self.scale) if isinstance(item, str) else self.diatonic(item)
+            for item in progression
+        )
         self.break_progression = _BREAK_MINOR if self.minor else _BREAK_MAJOR
         self.breakdown = _breakdown_bars(brief)
         self._sections = tuple(brief.sections)
@@ -519,37 +546,47 @@ class _SongPlan:
         """An absolute beat for an offset in the bar, swung if the genre swings."""
         return round(bar.start + swung(offset, self.swing), 6)
 
-    def chord_degree(self, bar: _Bar) -> int:
-        """Return the scale degree the harmony sits on in this bar."""
+    def chord_at(self, bar: _Bar) -> Chord:
+        """Return the chord the harmony sits on in this bar."""
         if bar.section in {"Intro", "Outro"} and not bar.breakdown:
-            return 0
+            return self.diatonic(0)
         if self.profile.drum_pattern == "mutation_funk":
             if bar.section == "VerseA":
-                return (0, 5)[(bar.in_section // 4) % 2]
+                return self.diatonic((0, 5)[(bar.in_section // 4) % 2])
             if bar.section == "VerseB":
-                return (3, 4)[(bar.in_section // 4) % 2]
+                return self.diatonic((3, 4)[(bar.in_section // 4) % 2])
             if bar.section == "Break":
-                return 4 if bar.left_in_section < 2 else 0
+                return self.diatonic(4 if bar.left_in_section < 2 else 0)
         if bar.section == "Break":
             # Away from the loop the Drops play, and back towards its tonic.
             lift = self.break_progression
             length = bar.in_section + bar.left_in_section + 1
             bars_per_chord = max(1, length // len(lift))
-            return lift[len(lift) - 1 - (bar.left_in_section // bars_per_chord) % len(lift)]
+            return self.diatonic(
+                lift[len(lift) - 1 - (bar.left_in_section // bars_per_chord) % len(lift)]
+            )
         in_drop = bar.section in {"Drop", "ChorusA", "ChorusB"} and not bar.breakdown
         bars_per_chord = self.harmonic_rhythm * (1 if in_drop else 2)
         index = (bar.in_section // bars_per_chord) % len(self.progression)
         return self.progression[index]
 
+    def diatonic(self, degree: int) -> Chord:
+        return diatonic(self.scale, degree)
+
     def degree_offset(self, degree: int) -> int:
         """Semitones from the tonic to a scale degree, wrapping upward."""
-        octave, step = divmod(degree, len(self.scale))
-        return self.scale[step] + 12 * octave
+        return degree_offset(self.scale, degree)
 
-    def nearest_degree_offset(self, degree: int) -> int:
-        """The same degree folded to within a fifth of the tonic, for the bass."""
-        offset = self.degree_offset(degree) % 12
+    @staticmethod
+    def folded_root(chord: Chord) -> int:
+        """The chord root folded to within a fifth of the tonic, for the bass."""
+        offset = chord.root % 12
         return offset - 12 if offset > 6 else offset
+
+    def melody_pitch(self, tonic: int, chord: Chord, steps: int) -> int:
+        """A scale step above the chord's degree, pulled onto a borrowed chord tone."""
+        pitch = tonic + self.degree_offset(chord.degree + steps)
+        return fit_to_chord(pitch, tonic, chord, self.scale)
 
     def velocity(self, base: int, spread: int = 5) -> int:
         return max(1, min(127, base + self.rng.randint(-spread, spread)))
@@ -806,7 +843,8 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
     motifs: dict[tuple[str, int], tuple[int, ...]] = {}
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
-        chord_root = root + plan.nearest_degree_offset(plan.chord_degree(bar))
+        chord = plan.chord_at(bar)
+        chord_root = root + plan.folded_root(chord)
         if bar.breakdown:
             notes.append(MidiNote(chord_root, bar.start, plan.beats * 0.95, 92))
             continue
@@ -844,8 +882,10 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
             interval = motif[index % len(motif)]
             if bar.phrase_end and index >= len(steps) - 2:
                 interval = 12  # lift at the end of a phrase
-            if interval == 10 and not plan.minor:
-                interval = 7  # a major seventh in the bass sounds wrong here
+            if interval == 10 and (
+                10 not in chord.tones if chord.symbol else not plan.minor
+            ):
+                interval = 7  # a seventh the chord does not have sounds wrong here
             ghost = mutation and step % 4 == 3
             notes.append(
                 MidiNote(
@@ -888,7 +928,7 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
     mutation_rests: dict[tuple[str, int], tuple[int, int]] = {}
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
-        chord = _voiced_chord(plan, tonic, plan.chord_degree(bar))
+        chord = _voiced_chord(tonic, plan.chord_at(bar))
         if bar.breakdown:
             # Held chords, one per bar: a note may not cross a clip boundary.
             notes.extend(_chord_notes(chord, bar.start, plan.beats * 0.95, 70))
@@ -984,17 +1024,17 @@ def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
         if key not in phrase_motifs:
             phrase_motifs[key] = plan.rng.choice(motifs)
         motif = phrase_motifs[key]
-        chord_degree = plan.chord_degree(bar)
+        chord = plan.chord_at(bar)
         for index, offset in enumerate(offsets):
             if offset >= plan.beats:
                 continue
-            degree = chord_degree + motif[index % len(motif)]
+            steps = motif[index % len(motif)]
             # The last pickup is a quiet diatonic neighbour, resolving on the
             # next bar's chord tone rather than a random out-of-key pitch.
             passing = index == len(offsets) - 1 and bar.in_section % 2 == 1
             if passing:
-                degree += 1
-            pitch = tonic + plan.degree_offset(degree)
+                steps += 1
+            pitch = plan.melody_pitch(tonic, chord, steps)
             if pitch > 96:
                 pitch -= 12
             notes.append(
@@ -1082,15 +1122,20 @@ def _pad_notes(plan: _SongPlan) -> list[MidiNote]:
             velocity = 46
         else:
             velocity = 52
-        chord = _pad_chord(plan, tonic, plan.chord_degree(bar))
+        chord = _pad_chord(tonic, plan.chord_at(bar))
         notes.extend(_chord_notes(chord, bar.start, plan.beats - 0.02, min(127, velocity)))
     return notes
 
 
-def _pad_chord(plan: _SongPlan, tonic: int, degree: int) -> tuple[int, ...]:
-    """The triad of _voiced_chord with its seventh, kept within an octave and a half."""
-    triad = _voiced_chord(plan, tonic, degree)
-    seventh = tonic + plan.degree_offset(degree + 6)
+def _pad_chord(tonic: int, chord: Chord) -> tuple[int, ...]:
+    """Three voices as _voiced_chord places them, and a fourth within an octave and a half.
+
+    The fourth is the seventh (or the ninth of a ninth chord); a plain triad
+    doubles its root an octave up.
+    """
+    voices = chord.four_voices()
+    triad = _fold(tonic, [tonic + chord.root + tone for tone in voices[:3]])
+    seventh = tonic + chord.root + (voices[3] if len(voices) > 3 else 12)
     while seventh <= triad[-1]:
         seventh += 12
     if seventh - triad[0] > 18:
@@ -1125,9 +1170,9 @@ def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
         if key not in orders:
             orders[key] = plan.rng.choice(_ARP_ORDERS)
         order = orders[key]
-        degree = plan.chord_degree(bar)
+        chord = plan.chord_at(bar)
         lift = 12 if plan.second_drop(bar) else 0
-        tones = [tonic + lift + plan.degree_offset(degree + k) for k in (0, 2, 4, 7)]
+        tones = [tonic + lift + chord.root + tone for tone in (*chord.triad(), 12)]
         count = int(plan.beats / step)
         for index in range(count):
             base = 84 if index % 4 == 0 else 60
@@ -1174,13 +1219,13 @@ def _vocal_notes(plan: _SongPlan) -> list[MidiNote]:
         if key not in phrases:
             phrases[key] = (plan.rng.choice(_CHOP_RHYTHMS), plan.rng.choice(_CHOP_MOTIFS))
         rhythm, motif = phrases[key]
-        degree = plan.chord_degree(bar)
+        chord = plan.chord_at(bar)
         for index, offset in enumerate(rhythm[:limit]):
             if offset >= plan.beats:
                 continue
             notes.append(
                 MidiNote(
-                    tonic + plan.degree_offset(degree + motif[index % len(motif)]),
+                    plan.melody_pitch(tonic, chord, motif[index % len(motif)]),
                     plan.at(bar, offset),
                     0.2,
                     plan.velocity(90 if index == 0 else 76, 4),
@@ -1221,7 +1266,7 @@ def _guitar_notes(plan: _SongPlan) -> list[MidiNote]:
         key = (bar.section, bar.phrase)
         if key not in chops:
             chops[key] = plan.rng.choice(_GUITAR_CHOPS)
-        chord = _voiced_chord(plan, tonic + 12, plan.chord_degree(bar))
+        chord = _voiced_chord(tonic + 12, plan.chord_at(bar))
         muted = bar.section in _PEAK_SECTIONS
         for step in range(plan.steps):
             if step in chops[key]:
@@ -1257,7 +1302,7 @@ def _horn_notes(plan: _SongPlan) -> list[MidiNote]:
         key = (bar.section, bar.phrase)
         if key not in figures:
             figures[key] = plan.rng.choice(_HORN_FIGURES)
-        chord = _voiced_chord(plan, tonic, plan.chord_degree(bar))
+        chord = _voiced_chord(tonic, plan.chord_at(bar))
         hits = [hit for hit in figures[key] if hit < plan.beats]
         if bar.phrase_end:
             hits = [hit for hit in hits if hit < plan.beats - 1] + [plan.beats - 0.75]
@@ -1333,9 +1378,17 @@ def _echo(
     return notes
 
 
-def _voiced_chord(plan: _SongPlan, tonic: int, degree: int) -> tuple[int, ...]:
-    """Stack scale thirds on a degree and keep every tone near the tonic."""
-    tones = [tonic + plan.degree_offset(degree + step) for step in (0, 2, 4)]
+def _voiced_chord(tonic: int, chord: Chord) -> tuple[int, ...]:
+    """The chord's triad with every tone kept near the tonic."""
+    return _fold(tonic, [tonic + chord.root + tone for tone in chord.triad()])
+
+
+def _fold(tonic: int, tones: list[int]) -> tuple[int, ...]:
+    """Each tone into the octave from a whole step below the tonic.
+
+    A fixed window is a plain voice leading: chords keep their common tones
+    and the rest move by the smallest step the window allows.
+    """
     low = tonic - 2
     return tuple(sorted(low + (tone - low) % 12 for tone in tones))
 

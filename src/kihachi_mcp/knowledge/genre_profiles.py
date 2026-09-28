@@ -182,6 +182,10 @@ class Profile:
     harmonic_rhythm_bars: int | None = None
     #: Where an offbeat eighth lands inside its beat: 0.5 straight, 2/3 triplet.
     swing: float | None = None
+    #: A key of music_theory.HARMONY_STYLES: the progressions the genre plays.
+    harmony: str | None = None
+    #: A key of music_theory.MODES, when the genre leans on one.
+    mode: str | None = None
 
     def overlaid_with(self, other: Profile) -> Profile:
         stated = {

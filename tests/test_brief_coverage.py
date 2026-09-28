@@ -1,0 +1,127 @@
+from kihachi_mcp.models.production_brief import SourcedValue
+from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
+from kihachi_mcp.services.brief_parser import extract_explicit, read_explicit
+
+USER_BRIEF = (
+    "105 BPM、D＃マイナー、144小節で5分程度の重いDUB TECHNO。\n"
+    "前半はハットを少なく、後半で増やす。\n"
+    "中間でBrakeを必ず入れドロップは派手に。\n"
+    "BASSは最初動き少なく徐々に動きのあるものへ変化する。\n"
+    "上物は徐々に煌びやかに。\n"
+    "DUB ディレイをところどころにいれる。ボーカルも入れて"
+)
+
+
+def _states(coverage):
+    return {clause["text"]: clause["state"] for clause in coverage["clauses"]}
+
+
+def test_genre_defaults_are_named_but_not_called_read() -> None:
+    text = "Ghost notes。Octave movement。4つ打ちKick"
+    states = _states(read_coverage(text, genre="mutation_funk"))
+    assert states["Ghost notes"] == "genre_default"
+    assert states["Octave movement"] == "genre_default"
+    # Mutation Funk writes an irregular kick; a four-on-the-floor request stays unread.
+    assert states["4つ打ちKick"] == "unread"
+    assert _states(read_coverage(text))["Ghost notes"] == "unread"
+
+
+def test_statements_nothing_reads_are_listed_not_dropped() -> None:
+    """The first real dub-techno brief lost five statements without a word."""
+    coverage = read_coverage(USER_BRIEF)
+    states = _states(coverage)
+    assert states["105 BPM"] == "read"
+    assert states["D＃マイナー"] == "read"
+    assert states["後半で増やす"] == "read"
+    assert states["BASSは最初動き少なく徐々に動きのあるものへ変化する"] == "unread"
+    # A sound word is read, 「徐々に」 is not: only part of these reaches the song.
+    assert states["中間でBrakeを必ず入れドロップは派手に"] == "partly_read"
+    assert states["上物は徐々に煌びやかに"] == "partly_read"
+
+
+def test_a_statement_read_only_in_part_says_so() -> None:
+    states = _states(read_coverage("144小節で5分程度の重く揺れる感じ"))
+    assert states["144小節で5分程度の重く揺れる感じ"] == "partly_read"
+
+
+def test_a_named_genre_reads_its_statement() -> None:
+    clause = next(
+        item
+        for item in read_coverage(USER_BRIEF)["clauses"]
+        if item["text"] == "144小節で5分程度の重いDUB TECHNO"
+    )
+    assert clause["read_as"] == ["ジャンル", "小節数"]
+
+
+def test_a_dub_delay_is_read_as_a_delay_not_a_genre() -> None:
+    clause = next(
+        item
+        for item in read_coverage(USER_BRIEF)["clauses"]
+        if item["text"] == "DUB ディレイをところどころにいれる"
+    )
+    assert clause["read_as"] == ["ディレイ"]
+
+
+def test_known_unsupported_requests_are_out_of_scope_not_unread() -> None:
+    coverage = read_coverage(USER_BRIEF)
+    clause = next(item for item in coverage["clauses"] if item["text"] == "ボーカルも入れて")
+    assert clause["state"] == "out_of_scope"
+    assert clause["out_of_scope"]
+
+
+def test_coverage_uses_the_same_spans_the_extractor_used() -> None:
+    fields, spans = read_explicit(USER_BRIEF)
+    assert fields == {
+        name: value
+        for name, value in extract_explicit(USER_BRIEF)["fields"].items()
+    }
+    assert {label for _start, _end, label in spans} == set(fields)
+
+
+def test_a_bar_position_before_the_length_does_not_hide_the_length() -> None:
+    assert extract_explicit("57小節目からドロップ、96小節の暗いテクノ")["fields"]["bars"] == 96
+
+
+def test_model_filled_lists_only_ai_sourced_fields() -> None:
+    class Brief:
+        genre = SourcedValue("dub_techno", "ai")
+        mood = SourcedValue("暗い", "user")
+        hats_first_half = SourcedValue("sparse", "user")
+        hats_second_half = SourcedValue("dense", "ai")
+        bass_register = SourcedValue("low", "ai")
+        note_density = SourcedValue("normal", "default")
+        drop_start_bar = SourcedValue(0, "default")
+
+    assert model_filled_fields(Brief()) == [
+        {"label": "ジャンル", "value": "dub_techno", "affects_notes": True},
+        {"label": "後半のハット", "value": "dense", "affects_notes": True},
+        {"label": "ベース音域", "value": "low", "affects_notes": True},
+    ]
+
+
+def test_a_mood_the_builder_has_no_rule_for_is_not_claimed() -> None:
+    class Brief:
+        genre = SourcedValue("tech_house", "default")
+        mood = SourcedValue("heavy", "ai")
+
+    assert model_filled_fields(Brief()) == [
+        {"label": "ムード", "value": "heavy", "affects_notes": False}
+    ]
+
+
+def test_tone_words_are_read_with_their_strength() -> None:
+    fields, _spans = read_explicit("かなり短めの音で、こもったダブ。ディレイ多めに")
+    assert fields["tone_length"] == -2
+    assert fields["tone_brightness"] == -1
+    assert fields["tone_delay"] == 1
+
+
+def test_the_mood_word_dark_is_not_also_a_tone_step() -> None:
+    fields, _spans = read_explicit("暗いテクノ")
+    assert "tone_brightness" not in fields
+
+
+def test_an_opposite_tone_word_is_left_unread() -> None:
+    coverage = read_coverage("煌びやかなダブ。こもった上物")
+    states = {clause["text"]: clause["state"] for clause in coverage["clauses"]}
+    assert states["こもった上物"] == "unread"

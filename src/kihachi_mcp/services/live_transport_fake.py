@@ -9,7 +9,9 @@ It is not a Live emulator. Passing tests against this simulator do not mean the
 Max device has been verified on a real machine.
 """
 
+import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
@@ -18,11 +20,15 @@ from kihachi_mcp.models.live_contract import (
     OP_CREATE_MIDI_TRACK,
     OP_CREATE_SCENE,
     OP_CREATE_SESSION_CLIP,
+    OP_LOAD_DRUM_PAD_SAMPLE,
     OP_LOAD_LIVE_DEVICE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
+    OP_SET_DEVICE_PARAMETER,
+    OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TEMPO,
     OP_SET_TRACK_COLOR,
+    OP_SET_TRACK_MIXER,
     OP_SET_TRACK_NAME,
     SCHEMA_VERSION,
     is_managed_name,
@@ -33,6 +39,8 @@ from kihachi_mcp.services.live_transport import (
     ERROR_OPERATION_FAILED,
     ERROR_PROTOCOL,
     METHOD_APPLY_OPERATION,
+    METHOD_GET_DEVICE_PARAMETERS,
+    METHOD_GET_DRUM_RACK_SUMMARY,
     METHOD_GET_STATE,
     METHOD_PING,
     PROTOCOL_NAME,
@@ -86,6 +94,18 @@ class FakeLiveSet:
     locators: list[dict[str, Any]] = field(default_factory=list)
     available_devices: list[str] = field(
         default_factory=lambda: list(DEFAULT_SUITE_DEVICES)
+    )
+    #: Parameter lists by device name, in the shape device_probe saves.
+    device_parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
+    master: dict[str, Any] = field(default_factory=lambda: {"device_names": []})
+    #: Knobs Live moves in whole steps, by (device, parameter): the step count.
+    #: Live floors a value set between steps, as Glue Compressor did in 12.4.5.
+    stepped: dict[tuple[str, str], int] = field(
+        default_factory=lambda: {
+            ("Glue Compressor", "Attack"): 6,
+            ("Glue Compressor", "Ratio"): 2,
+            ("Glue Compressor", "Release"): 6,
+        }
     )
 
     def add_track(
@@ -142,7 +162,11 @@ class FakeLiveTransport:
         if method == METHOD_PING:
             return self._ok(request_id, self._ping())
         if method == METHOD_GET_STATE:
-            return self._ok(request_id, self.snapshot_payload())
+            return self._ok(request_id, self.snapshot_payload(payload))
+        if method == METHOD_GET_DRUM_RACK_SUMMARY:
+            return self._ok(request_id, self._drum_rack_summary(payload))
+        if method == METHOD_GET_DEVICE_PARAMETERS:
+            return self._device_parameters(request_id, payload)
         if method == METHOD_APPLY_OPERATION:
             return self._apply(request_id, payload)
         raise LiveTransportError(ERROR_PROTOCOL, f"unsupported method '{method}'")
@@ -174,9 +198,70 @@ class FakeLiveTransport:
             "device_version": "kihachi-live-device/0.1.0",
         }
 
-    def snapshot_payload(self) -> dict[str, Any]:
-        """Return the Set as a ``LiveStateSnapshot``-compatible payload."""
+    def _device_parameters(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Answer from the parameter table real Live gave, per device name."""
+        index = int(payload.get("track_index") or 0)
+        position = int(payload.get("device_index") or 0)
+        track = next((item for item in self.live_set.tracks if item["index"] == index), None)
+        names = (track or {}).get("device_names") or []
+        if position >= len(names):
+            return self._failure(request_id, ERROR_OPERATION_FAILED, f"no device {position}")
+        name = names[position]
+        known = self.live_set.device_parameters.get(name) or {}
+        reply: dict[str, Any] = {
+            "device_index": position,
+            "device_name": name,
+            "class_name": str(known.get("class_name") or ""),
+            "parameters": [
+                {**item, "value": item.get("default")}
+                for item in known.get("parameters") or []
+            ],
+        }
+        if name == "Compressor":
+            reply["sidechain"] = {
+                "available_types": [item["name"] for item in self.live_set.tracks],
+                "input_routing_type": (track.get("sidechains") or {}).get(str(position), "No Input"),
+                "input_routing_channel": "Post FX",
+            }
+        return self._ok(request_id, reply)
+
+    def _drum_rack_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        index = int(payload.get("track_index") or 0)
+        track = next((item for item in self.live_set.tracks if item["index"] == index), None)
+        if track is None:
+            return {"track_index": index, "track_name": "", "devices": []}
+        devices = []
+        for device_index, name in enumerate(track.get("device_names") or []):
+            devices.append(
+                {
+                    "device_index": device_index,
+                    "name": name,
+                    "class_display_name": name,
+                    "can_have_drum_pads": name == "Drum Rack",
+                    "chain_count": 0,
+                    "occupied_pads": list(
+                        track.get("occupied_pads") or []
+                    ),
+                }
+            )
+        return {
+            "track_index": index,
+            "track_name": str(track.get("name") or ""),
+            "devices": devices,
+        }
+
+    def snapshot_payload(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return the Set as a ``LiveStateSnapshot``-compatible payload.
+
+        ``options`` are the get_state flags, honored the way the Max device
+        honors them, so a caller that reads the Set two different ways sees
+        two different fingerprints here too.
+        """
         live = self.live_set
+        options = options or {}
+        include_arrangement = options.get("include_arrangement") is not False
+        include_session_clips = options.get("include_session_clips") is not False
+        count_session_notes = options.get("count_session_notes") is not False
         return {
             "schema_version": SCHEMA_VERSION,
             "live_version": live.live_version,
@@ -191,6 +276,7 @@ class FakeLiveTransport:
             "is_recording": live.is_recording,
             "observed_at": self.observed_at,
             "tracks": [dict(track) for track in live.tracks],
+            "master_device_names": list(live.master["device_names"]),
             "scenes": [dict(scene) for scene in live.scenes],
             "session_clips": [
                 {
@@ -198,14 +284,16 @@ class FakeLiveTransport:
                     "scene_index": scene_index,
                     "name": clip.name,
                     "length_beats": clip.length_beats,
-                    "note_count": len(clip.notes),
+                    "note_count": len(clip.notes) if count_session_notes else 0,
                     "is_midi": clip.is_midi,
                     "looping": clip.looping,
                 }
                 for (track_index, scene_index), clip in sorted(
                     live.session_clips.items()
                 )
-            ],
+            ]
+            if include_session_clips
+            else [],
             "arrangement_clips": [
                 {
                     "track_index": clip.track_index,
@@ -215,7 +303,9 @@ class FakeLiveTransport:
                     "note_count": clip.note_count,
                 }
                 for clip in live.arrangement_clips
-            ],
+            ]
+            if include_arrangement
+            else [],
             "devices": [
                 {"name": name, "available": True, "category": ""}
                 for name in live.available_devices
@@ -313,6 +403,17 @@ class FakeLiveTransport:
                     )
             if kind == "arrangement_range_free":
                 self._require_free_range(arguments)
+            if kind == "device_name_at_index":
+                track = (
+                    live.master
+                    if arguments.get("master") is True
+                    else self._track(int(arguments.get("track_index") or 0))
+                )
+                names = list(track["device_names"]) if track else []
+                position = int(arguments.get("device_index") or 0)
+                expected = str(arguments.get("name") or "")
+                if position >= len(names) or names[position] != expected:
+                    raise FakeLiveOperationRefused(f"device {position} is not '{expected}'")
 
     def _require_free_range(self, arguments: dict[str, Any]) -> None:
         track_index = int(arguments.get("track_index") or 0)
@@ -332,6 +433,13 @@ class FakeLiveTransport:
             if track["index"] == index:
                 return track
         return None
+
+    def _owner(self, target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The master or the addressed track, and how a readback names it."""
+        if target.get("master") is True:
+            return self.live_set.master, {"master": True}
+        track = self._require_track(int(target.get("track_index") or 0))
+        return track, {"track_index": track["index"], "master": False}
 
     def _require_track(self, index: int) -> dict[str, Any]:
         track = self._track(index)
@@ -385,13 +493,28 @@ class FakeLiveTransport:
             return self._replace_clip_notes(target, arguments)
 
         if op == OP_LOAD_LIVE_DEVICE:
-            track = self._require_track(int(target.get("track_index") or 0))
+            track, owner = self._owner(target)
             device_name = str(arguments.get("device_name") or "")
             track["device_names"].append(device_name)
             return {
-                "track_index": track["index"],
+                **owner,
                 "device_name": device_name,
                 "device_index": len(track["device_names"]) - 1,
+            }
+
+        if op == OP_LOAD_DRUM_PAD_SAMPLE:
+            track = self._require_track(int(target.get("track_index") or 0))
+            note = int(arguments.get("note") or 0)
+            path = str(arguments.get("sample_path") or "")
+            pads = track.setdefault("occupied_pads", [])
+            if not any(int(pad.get("note") or 0) == note for pad in pads):
+                pads.append({"note": note, "name": Path(path).stem, "chain_count": 1})
+            return {
+                "track_index": track["index"],
+                "note": note,
+                "occupied": True,
+                "already_occupied": False,
+                "sample_path": path,
             }
 
         if op == OP_CREATE_LOCATOR:
@@ -404,6 +527,60 @@ class FakeLiveTransport:
 
         if op == OP_PLACE_ARRANGEMENT_CLIP:
             return self._place_arrangement_clip(target, arguments)
+
+        if op == OP_SET_SIDECHAIN_SOURCE:
+            track, owner = self._owner(target)
+            position = int(target.get("device_index") or 0)
+            names = track["device_names"]
+            if position >= len(names) or names[position] != arguments.get("device_name"):
+                raise FakeLiveOperationRefused(f"device {position} is not '{arguments.get('device_name')}'")
+            source = str(arguments.get("source_name") or "")
+            if not any(item["name"] == source for item in live.tracks):
+                raise FakeLiveOperationRefused(f"'{source}' is not offered as a sidechain source")
+            track.setdefault("sidechains", {})[str(position)] = source
+            return {
+                **owner,
+                "device_index": position,
+                "input_routing_type": source,
+                "input_routing_channel": "Post FX",
+            }
+
+        if op == OP_SET_TRACK_MIXER:
+            track = self._require_track(int(target.get("track_index") or 0))
+            volume_db = float(arguments.get("volume_db"))
+            panning = float(arguments.get("panning"))
+            if volume_db > 6 or not -1 <= panning <= 1:
+                raise FakeLiveOperationRefused("volume_db must be at most +6 dB and panning within -1..1")
+            track["mixer"] = {"volume_db": round(volume_db, 1), "panning": round(panning, 2)}
+            return {"track_index": track["index"], **track["mixer"]}
+
+        if op == OP_SET_DEVICE_PARAMETER:
+            # The simulator knows no parameter lists: it records what was set,
+            # keyed by device position and parameter name, and reads it back.
+            track, owner = self._owner(target)
+            position = int(target.get("device_index") or 0)
+            names = track["device_names"]
+            if position >= len(names) or names[position] != arguments.get("device_name"):
+                raise FakeLiveOperationRefused(f"device {position} is not '{arguments.get('device_name')}'")
+            store = track.setdefault("device_parameters", {}).setdefault(str(position), {})
+            name = str(arguments.get("parameter_name") or "")
+            readback: dict[str, Any] = {
+                **owner,
+                "device_index": position,
+                "parameter_name": name,
+            }
+            if arguments.get("item"):
+                store[name] = str(arguments["item"])
+                readback["item"] = store[name]
+                readback["normalized_value"] = 0.0
+            else:
+                amount = float(arguments.get("value") or 0.0)
+                span = live.stepped.get((str(arguments.get("device_name")), name))
+                if span:
+                    amount = math.floor(amount * span + 1e-9) / span
+                store[name] = round(amount, 3)
+                readback["normalized_value"] = store[name]
+            return readback
 
         raise FakeLiveOperationRefused(f"simulator cannot apply '{op}'")
 

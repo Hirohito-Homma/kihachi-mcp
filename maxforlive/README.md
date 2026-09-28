@@ -1,16 +1,17 @@
 ## KIHACHI Live Device
 
-`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。
+`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。現在の版は `kihachi-live-device/0.3.1` です。0.3.0 で、デバイスのつまみを名前で設定する `set_device_parameter` と、事前条件 `device_name_at_index` を足し、許可する純正デバイスに Analog を加えました。Live 12.4 以降では空の Drum Rack パッドへ同梱サンプルを `insert_chain` と `replace_sample` で載せます。大きな Set では `get_state` に `include_arrangement=false`、`count_session_notes=false`、音源確認時は `include_session_clips=false` を付けて状態取得します。JS を更新したら Max で `reload` するかデバイスを入れ直してください。
 
 ### 未完了部分の明示
 
-**`.amxd` バイナリはこのリポジトリに含まれていません。** `.amxd` は Max が生成する独自バイナリ形式で、テキストから正しく生成できないため、偽のデバイスファイルを置くことを避けました。含まれているのは次の3点です。
+**`.amxd` バイナリはこのリポジトリに含まれていません。** `.amxd` は Max が生成する独自バイナリ形式で、テキストから正しく生成できないため、偽のデバイスファイルを置くことを避けました。含まれているのは次の4点です。
 
-1. Live Object Model を操作する JavaScript 実装（`kihachi.device.js`、完成）
-2. メッセージプロトコル仕様（[docs/MAXFORLIVE.md](../docs/MAXFORLIVE.md)、完成）
-3. 下記のパッチ作成・パッケージ化手順（手作業、**利用者側で1回だけ実施が必要**）
+1. Live Object Model を操作するJavaScript実装（`kihachi.device.js`）
+2. 生JSON UDPを中継するNode for Max実装（`kihachi.bridge.js`）
+3. メッセージプロトコル仕様（[docs/MAXFORLIVE.md](../docs/MAXFORLIVE.md)、完成）
+4. 下記のパッチ作成・パッケージ化手順（手作業、**利用者側で1回だけ実施が必要**）
 
-あわせて、下記「デバイスローダー」節のパッチ配線も未完了部分です。`load_live_device` は JavaScript からブラウザを操作できないため、パッチ側の配線が必須です。
+純正デバイスの自動ロードには、公式 Live Object Model の `Track.insert_device` が必要なため、Ableton Live 12.3 以降が必要です。Live 11〜12.2では他の操作は利用できますが、デバイスロードを含む計画は `blocked` になります。
 
 ### 必要環境
 
@@ -24,38 +25,124 @@ Live Intro には Max for Live がないため、KIHACHI の Live 自動操作�
 
 1. Live で MIDI トラックを1つ作り、`Max Audio Effect` をロードします。
 2. デバイスの編集ボタン（鉛筆アイコン）で Max エディタを開きます。
-3. 既存オブジェクトを削除し、次のオブジェクトを配置します。
+3. 既存の音声／MIDI入出力は削除せず、次のオブジェクトを追加します。
 
 ```
-[udpreceive 17771]
+[node.script kihachi.bridge.js @autostart 1]
 |
-[fromsymbol]
+[route request status]
+|               \
+|                [print KIHACHI-NODE]
+[prepend msg_string]
 |
 [js kihachi.device.js]
-|                        \
-[tosymbol]                [route status load_device]
-|                         |
-[prepend set]             (下記「デバイスローダー」へ)
-|
-[udpsend 127.0.0.1 17772]
+|                    \
+[prepend response]    [route status]
+|                     |
+`---- node.script     [print KIHACHI]
 ```
 
-4. `kihachi.device.js` を Max の検索パスへ置きます。最も確実なのは、デバイスと同じフォルダに置くことです。
+`[prepend response]` の出力は `[node.script ...]` の入口へ戻します。
+
+4. `kihachi.device.js` と `kihachi.bridge.js` をデバイスと同じフォルダに置きます。
 5. `[js kihachi.device.js]` をダブルクリックし、エラーが出ないことを確認します。
-6. デバイスを `KIHACHI Live Device.amxd` として保存します。保存先は Live の User Library 配下を推奨します。
+6. Max Consoleに `raw UDP ready on 127.0.0.1:17771` が出ることを確認します。
+7. デバイスを `KIHACHI Live Device.amxd` として保存します。保存先は Live の User Library 配下を推奨します。
    - macOS: `~/Music/Ableton/User Library/Presets/Audio Effects/Max Audio Effect/`
    - Windows: `%USERPROFILE%\Documents\Ableton\User Library\Presets\Audio Effects\Max Audio Effect\`
 
-### デバイスローダー（未完了・パッチ側で配線が必要）
+### Studio を Live 内で開く（任意）
 
-`load_live_device` だけは JavaScript から実行できません。Live Object Model には `[js]` から使えるブラウザ列挙 API がないためです。`kihachi.device.js` は右アウトレットへ `load_device <track_index> <device_name>` を送り、デバイス数が増えたかを検査します。増えていなければ操作は失敗として報告され、`verified` にはなりません。
+KIHACHI デバイスに「Studio」ボタンを足すと、Live の上に Studio（`http://127.0.0.1:8765`）の別ウィンドウを開けます。Max の `jweb`（組み込みブラウザ）で表示するだけなので、Studio 側の変更は要りません。Studio は先に `python -m kihachi_mcp.studio` で起動しておきます。
 
-パッチ側では次のいずれかで配線してください。
+送受信名の `---` は、デバイス内では `001` のような番号に置き換わって表示されます。正常です。
 
-- `[live.object]` + `[live.path]` で対象トラックを選び、事前に用意した `.adg` / `.adv` プリセットを `[live.browser]` 相当の機構からロードする
-- 各 stock デバイスの `.adv` プリセットを User Library に用意し、パッチからパス指定でロードする
+デバイス欄の中への埋め込みは高さ（169px）が足りないため、別ウィンドウにしています。Learn ビューのレッスンは静的な文章しか表示できないため、Studio の置き場所には使えません。
 
-自動フォールバックは実装しないでください。存在しないデバイスは `blocked` として返すのが仕様です。
+#### 0. バックアップ
+
+作業前に今の `.amxd` をコピーしておきます。User Library の外に置くと Live のブラウザに出てきません。
+
+```bash
+mkdir -p ~/Music/KIHACHI/backups && cp -p "/Volumes/NO NAME/User Library/User Library/Presets/Audio Effects/Max Audio Effect/KIHACHI Live Device.amxd" ~/Music/KIHACHI/backups/
+```
+
+#### 1. 再生を止めてエディタを開く
+
+Live の再生を止め、KIHACHI デバイスの編集ボタン（鉛筆アイコン）で Max エディタを開きます。既存のオブジェクトと接続（`node.script` / `js` / `route` / `prepend`）には触りません。
+
+#### 2. ウィンドウ用のサブパッチを作る
+
+図の `[名前]` はオブジェクト（`N` キーで箱を出して名前を入力）、右端が `(` の `[内容(` はメッセージボックス（`M` キーで箱を出して内容だけを入力）です。`open(` を `N` キーの箱に入力すると、Console に `No such object` が出て動きません。
+
+空いている場所に `p kihachi-studio` と入力してサブパッチを作り、ダブルクリックで開きます。中に次を置きます。
+
+```
+[inlet]
+
+[loadbang]
+|
+[window size 80 80 1180 900, window exec(
+|
+[thispatcher]
+
+[r ---kihachi-studio-url]
+|
+[url http://127.0.0.1:8765/(
+|
+[jweb @url http://127.0.0.1:8765/]
+```
+
+- `[inlet]` はどこにもつなぎません。外の `[pcontrol]` を接続するためだけに要ります。`I` キーでも置けます。置くときは ⌥⌘E でプレゼンテーション表示を切っておきます。
+- `jweb` は角をドラッグして幅 1100 × 高さ 820 程度に広げます。
+- `jweb` を選んで「Add to Presentation」（⌘⇧P）し、プレゼンテーションモードで左上 (0, 0) に合わせます。
+- サブパッチの Patcher Inspector で「Open in Presentation」をオンにします。
+- `---` で始まる送受信名は、Max がデバイスごとに置き換えます。同じ名前が他のデバイスと混ざりません。
+
+サブパッチのウィンドウを閉じます。
+
+#### 3. ボタンをつなぐ
+
+メインパッチに戻り、次を置きます。
+
+```
+[button]
+|
+[t b b]
+|     \
+|      [s ---kihachi-studio-url]
+[open(
+|
+[pcontrol]
+|
+[p kihachi-studio]
+```
+
+- `[t b b]` は右から出るので、先に URL を読み直し、次にウィンドウを開きます。Studio を後から起動した場合も、ボタンを押し直せば表示されます。
+- 取り消し履歴やオートメーションに載せないため、`live.text` ではなく普通の `[button]` を使います。
+- `[button]` と、その横に置いた `[comment]`（本文「Studio」）を選んで「Add to Presentation」し、デバイス欄に見える位置へ置きます。
+
+#### 4. 保存と確認
+
+1. ⌘S で保存し、エディタを**閉じます**。エディタを開いている間は、エディタ側のコピーも `node.script` を起動するため、`udp error: bind EADDRINUSE 127.0.0.1:17771` が出ます。`kihachi.bridge.js` はポートの確保をやり直さないので、閉じるまでは異常ではありません。
+2. Max Console に `raw UDP bridge v3 ready on 127.0.0.1:17771 (send buffer 65507)` が再び出ることを確認します。send buffer が 9216 のままだと、Session クリップが数十個ある Set の状態を返せず、Studio は 40 秒のタイムアウトになります。エディタを閉じても `EADDRINUSE` が続く場合は、KIHACHI デバイスが Set に2つ入っていないか確認します。1つだけなのに Studio から Live につながらない場合は、デバイス内の `script stop`、続けて `script start` をクリックして起動し直します。
+3. デバイスの「Studio」ボタンを押し、Studio の画面が別ウィンドウに出ることを確認します。
+4. Studio を止めた状態でボタンを押すと、接続できない旨のページが出ます。Studio を起動してからボタンを押し直してください。
+
+元に戻すときは、手順0のバックアップを元の場所へコピーし直します。
+
+### 純正デバイスローダー
+
+Live 12.3で公式 Live Object Model に [`Track.insert_device`](https://docs.cycling74.com/apiref/lom/track/#insert_device) が追加されました。`kihachi.device.js` はこのAPIで許可リスト内のLive純正デバイスを対象トラック末尾へ挿入し、デバイス数と実際のデバイス名を読み戻します。
+
+追加のブラウザー配線や `.adv` プリセットは不要です。次の制約があります。
+
+- Live 12.3以降のみ。Live 11〜12.2では利用可能一覧を `available: false` とし、計画段階で拒否します。
+- Live純正デバイスのみ。Max for Liveデバイスと外部プラグインは対象外です。
+- Liveのエディションに存在しないデバイスは挿入に失敗し、`verified` にはなりません。
+- 別デバイスへの自動フォールバックは行いません。
+
+現在の `AVAILABLE_DEVICES` は候補許可リストです。実機で挿入可能かは `insert_device` の結果と読戻しで確定します。
 
 ### トークン受け渡し
 
@@ -75,7 +162,7 @@ Python 側が起動ごとにセッショントークンを生成し、所有者�
 | KIHACHI から Live | 17771 | `KIHACHI_LIVE_BRIDGE_PORT` |
 | Live から KIHACHI | 17772 | `KIHACHI_LIVE_REPLY_PORT` |
 
-ポートを変更した場合は、パッチの `[udpreceive]` と `[udpsend]` も同じ値へ変更してください。
+現在のNodeブリッジは上記ポートを固定使用します。環境変数で変更する場合は `kihachi.bridge.js` の値も合わせてください。
 
 ### 動作確認
 

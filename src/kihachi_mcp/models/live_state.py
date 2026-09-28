@@ -219,6 +219,7 @@ class LiveStateSnapshot:
     session_clips: list[LiveSessionClip] = field(default_factory=list)
     arrangement_clips: list[LiveArrangementClip] = field(default_factory=list)
     devices: list[LiveDevice] = field(default_factory=list)
+    master_device_names: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -262,6 +263,9 @@ class LiveStateSnapshot:
                 for item in data.get("devices") or []
                 if isinstance(item, dict)
             ],
+            master_device_names=[
+                str(item) for item in data.get("master_device_names") or []
+            ],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -278,29 +282,32 @@ class LiveStateSnapshot:
         pressing play does not invalidate an approved plan, while any change to
         tracks, scenes, clips, tempo, or meter does.
         """
-        return canonical_hash(
-            {
-                "set_path": self.set_path,
-                "set_name": self.set_name,
-                "tempo": round(self.tempo, 6),
-                "time_signature": self.time_signature.to_dict(),
-                "tracks": [
-                    {
-                        "index": track.index,
-                        "name": track.name,
-                        "track_type": track.track_type,
-                        "color": track.color,
-                        "device_names": list(track.device_names),
-                    }
-                    for track in self.tracks
-                ],
-                "scenes": [scene.to_dict() for scene in self.scenes],
-                "session_clips": [clip.to_dict() for clip in self.session_clips],
-                "arrangement_clips": [
-                    clip.to_dict() for clip in self.arrangement_clips
-                ],
-            }
-        )
+        structure: dict[str, Any] = {
+            "set_path": self.set_path,
+            "set_name": self.set_name,
+            "tempo": round(self.tempo, 6),
+            "time_signature": self.time_signature.to_dict(),
+            "tracks": [
+                {
+                    "index": track.index,
+                    "name": track.name,
+                    "track_type": track.track_type,
+                    "color": track.color,
+                    "device_names": list(track.device_names),
+                }
+                for track in self.tracks
+            ],
+            "scenes": [scene.to_dict() for scene in self.scenes],
+            "session_clips": [clip.to_dict() for clip in self.session_clips],
+            "arrangement_clips": [
+                clip.to_dict() for clip in self.arrangement_clips
+            ],
+        }
+        # Only when present, so fingerprints of Sets read before the device
+        # reported the master chain stay what they were.
+        if self.master_device_names:
+            structure["master_device_names"] = list(self.master_device_names)
+        return canonical_hash(structure)
 
     def track_by_name(self, name: str) -> LiveTrack | None:
         """Return the first track with an exact name match."""

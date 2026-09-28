@@ -19,8 +19,49 @@ from kihachi_mcp.tools import (
     search_memory,
     verify_live_execution,
 )
+from kihachi_mcp.tools.local_ai import preview_local_ai_song
+from kihachi_mcp.tools.studio import (
+    apply_ableton_effects,
+    apply_ableton_master,
+    apply_ableton_mix,
+    apply_ableton_retune,
+    apply_ableton_sidechain,
+    approve_song,
+    create_song,
+    doctor,
+    dry_run_ableton_plan,
+    execute_ableton_plan,
+    get_project,
+    list_projects,
+    measure_loudness,
+    ollama_status,
+    review_song,
+    revise_song,
+    verify_ableton_project,
+)
 
 mcp = FastMCP("KIHACHI MUSIC AI")
+for _tool in (
+    create_song,
+    list_projects,
+    get_project,
+    review_song,
+    revise_song,
+    approve_song,
+    dry_run_ableton_plan,
+    execute_ableton_plan,
+    apply_ableton_effects,
+    apply_ableton_mix,
+    apply_ableton_master,
+    apply_ableton_retune,
+    apply_ableton_sidechain,
+    verify_ableton_project,
+    measure_loudness,
+    ollama_status,
+    doctor,
+):
+    mcp.add_tool(_tool)
+mcp.add_tool(preview_local_ai_song)
 mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)

@@ -92,7 +92,7 @@ CI と `uv run pytest` は fake transport のみを使います。**Ableton Live
 - [ ] `receipt.readback` の `device_name` が Live の表示と一致
 - [ ] 存在しないデバイスを要求した場合、`blocked` になり、別デバイスに置き換わらない
 
-**弱点**: エディション差があります。`load_live_device` は Max パッチ側の配線が未完了なので、**この段階は配線を行うまで失敗します。**
+**弱点**: エディション差があります。自動ロードは公式 `Track.insert_device` を使うためLive 12.3以降が必要です。Live 11〜12.2では計画段階で拒否されます。12.3以降でも、そのエディションに存在しないデバイスは失敗し、別デバイスには置換されません。
 
 ### 段階9: Arrangement展開
 

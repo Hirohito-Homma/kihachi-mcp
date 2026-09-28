@@ -17,6 +17,7 @@ from kihachi_mcp.services.live_paths import (
     SYSTEM_WINDOWS,
     bridge_handshake_path,
     bridge_state_dir,
+    candidate_store_dir,
 )
 from kihachi_mcp.services.live_transport import (
     ERROR_DUPLICATE,
@@ -102,6 +103,36 @@ def test_decode_response_rejects_a_different_protocol_version() -> None:
             {"protocol": PROTOCOL_NAME, "version": 99, "request_id": "r", "ok": True},
             "r",
         )
+
+
+def test_stale_replies_are_discarded_until_the_matching_request_id(tmp_path) -> None:
+    class _StaleThenFresh(_RecordingChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self._replies = [
+                {
+                    "protocol": PROTOCOL_NAME,
+                    "version": PROTOCOL_VERSION,
+                    "request_id": "old",
+                    "ok": True,
+                    "result": {},
+                },
+                {
+                    "protocol": PROTOCOL_NAME,
+                    "version": PROTOCOL_VERSION,
+                    "request_id": "req-2",
+                    "ok": True,
+                    "result": {"fresh": True},
+                },
+            ]
+
+        def receive(self, timeout: float) -> bytes:
+            return json.dumps(self._replies.pop(0)).encode("utf-8")
+
+    channel = _StaleThenFresh()
+    transport = LocalhostBridgeTransport(session=_session(tmp_path), channel=channel)
+    result = transport.request(build_message("ping", "req-2"))
+    assert result["result"] == {"fresh": True}
 
 
 def test_the_token_is_attached_by_the_transport_not_the_caller(tmp_path) -> None:
@@ -272,6 +303,15 @@ def test_the_udp_channel_binds_to_loopback_only() -> None:
         channel.close()
 
 
+def test_the_udp_channel_raises_the_macos_send_buffer() -> None:
+    channel = LoopbackUdpChannel(device_port=0, reply_port=0)
+    try:
+        sndbuf = channel._socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        assert sndbuf >= 60_000
+    finally:
+        channel.close()
+
+
 def test_a_busy_reply_port_reports_unavailable() -> None:
     holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     holder.bind((LOOPBACK_HOST, 0))
@@ -302,6 +342,21 @@ def test_the_state_directory_can_be_overridden_for_tests() -> None:
     path = bridge_state_dir(SYSTEM_DARWIN, {"KIHACHI_LIVE_STATE_DIR": "/tmp/kihachi"})
 
     assert str(path) == "/tmp/kihachi"
+
+
+def test_saved_candidates_sit_beside_the_handshake_file() -> None:
+    env = {"HOME": "/Users/kihachi"}
+
+    assert candidate_store_dir(SYSTEM_DARWIN, env).parent == bridge_state_dir(
+        SYSTEM_DARWIN, env
+    )
+    assert candidate_store_dir(SYSTEM_DARWIN, env).name == "candidates"
+
+
+def test_the_project_directory_can_be_moved() -> None:
+    env = {"HOME": "/Users/kihachi", "KIHACHI_PROJECT_DIR": "/tmp/songs"}
+
+    assert str(candidate_store_dir(SYSTEM_DARWIN, env)) == "/tmp/songs"
 
 
 def test_the_handshake_filename_is_stable_across_platforms() -> None:

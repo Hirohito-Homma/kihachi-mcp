@@ -407,6 +407,19 @@ def _verify_against_snapshot(
                     operation.operation_id, "name", expected["name"], observed_name
                 )
             )
+    if (
+        expected.get("master") is True
+        and "device_name" in expected
+        and expected["device_name"] not in snapshot.master_device_names
+    ):
+        mismatches.append(
+            LiveReadbackMismatch(
+                operation.operation_id,
+                "device_name",
+                expected["device_name"],
+                list(snapshot.master_device_names),
+            )
+        )
     if track_index is not None and "device_name" in expected:
         track = snapshot.track_by_index(int(track_index))
         names = list(track.device_names) if track is not None else []

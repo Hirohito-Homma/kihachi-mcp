@@ -19,6 +19,8 @@ import logging
 import os
 import secrets
 import socket
+import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
@@ -40,7 +42,8 @@ LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DEVICE_PORT = 17771
 DEFAULT_REPLY_PORT = 17772
 MAX_REQUEST_BYTES = 60_000
-MAX_RESPONSE_BYTES = 262_144
+# A UDP datagram cannot exceed 65,507 bytes.
+MAX_RESPONSE_BYTES = 60_000
 DEFAULT_TIMEOUT_SECONDS = 5.0
 MAX_PLAN_OPERATIONS = 512
 
@@ -74,6 +77,9 @@ class LoopbackUdpChannel:
         self._device_address = (LOOPBACK_HOST, device_port)
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
+            # Darwin's default UDP send buffer is 9216 bytes, below the 60KB
+            # protocol cap. Raise it so a legal request is not rejected by the OS.
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65_507)
             self._socket.bind((LOOPBACK_HOST, reply_port))
         except OSError as exc:
             self._socket.close()
@@ -200,6 +206,7 @@ class LocalhostBridgeTransport:
         self._timeout = timeout_seconds
         self._max_request_bytes = max_request_bytes
         self._seen_request_ids: set[str] = set()
+        self._io_lock = threading.Lock()
 
     def _ensure_channel(self) -> DatagramChannel:
         if self._channel is None:
@@ -234,7 +241,17 @@ class LocalhostBridgeTransport:
                 f"{self._max_request_bytes} byte loopback limit; "
                 "split the plan into smaller operations",
             )
-        channel = self._ensure_channel()
+        with self._io_lock:
+            channel = self._ensure_channel()
+            return self._exchange_locked(channel, request_id, payload, message)
+
+    def _exchange_locked(
+        self,
+        channel: DatagramChannel,
+        request_id: str,
+        payload: bytes,
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
         self._seen_request_ids.add(request_id)
         _logger.info(
             "live.bridge.request",
@@ -245,25 +262,36 @@ class LocalhostBridgeTransport:
             },
         )
         channel.send(payload)
-        raw = channel.receive(self._timeout)
-        try:
-            decoded = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LiveTransportError(
-                ERROR_PROTOCOL, "the Max device sent a reply that is not JSON"
-            ) from exc
-        if not isinstance(decoded, dict):
-            raise LiveTransportError(
-                ERROR_PROTOCOL, "the Max device sent a reply that is not an object"
+        deadline = time.monotonic() + self._timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LiveTransportError(
+                    ERROR_TIMEOUT,
+                    f"the Max for Live device did not reply within {self._timeout:g}s",
+                )
+            raw = channel.receive(remaining)
+            try:
+                decoded = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise LiveTransportError(
+                    ERROR_PROTOCOL, "the Max device sent a reply that is not JSON"
+                ) from exc
+            if not isinstance(decoded, dict):
+                raise LiveTransportError(
+                    ERROR_PROTOCOL, "the Max device sent a reply that is not an object"
+                )
+            if str(decoded.get("request_id") or "") != request_id:
+                _logger.info("live.bridge.stale_response")
+                continue
+            _logger.info(
+                "live.bridge.response",
+                extra={
+                    "request_id": request_id,
+                    "ok": bool(decoded.get("ok")),
+                },
             )
-        _logger.info(
-            "live.bridge.response",
-            extra={
-                "request_id": request_id,
-                "ok": bool(decoded.get("ok")),
-            },
-        )
-        return decoded
+            return decoded
 
     def close(self) -> None:
         """Release the loopback channel and remove the handshake file."""

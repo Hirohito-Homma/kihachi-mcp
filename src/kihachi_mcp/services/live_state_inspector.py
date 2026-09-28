@@ -12,6 +12,8 @@ from typing import Any
 from kihachi_mcp.models.live_contract import SCHEMA_VERSION
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.services.live_transport import (
+    METHOD_GET_DEVICE_PARAMETERS,
+    METHOD_GET_DRUM_RACK_SUMMARY,
     METHOD_GET_STATE,
     METHOD_PING,
     PROTOCOL_VERSION,
@@ -77,15 +79,32 @@ class LiveStateInspector:
             )
         return report
 
-    def snapshot(self) -> LiveStateSnapshot:
+    def snapshot(
+        self,
+        include_arrangement: bool = True,
+        count_session_notes: bool = True,
+        include_session_clips: bool = True,
+    ) -> LiveStateSnapshot:
         """Return one observation of the current Live Set.
 
         Raises ``LiveTransportError`` if Live is unreachable and
         ``LiveVersionUnsupportedError`` if the Live major version is outside the
         range this adapter has been written against.
+
+        Studio planning omits arrangement clips and per-clip note counts so a
+        large Set can be inspected without timing out. Those omitted fields
+        are never reported as verified.
         """
         request_id = self._next_request_id()
-        payload = self._exchange(METHOD_GET_STATE, request_id)
+        payload = self._exchange(
+            METHOD_GET_STATE,
+            request_id,
+            {
+                "include_arrangement": include_arrangement,
+                "count_session_notes": count_session_notes,
+                "include_session_clips": include_session_clips,
+            },
+        )
         snapshot = LiveStateSnapshot.from_dict(payload)
         major = _major_version(snapshot.live_version)
         if major is not None and major < MIN_SUPPORTED_LIVE_MAJOR:
@@ -95,8 +114,40 @@ class LiveStateInspector:
             )
         return snapshot
 
-    def _exchange(self, method: str, request_id: str) -> dict[str, Any]:
-        message = build_message(method, request_id)
+    def device_parameters(
+        self, device_index: int, track_index: int | None = None, displays: bool = False
+    ) -> dict[str, Any]:
+        """Read every parameter name, range and switch item of one device.
+
+        ``track_index=None`` reads the Master track. ``displays`` adds what
+        the dial shows at eleven steps of each continuous range; it makes the
+        reply large, so it is for effects. Does not mutate Live.
+        """
+        target: dict[str, Any] = (
+            {"master": True} if track_index is None else {"track_index": track_index}
+        )
+        return self._exchange(
+            METHOD_GET_DEVICE_PARAMETERS,
+            self._next_request_id(),
+            {**target, "device_index": device_index, "displays": displays},
+        )
+
+    def drum_rack_summary(self, track_index: int) -> dict[str, Any]:
+        """Read Drum Rack pad occupancy for one track. Does not mutate Live."""
+        request_id = self._next_request_id()
+        return self._exchange(
+            METHOD_GET_DRUM_RACK_SUMMARY,
+            request_id,
+            {"track_index": track_index},
+        )
+
+    def _exchange(
+        self,
+        method: str,
+        request_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        message = build_message(method, request_id, payload)
         response = self._transport.request(message)
         return decode_response(response, request_id)
 

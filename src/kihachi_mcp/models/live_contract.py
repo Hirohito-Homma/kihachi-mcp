@@ -42,8 +42,14 @@ OP_CREATE_SCENE = "create_scene"
 OP_CREATE_SESSION_CLIP = "create_session_clip"
 OP_REPLACE_CLIP_NOTES = "replace_clip_notes"
 OP_LOAD_LIVE_DEVICE = "load_live_device"
+OP_LOAD_DRUM_PAD_SAMPLE = "load_drum_pad_sample"
+OP_SET_DEVICE_PARAMETER = "set_device_parameter"
+OP_SET_TRACK_MIXER = "set_track_mixer"
+OP_SET_SIDECHAIN_SOURCE = "set_sidechain_source"
 OP_CREATE_LOCATOR = "create_locator"
 OP_PLACE_ARRANGEMENT_CLIP = "place_arrangement_clip"
+OP_DELETE_LOCATOR = "delete_locator"
+OP_DELETE_ARRANGEMENT_CLIP = "delete_arrangement_clip"
 
 SUPPORTED_OPS = frozenset(
     {
@@ -56,8 +62,14 @@ SUPPORTED_OPS = frozenset(
         OP_CREATE_SESSION_CLIP,
         OP_REPLACE_CLIP_NOTES,
         OP_LOAD_LIVE_DEVICE,
+        OP_LOAD_DRUM_PAD_SAMPLE,
+        OP_SET_DEVICE_PARAMETER,
+        OP_SET_TRACK_MIXER,
+        OP_SET_SIDECHAIN_SOURCE,
         OP_CREATE_LOCATOR,
         OP_PLACE_ARRANGEMENT_CLIP,
+        OP_DELETE_LOCATOR,
+        OP_DELETE_ARRANGEMENT_CLIP,
     }
 )
 
@@ -68,7 +80,10 @@ STRUCTURAL_OPS = frozenset(
         OP_CREATE_SCENE,
         OP_CREATE_SESSION_CLIP,
         OP_LOAD_LIVE_DEVICE,
+        OP_LOAD_DRUM_PAD_SAMPLE,
         OP_PLACE_ARRANGEMENT_CLIP,
+        OP_DELETE_LOCATOR,
+        OP_DELETE_ARRANGEMENT_CLIP,
     }
 )
 

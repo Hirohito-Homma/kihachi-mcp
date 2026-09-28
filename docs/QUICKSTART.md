@@ -1,0 +1,79 @@
+# QUICKSTART
+
+日本語の制作指示から MIDI 候補を作り、確認・承認してから Ableton Live の専用トラックへ送り、Live から読み戻して検証するまでの最短手順です。有料APIは使いません。
+
+## 1. セットアップ（初回のみ）
+
+```bash
+./scripts/setup.sh
+```
+
+uv が必要です。Ollama は任意です（なくても「AIなし（既定解釈）」で制作できます）。KIHACHI はモデルを自動でダウンロードしません。→ [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
+
+## 2. Ableton Live の準備
+
+Live を起動し、KIHACHI Live Device（Max for Live）を任意のトラックに置きます。→ [ABLETON_SETUP.md](ABLETON_SETUP.md)
+
+## 3. 制作画面を開く
+
+```bash
+uv run kihachi start
+```
+
+ブラウザで http://127.0.0.1:8765/ が開きます。上部の表示が `Ollama: READY` / `Live: READY` になっていれば準備完了です。
+
+## 4. 曲を作る
+
+制作指示に書いて「候補を生成」を押します。例:
+
+```text
+110 BPM、D# minor。Mutation Funk × Dub × Tech House。
+ファンキーなスラップベース。Ghost notes。Octave movement。
+Dub chord。Mutation synth。Swing 54%。約5分。
+```
+
+## 5. 確認 → 承認 → 送信 → 検証
+
+1. 「プロジェクト」で構成（セクション）とトラックを確認します。
+2. 「AIレビュー」の指摘を見て、必要なら「選んだ指摘を修正」→ 修正案の BEFORE / AFTER を見て「採用」。
+3. 「この候補を承認」。
+4. 「適用内容を確認」（ドライラン。Live は変わりません）。
+5. 「この内容でLiveへ適用」（1回だけ。自動再試行なし）。
+6. 結果の `ABLETON VERIFICATION` がすべて PASS / SKIP なら `PROJECT READY` です。
+
+## 6. 音作り → MIX → マスタリング → 音圧の測定
+
+`PROJECT READY` の後、制作画面の下の欄を上から順に使います。どれも「確認」で内容を見てから送る（1回だけ）形で、Live の再生・録音中は止まります。既存のデバイスは消しません。
+
+1. 「エフェクト処理」: 各トラックの音源の後ろにパートごとの EQ・コンプ・サチュレーター・リバーブ・ディレイを追加。
+2. 「MIX」: 各トラックの音量(dB)とパンを揃える（キックが最大、120Hz以下は中央）。
+3. 「サイドチェイン」: Sub・Bass・Pad の最後に、キックで音量を沈めるコンプを追加。
+4. 「マスタリング」: マスタートラックの最後に EQ → Glue Compressor → Saturator → Utility → Limiter を追加。
+5. Live で WAV を書き出し、`uv run kihachi measure <WAVのパス> --project <候補ID>` で音圧（LUFS）・True Peak・セクション別音圧を測ります（Live 不要）。
+
+レシピ（`src/kihachi_mcp/knowledge/part_sounds.py`）を変えたときは、制作画面を再起動してから次で設定し直します。どちらもつまみだけを変え、デバイスの追加・削除はしません。
+
+```bash
+uv run kihachi ableton retune <候補ID> --part Kick   # パートのエフェクト
+uv run kihachi ableton master --retune               # マスタリング
+```
+
+## CLI だけで行う場合
+
+```bash
+uv run kihachi create "122 BPM、Dマイナー、64小節のTech House"
+uv run kihachi review <候補ID>
+uv run kihachi approve <候補ID>
+uv run kihachi ableton dry-run <候補ID>
+uv run kihachi ableton execute <候補ID>   # 確認の質問に y と答えると1回だけ送信
+uv run kihachi ableton verify <候補ID>
+uv run kihachi ableton effects <候補ID>
+uv run kihachi ableton mix <候補ID>
+uv run kihachi ableton sidechain <候補ID>
+uv run kihachi ableton master
+uv run kihachi measure <WAVのパス> --project <候補ID>
+```
+
+Live に触れる手順（`ableton` の各コマンド）は、起動中の制作画面を通して行います。`measure` は Live も制作画面も不要です。候補IDは先頭数文字で指定できます。
+
+困ったときは [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。

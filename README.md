@@ -2,7 +2,9 @@
 
 Current milestone
 
-Ableton Live 自動操作（ADR-0006）／**実機未検証**
+KIHACHI MUSIC AI Studio 統合 ／ 実機スモークテスト済み（Live 12.4.5、2026-09-28、[CURRENT_SYSTEM_STATUS](docs/CURRENT_SYSTEM_STATUS.md)）
+
+最短手順は [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
 # KIHACHI Brain
 
@@ -21,6 +23,32 @@ Memory learns from every song.
 Review improves every iteration.
 
 このリポジトリは Brain（FastMCP）です。ジャンル知識から SongSpec と ProjectPlan を作り、承認を経て Ableton Live の Session View と Arrangement View を組み立てます。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
+
+## 制作画面の起動
+
+日常の制作では Cursor や Codex を開く必要はありません。
+
+```bash
+./scripts/setup.sh      # 初回のみ
+uv run kihachi start    # http://127.0.0.1:8765/
+```
+
+または `scripts/kihachi-studio.command` をダブルクリックします。画面の説明は [docs/STUDIO_GUIDE.md](docs/STUDIO_GUIDE.md)、手順と復旧は [docs/STUDIO.md](docs/STUDIO.md)、困ったときは [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。Ollama は [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md)、Live は [docs/ABLETON_SETUP.md](docs/ABLETON_SETUP.md)。
+
+## CLI
+
+```bash
+uv run kihachi doctor
+uv run kihachi create "110 BPM、D# minor。Mutation Funk。Swing 54%。約5分。"
+uv run kihachi projects
+uv run kihachi inspect <候補ID>
+uv run kihachi review <候補ID>
+uv run kihachi revise <候補ID> --scope bass --bars 33-49 [--accept]
+uv run kihachi approve <候補ID>
+uv run kihachi ableton plan|dry-run|execute|verify <候補ID>
+```
+
+制作画面・CLI・MCP は同じ `StudioRuntime` を使います。Live に触れる `ableton dry-run / execute / verify` は起動中の制作画面を通します。
 
 ## 前提
 
@@ -52,6 +80,16 @@ Review improves every iteration.
 | `remember_song` | SongSpec とReview結果をMemoryへ保存 |
 | `search_memory` | ジャンル・全文・Review品質・順位でMemoryを検索 |
 | `orchestrate_song` | 生成・Review・Memory・Project作成を一括実行 |
+| `preview_local_ai_song` | 制作画面と同じ経路で MIDI 候補を返す（Live は変更しない） |
+| `create_song` | 制作指示から候補を作って保存する |
+| `list_projects` / `get_project` | 保存済みの候補の一覧・詳細（SongSpec・構成・トラック・レビュー・履歴） |
+| `review_song` | 送る予定のノートを規則でレビューする |
+| `revise_song` | 指摘・対象・小節範囲だけを局所修正する（`accept=True` で採用） |
+| `approve_song` | 候補を承認する（送信の前提） |
+| `dry_run_ableton_plan` | 送信内容を確認する（Live は変更しない） |
+| `execute_ableton_plan` | 承認済み候補を1回だけ送信する（`confirmed=True` が必要） |
+| `verify_ableton_project` | Live から読み戻して計画と比較する |
+| `ollama_status` / `doctor` | AI と環境の状態 |
 
 `save_live_set` は実装していません。設計のみ [docs/issues/ISSUE-0021.md](docs/issues/ISSUE-0021.md) にあります。
 
@@ -119,9 +157,9 @@ uv run ruff check src tests server.py
 uv run fastmcp list server.py
 ```
 
-`fastmcp list` の期待値: Tools (17) — `hello` / `generate_songspec` / `create_project_from_songspec` / `create_ableton_plan` / `create_midi_plan` / `prepare_ableton_handoff` / `inspect_live_state` / `live_device_catalogue` / `create_live_mutation_plan` / `request_live_execution` / `execute_live_request` / `verify_live_execution` / `expand_session_to_arrangement` / `review_songspec` / `remember_song` / `search_memory` / `orchestrate_song`
+`fastmcp list` の期待値: Tools (29) — 上の表のすべて。
 
-テストは fake transport のみを使い、Ableton Live も Max も起動しません。**実機検証は [docs/MANUAL_LIVE_TESTS.md](docs/MANUAL_LIVE_TESTS.md) を人間が実行するまで完了しません。** 現時点は実機未検証です。
+テストは fake transport のみを使い、Ableton Live も Max も起動しません。実機のスモークテストは `./scripts/verify_live.sh`（送信前に確認あり）。その他の実機手順は [docs/MANUAL_LIVE_TESTS.md](docs/MANUAL_LIVE_TESTS.md)。
 
 ## Python package structure
 

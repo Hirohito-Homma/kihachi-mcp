@@ -3,6 +3,7 @@ from typing import Any
 from kihachi_mcp.knowledge import KnowledgeEngine
 from kihachi_mcp.models import Arrangement, SongSpec
 from kihachi_mcp.models.genre_template import GenreTemplate
+from kihachi_mcp.services.musical_time import duration_minutes as meter_duration_minutes
 
 _BARS_PER_MINUTE = 32
 
@@ -26,8 +27,23 @@ class SongService:
         return max(1, int(bars)) / _BARS_PER_MINUTE
 
     def estimate_duration(self, songspec: SongSpec) -> float:
-        """Estimate duration in minutes from the SongSpec bar count."""
+        """Estimate duration in minutes from the SongSpec bar count.
+
+        The legacy Brain path still uses the 32-bars-per-minute grid so
+        existing SongSpec contracts stay unchanged. Studio uses
+        ``duration_from_meter``.
+        """
         return self.minutes_from_bars(songspec.bars)
+
+    def duration_from_meter(
+        self,
+        bars: int,
+        tempo: int,
+        numerator: int = 4,
+        denominator: int = 4,
+    ) -> float:
+        """Return minutes from bars, time signature, and BPM."""
+        return meter_duration_minutes(bars, tempo, numerator, denominator)
 
     def default_arrangement(
         self, genre: str, bars: int | None = None

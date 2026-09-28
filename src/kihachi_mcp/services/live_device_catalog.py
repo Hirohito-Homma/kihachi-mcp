@@ -41,12 +41,18 @@ STOCK_DEVICES: tuple[LiveStockDevice, ...] = (
     LiveStockDevice("Operator", CATEGORY_INSTRUMENT, "fm_synth"),
     LiveStockDevice("Wavetable", CATEGORY_INSTRUMENT, "wavetable_synth"),
     LiveStockDevice("Drift", CATEGORY_INSTRUMENT, "analog_synth"),
+    # Suite only. The availability list read from Live decides whether it loads.
+    LiveStockDevice("Analog", CATEGORY_INSTRUMENT, "analog_synth"),
     LiveStockDevice("Auto Filter", CATEGORY_EFFECT, "filter"),
     LiveStockDevice("EQ Eight", CATEGORY_EFFECT, "equaliser"),
     LiveStockDevice("Compressor", CATEGORY_EFFECT, "dynamics"),
     LiveStockDevice("Saturator", CATEGORY_EFFECT, "saturation"),
     LiveStockDevice("Echo", CATEGORY_EFFECT, "delay"),
     LiveStockDevice("Hybrid Reverb", CATEGORY_EFFECT, "reverb"),
+    LiveStockDevice("Utility", CATEGORY_EFFECT, "gain_width"),
+    LiveStockDevice("Glue Compressor", CATEGORY_EFFECT, "bus_compressor"),
+    LiveStockDevice("Drum Buss", CATEGORY_EFFECT, "drum_bus"),
+    LiveStockDevice("Limiter", CATEGORY_EFFECT, "limiter"),
 )
 
 STOCK_DEVICE_NAMES = frozenset(device.name for device in STOCK_DEVICES)
@@ -62,6 +68,7 @@ _ROLE_BY_TRACK_KEYWORD: tuple[tuple[str, str], ...] = (
     ("hat", "Drum Rack"),
     ("clap", "Drum Rack"),
     ("snare", "Drum Rack"),
+    ("fx", "Drum Rack"),
     ("bass", "Operator"),
     ("sub", "Operator"),
     ("pad", "Wavetable"),
@@ -71,6 +78,9 @@ _ROLE_BY_TRACK_KEYWORD: tuple[tuple[str, str], ...] = (
     ("lead", "Drift"),
     ("arp", "Drift"),
     ("pluck", "Drift"),
+    ("vocal", "Wavetable"),
+    ("guitar", "Drift"),
+    ("horn", "Analog"),
 )
 
 DEFAULT_INSTRUMENT = "Simpler"

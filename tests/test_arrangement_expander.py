@@ -73,6 +73,19 @@ def test_a_verified_session_expands_into_locators_and_clips() -> None:
     assert plan.destructive_operation_count == 0
 
 
+def test_arrangement_clips_are_planned_before_locators() -> None:
+    transport, _, receipt, _ = _verified_session()
+
+    plan = _expander().create_arrangement_plan(
+        project_plan(), snapshot_of(transport), receipt
+    )
+    ops = [operation.op for operation in plan.operations]
+    first_locator = ops.index(OP_CREATE_LOCATOR)
+
+    assert all(op == OP_PLACE_ARRANGEMENT_CLIP for op in ops[:first_locator])
+    assert all(op == OP_CREATE_LOCATOR for op in ops[first_locator:])
+
+
 def test_placements_use_the_planned_bar_grid() -> None:
     transport, _, receipt, _ = _verified_session()
 

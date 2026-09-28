@@ -7,6 +7,35 @@ Status: Living Document
 
 ---
 
+# Studio integration (current implementation)
+
+制作画面・CLI・MCP は同じアプリケーション層を共有します。制作ロジックの正本は kihachi-mcp です。
+
+```
+ 制作画面 (static/index.html)   kihachi CLI (cli.py)   MCP tools (tools/studio.py)
+            │ HTTP /api/*              │ Live系はStudio HTTP経由   │
+            └──────────────┬───────────┴───────────────────────────┘
+                           ▼
+                  StudioRuntime (services/studio_runtime.py)
+     generate · projects · review · revise(提案→採用) · approve · dry_run · send · verify
+     settings · diagnostics
+                           │
+   ┌──────────┬────────────┼─────────────┬───────────────┬──────────────────┐
+   ▼          ▼            ▼             ▼               ▼                  ▼
+ AIProvider  brief/       midi_candidate production_     live_execution_   studio_workflow
+ (Ollama /   interpreter  _builder       review/revision service + gate    (状態語・読み戻し比較・
+ deterministic)(修復/再試行)(ジャンル別MIDI)(同じしきい値)  (1回だけ実行)     設定・一覧)
+                                                         │
+                                         Max for Live device (UDP 17771/17772)
+                                         AbletonGPT Remote Script (TCP 9877, 任意)
+```
+
+- AIProvider は `health` / `list_models` / `generate` / `generate_structured` / `capabilities` を持ち、設定（画面保存 → 環境変数 → 既定値）から選びます。
+- Live への書き込みは「承認 → ドライラン → 1回だけ送信 → 読み戻し比較」の順だけです。期待値（トラックごとのクリップ数・ノート数）は送信前に `<id>.expected.json` に保存し、再起動後も検証できます。
+- 修正は子候補を作る提案で、採用するまで親候補は変わりません。履歴は `.kihachi-revisions.json`。
+
+---
+
 # Overview
 
 KIHACHI MUSIC AI is composed of independent MCP services.

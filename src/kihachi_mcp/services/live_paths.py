@@ -18,6 +18,7 @@ SYSTEM_WINDOWS = "Windows"
 
 APP_DIR_NAME = "KIHACHI"
 BRIDGE_HANDSHAKE_FILENAME = "live-bridge.json"
+CANDIDATE_DIR_NAME = "candidates"
 
 
 def current_system() -> str:
@@ -31,8 +32,8 @@ def bridge_state_dir(
     """Return the directory holding the bridge handshake file.
 
     macOS uses Application Support, Windows uses LOCALAPPDATA, and anything
-    else (including CI containers) uses an XDG state directory. Only the
-    handshake file lives here, and it is never committed.
+    else (including CI containers) uses an XDG state directory. The handshake
+    file and saved Studio candidates live here, and neither is committed.
     """
     system = system or current_system()
     env = environ if environ is not None else os.environ
@@ -55,3 +56,14 @@ def bridge_handshake_path(
 ) -> PurePath:
     """Return the full path of the bridge handshake file."""
     return bridge_state_dir(system, environ) / BRIDGE_HANDSHAKE_FILENAME
+
+
+def candidate_store_dir(
+    system: str | None = None, environ: Mapping[str, str] | None = None
+) -> PurePath:
+    """Return the directory where Studio keeps candidates across restarts."""
+    env = environ if environ is not None else os.environ
+    override = env.get("KIHACHI_PROJECT_DIR")
+    if override:
+        return PurePath(override)
+    return bridge_state_dir(system, environ) / CANDIDATE_DIR_NAME

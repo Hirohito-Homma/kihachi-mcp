@@ -1,6 +1,8 @@
 """Interpret a Japanese brief with the installed local model only."""
 
 import json
+import re
+from dataclasses import replace
 from http.client import HTTPConnection
 from typing import Any
 
@@ -20,7 +22,7 @@ from kihachi_mcp.models.production_brief import (
     SectionIntent,
     SourcedValue,
 )
-from kihachi_mcp.services.brief_parser import extract_explicit
+from kihachi_mcp.services.brief_parser import explicit_swing, extract_explicit
 
 DEFAULT_MODEL = "gemma4:latest"
 DEFAULT_HOST = "127.0.0.1"
@@ -175,6 +177,23 @@ def validate_model_intent(value: Any) -> dict[str, Any]:
     return value
 
 
+def interpret_brief_offline(brief: str) -> ProductionBrief:
+    """Build a brief from explicit text and defaults when Ollama is offline."""
+    extracted = extract_explicit(brief)
+    intent = {
+        **_DEFAULTS,
+        "unhandled": ["Ollamaがオフラインのため、明示指定と既定値だけで組み立てました"],
+        "ambiguous": [],
+    }
+    production = assemble_brief(extracted, intent, model="deterministic")
+    note = "Ollamaはオフラインです。明示された値と既定値で組み立てました。"
+    return replace(
+        production,
+        provider="deterministic",
+        interpretations=production.interpretations + (note,),
+    )
+
+
 def interpret_brief(
     brief: str,
     client: OllamaClient | None = None,
@@ -217,10 +236,62 @@ def interpret_brief(
     session = client or OllamaClient()
     result = session.chat(payload)
     try:
-        raw_intent = validate_model_intent(json.loads(result["message"]["content"]))
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raw_intent = validate_model_intent(parse_model_json(result["message"]["content"]))
+    except (KeyError, TypeError) as exc:
         raise InterpretationError("AI応答をJSONとして読めません") from exc
     return assemble_brief(extracted, raw_intent, model=model)
+
+
+def parse_model_json(content: Any) -> Any:
+    """Parse model JSON, repairing only code fences and text around one object."""
+    if not isinstance(content, str):
+        raise InterpretationError("AI応答をJSONとして読めません")
+    text = content.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise InterpretationError("AI応答をJSONとして読めません")
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise InterpretationError("AI応答をJSONとして読めません") from exc
+
+
+def interpret_with_fallback(
+    brief: str,
+    client_factory: Any = None,
+    model: str = DEFAULT_MODEL,
+    attempts: int = 2,
+) -> ProductionBrief:
+    """Try the local model a bounded number of times, then use explicit values.
+
+    Cancellation is not a failure to recover from, so it propagates.
+    """
+    factory = client_factory or OllamaClient
+    reasons: list[str] = []
+    for _ in range(max(1, min(attempts, 3))):
+        try:
+            return interpret_brief(brief, client=factory(), model=model)
+        except InferenceCancelled:
+            raise
+        except InterpretationError as exc:
+            reasons.append(str(exc))
+    fallback = interpret_brief_offline(brief)
+    note = (
+        f"AIの応答が{len(reasons)}回とも使えなかったため、明示指定と既定値で組み立てました"
+        f"（{reasons[-1]}）"
+    )
+    return replace(
+        fallback,
+        unhandled=tuple(item for item in fallback.unhandled if "オフライン" not in item) + (note,),
+        interpretations=tuple(
+            item for item in fallback.interpretations if "オフライン" not in item
+        )
+        + (note,),
+    )
 
 
 def assemble_brief(
@@ -239,7 +310,7 @@ def assemble_brief(
             model_value = intent[name]
             # The model may only answer three genres; a brief naming any of the
             # 1020 is read by rule, and disagreeing with it is not news.
-            if model_value != user_value and name != "genre":
+            if model_value != user_value and name != "genre" and model != "deterministic":
                 contradictions.append(
                     f"{name} は指示の {user_value} を保持し、AIの {model_value} は採用しません"
                 )
@@ -265,10 +336,15 @@ def assemble_brief(
     drop = int(merged["drop_start_bar"].value)
     if drop and drop > bars:
         raise InterpretationError("ドロップ開始小節が曲の長さを超えています")
-    sections = build_sections(bars, drop)
-    unhandled = _unique(
-        list(extracted.get("unhandled") or []) + list(intent.get("unhandled") or [])
-    )
+    sections = build_sections(bars, drop, str(merged["genre"].value))
+    model_unhandled = _readable(intent.get("unhandled"))
+    if explicit_swing(str(extracted["original_text"])) is not None:
+        # The rule reads swing and the builder applies it to note timing.
+        model_unhandled = [
+            item for item in model_unhandled
+            if "swing" not in item.lower() and "スイング" not in item
+        ]
+    unhandled = _unique(list(extracted.get("unhandled") or []) + model_unhandled)
     interpretations = genre_notes + build_interpretations(merged, sections)
     return ProductionBrief(
         original_text=str(extracted["original_text"]),
@@ -288,10 +364,19 @@ def assemble_brief(
         sections=sections,
         interpretations=tuple(interpretations),
         unhandled=tuple(unhandled),
-        ambiguous=tuple(_unique(intent.get("ambiguous") or [])),
+        ambiguous=tuple(_unique(_readable(intent.get("ambiguous")))),
         contradictions=tuple(contradictions),
         model=model,
     )
+
+
+def _readable(items: Any) -> list[str]:
+    """Drop bare field names such as "duration": they tell the user nothing."""
+    return [
+        str(item)
+        for item in items or []
+        if str(item).strip() and not re.fullmatch(r"[a-z_]+", str(item).strip())
+    ]
 
 
 def _apply_genre(merged: dict[str, SourcedValue], text: str) -> list[str]:
@@ -303,6 +388,15 @@ def _apply_genre(merged: dict[str, SourcedValue], text: str) -> list[str]:
     bpm = genre.informative_bpm
     range_text = f"{bpm[0]:g}–{bpm[1]:g} BPM" if bpm else "範囲が広く目安なし"
     notes.append(f"ジャンル: {genre.name}（{genre.family} 系、一般的なテンポ {range_text}）")
+    if genre.slug == "mutation_funk":
+        notes.append(
+            "リズム: 変則キック、2小節で応答するベース、弱いゴーストノートを使います。"
+            "参考音源のMIDIを抽出したものではなく、現段階では試作パターンです"
+        )
+        notes.append(
+            "音色: Analogの短いベースとWavetableの短いコードを試作設定します。"
+            "参考曲の音色を複製したものではありません"
+        )
     tempo = merged["tempo"]
     if tempo.source in {SOURCE_DEFAULT} and bpm is not None:
         suggested = typical_bpm([genre.slug])
@@ -347,7 +441,7 @@ def _tone_notes(merged: dict[str, SourcedValue]) -> list[str]:
     return [f"音色: {'、'.join(moved)}（{genre} の音色レシピに適用、曲全体で一定）"]
 
 
-def build_sections(bars: int, drop_start_bar: int) -> tuple[SectionIntent, ...]:
+def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[SectionIntent, ...]:
     """Build contiguous sections, honoring an explicit drop start bar."""
     if drop_start_bar:
         intro_end = min(32, drop_start_bar - 1)
@@ -368,6 +462,25 @@ def build_sections(bars: int, drop_start_bar: int) -> tuple[SectionIntent, ...]:
         else:
             parts.append(("Drop", drop_start_bar, remaining))
         return tuple(SectionIntent(name, start, length) for name, start, length in parts)
+
+    if genre == "mutation_funk" and bars >= 32:
+        if bars >= 96:
+            lengths = [8, 16, 16, 16, 8, 16, 16]
+        elif bars >= 64:
+            lengths = [8, 8, 8, 16, 8, 8, 8]
+        else:
+            lengths = [4, 4, 4, 4, 4, 8, 4]
+        for index in range((bars - sum(lengths)) // 4):
+            lengths[(1, 3, 2, 5)[index % 4]] += 4
+        cursor = 1
+        sections = []
+        for name, length in zip(
+            ("Intro", "VerseA", "VerseB", "ChorusA", "Break", "ChorusB", "Outro"),
+            lengths,
+        ):
+            sections.append(SectionIntent(name, cursor, length))
+            cursor += length
+        return tuple(sections)
 
     quarter = bars // 4
     return (

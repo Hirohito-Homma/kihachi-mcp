@@ -16,6 +16,16 @@ def _states(coverage):
     return {clause["text"]: clause["state"] for clause in coverage["clauses"]}
 
 
+def test_genre_defaults_are_named_but_not_called_read() -> None:
+    text = "Ghost notes。Octave movement。4つ打ちKick"
+    states = _states(read_coverage(text, genre="mutation_funk"))
+    assert states["Ghost notes"] == "genre_default"
+    assert states["Octave movement"] == "genre_default"
+    # Mutation Funk writes an irregular kick; a four-on-the-floor request stays unread.
+    assert states["4つ打ちKick"] == "unread"
+    assert _states(read_coverage(text))["Ghost notes"] == "unread"
+
+
 def test_statements_nothing_reads_are_listed_not_dropped() -> None:
     """The first real dub-techno brief lost five statements without a word."""
     coverage = read_coverage(USER_BRIEF)

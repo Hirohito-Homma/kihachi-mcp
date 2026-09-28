@@ -34,6 +34,7 @@ _LABELS = {
     "mood": "ムード",
     "genre": "ジャンル",
     "echo": "ディレイ",
+    "swing": "スイング",
     "tone_brightness": "音の明るさ（曲全体）",
     "tone_length": "音の長さ（曲全体）",
     "tone_delay": "ディレイの量",
@@ -54,11 +55,26 @@ MODEL_FIELDS = {
 }
 TONE_FIELD_NAMES = frozenset({"tone_brightness", "tone_length", "tone_delay"})
 
+#: Words for what a genre's generator always writes, whether asked or not.
+#: A match is "the pattern already has it", never "the words were read".
+GENRE_BUILT_IN: dict[str, tuple[tuple[tuple[str, ...], str], ...]] = {
+    "mutation_funk": (
+        (("ghost", "ゴースト"), "ゴーストノート"),
+        (("octave", "オクターブ"), "ベースのオクターブ移動"),
+        (("syncopa", "シンコペ"), "シンコペーション"),
+        (("slap", "スラップ"), "短く跳ねるベース"),
+        (("dub chord", "ダブコード", "ダブ・コード"), "Stabのコード"),
+        (("mutation synth", "ミューテーション"), "Leadパート"),
+    ),
+}
+
 
 def read_coverage(
-    text: str, model_filled: list[dict[str, Any]] | None = None
+    text: str,
+    model_filled: list[dict[str, Any]] | None = None,
+    genre: str | None = None,
 ) -> dict[str, Any]:
-    """Mark every statement as read, partly read, out of scope, or unread."""
+    """Mark every statement as read, partly read, genre default, out of scope, or unread."""
     _fields, spans = read_explicit(text)
     scope = out_of_scope_spans(text)
     clauses = []
@@ -72,8 +88,12 @@ def read_coverage(
         for a, b, _label in spans:
             touched.update(range(max(a, start), min(b, end)))
         covered = round(len(touched) / len(clause), 4) if clause else 0.0
+        built_in = _built_in(clause, genre)
         if read_as:
             state = "partly_read" if covered <= PARTIAL_AT_OR_BELOW else "read"
+        elif built_in:
+            state = "genre_default"
+            read_as = built_in
         elif out:
             state = "out_of_scope"
         else:
@@ -131,6 +151,15 @@ def model_filled_fields(brief: Any) -> list[dict[str, Any]]:
             affects = recipe_for(str(brief.genre.value)) is not None
         filled.append({"label": label, "value": str(value.value), "affects_notes": affects})
     return filled
+
+
+def _built_in(clause: str, genre: str | None) -> list[str]:
+    lowered = clause.lower()
+    return [
+        label
+        for words, label in GENRE_BUILT_IN.get(genre or "", ())
+        if any(word in lowered for word in words)
+    ]
 
 
 def _clauses(text: str) -> list[tuple[int, str]]:

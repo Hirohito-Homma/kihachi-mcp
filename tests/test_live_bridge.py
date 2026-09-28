@@ -353,6 +353,12 @@ def test_saved_candidates_sit_beside_the_handshake_file() -> None:
     assert candidate_store_dir(SYSTEM_DARWIN, env).name == "candidates"
 
 
+def test_the_project_directory_can_be_moved() -> None:
+    env = {"HOME": "/Users/kihachi", "KIHACHI_PROJECT_DIR": "/tmp/songs"}
+
+    assert str(candidate_store_dir(SYSTEM_DARWIN, env)) == "/tmp/songs"
+
+
 def test_the_handshake_filename_is_stable_across_platforms() -> None:
     macos = bridge_handshake_path(SYSTEM_DARWIN, {"HOME": "/Users/kihachi"})
     windows = bridge_handshake_path(

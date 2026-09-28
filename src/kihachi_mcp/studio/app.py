@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,21 @@ from urllib.parse import parse_qs, urlparse
 
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.live_paths import candidate_store_dir
+from kihachi_mcp.services.reference_library import ReferenceLibrary
+from kihachi_mcp.services.reference_sources import ReferenceSources
+from kihachi_mcp.services.sample_catalog import SampleCatalog
+from kihachi_mcp.services.studio_dialogue import StudioDialogue
 from kihachi_mcp.services.studio_runtime import StudioRuntime
+from kihachi_mcp.services.voice_io import (
+    MAX_AUDIO_BYTES,
+    VoiceError,
+    correct_voice_terms,
+    synthesize_japanese,
+    transcribe_japanese_options,
+    voice_authorize,
+    voice_status,
+)
+from kihachi_mcp.studio import reference_routes
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -20,10 +35,20 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 class StudioApp:
     """Serve the studio page and JSON API on loopback."""
 
-    def __init__(self, runtime: StudioRuntime | None = None) -> None:
+    def __init__(
+        self,
+        runtime: StudioRuntime | None = None,
+        reference_library: ReferenceLibrary | None = None,
+        reference_sources: ReferenceSources | None = None,
+        sample_catalog: SampleCatalog | None = None,
+    ) -> None:
         self.runtime = runtime or StudioRuntime(
             start_bridge=True, candidate_dir=Path(candidate_store_dir())
         )
+        self.reference_library = reference_library or ReferenceLibrary()
+        self.reference_sources = reference_sources or ReferenceSources()
+        self.sample_catalog = sample_catalog or SampleCatalog()
+        self.dialogue = StudioDialogue(sample_catalog=self.sample_catalog)
 
     def serve_forever(self, host: str = HOST, port: int = PORT) -> None:
         """Start the blocking HTTP server."""
@@ -44,16 +69,60 @@ def _handler_for(app: StudioApp):
             return
 
         def do_GET(self) -> None:
+            self._guarded(self._get)
+
+        def do_POST(self) -> None:
+            origin = self.headers.get("Origin")
+            if origin is not None and origin != "http://" + self.headers.get("Host", ""):
+                self._send_json({"ok": False, "error": "Studioの画面から操作してください"}, 403)
+                return
+            self._guarded(self._post)
+
+        def _guarded(self, handle: Any) -> None:
+            try:
+                handle()
+            except Exception as exc:  # noqa: BLE001 - never show a traceback to the user
+                detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "処理中に予期しないエラーが起きました。もう一度試すか、診断を開いてください。",
+                        "technical_detail": detail,
+                    },
+                    500,
+                )
+
+        def _get(self) -> None:
             parsed = urlparse(self.path)
+            if _workflow_get(self, runtime, parsed):
+                return
+            if parsed.path == "/references":
+                self._send_file(
+                    STATIC_DIR / "references.html", "text/html; charset=utf-8"
+                )
+                return
+            if reference_routes.handle_get(
+                self,
+                app.reference_library,
+                parsed,
+                app.reference_sources,
+                app.sample_catalog,
+            ):
+                return
             if parsed.path == "/":
                 self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/health":
                 self._send_json(runtime.health())
                 return
+            if parsed.path == "/api/dialogue/voice/status":
+                self._send_json(voice_status())
+                return
             if parsed.path == "/api/apply/last":
                 last = runtime.last_apply()
-                self._send_json(last or {"ok": False, "error": "適用結果はまだありません"})
+                self._send_json(
+                    last or {"ok": False, "error": "適用結果はまだありません"}
+                )
                 return
             if parsed.path == "/api/coverage":
                 query = parse_qs(parsed.query)
@@ -95,15 +164,106 @@ def _handler_for(app: StudioApp):
                         "coverage": read_coverage(
                             candidate.brief.original_text,
                             model_filled_fields(candidate.brief),
+                            str(candidate.brief.genre.value),
                         ),
                     }
                 )
                 return
             self._send_json({"ok": False, "error": "not found"}, 404)
 
-        def do_POST(self) -> None:
+        def _post(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/dialogue/"):
+                content_type = self.headers.get("Content-Type", "").split(";")[0]
+                allowed_types = (
+                    {"audio/webm", "audio/mp4", "audio/ogg", "audio/wav"}
+                    if parsed.path == "/api/dialogue/transcribe"
+                    else {"application/json"}
+                )
+                if content_type not in allowed_types or self.headers.get(
+                    "Origin", "http://" + self.headers.get("Host", "")
+                ) != "http://" + self.headers.get("Host", ""):
+                    self._send_json(
+                        {"ok": False, "error": "Studioの画面から操作してください"}, 403
+                    )
+                    return
+                if parsed.path == "/api/dialogue/transcribe":
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if not 100 <= length <= MAX_AUDIO_BYTES:
+                            raise VoiceError("15秒以内・5MB以内の音声を送ってください")
+                        recognition = transcribe_japanese_options(
+                            self.rfile.read(length), content_type
+                        )
+                    except (VoiceError, ValueError) as exc:
+                        self._send_json({"ok": False, "error": str(exc)}, 400)
+                        return
+                    raw_transcript = recognition["transcript"]
+                    transcript = correct_voice_terms(raw_transcript)
+                    alternatives = list(dict.fromkeys(
+                        [transcript]
+                        + [correct_voice_terms(choice) for choice in recognition["alternatives"]]
+                        + ([raw_transcript] if raw_transcript != transcript else [])
+                    ))[:5]
+                    self._send_json({
+                        "ok": True,
+                        "transcript": transcript,
+                        "raw_transcript": raw_transcript,
+                        "alternatives": alternatives,
+                        "on_device": True,
+                    })
+                    return
+                body = self._read_json()
+                if parsed.path == "/api/dialogue/voice/authorize":
+                    try:
+                        self._send_json(voice_authorize())
+                    except VoiceError as exc:
+                        self._send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                if parsed.path == "/api/dialogue/speak":
+                    try:
+                        data = synthesize_japanese(body.get("text"))
+                    except VoiceError as exc:
+                        self._send_json({"ok": False, "error": str(exc)}, 400)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                if parsed.path == "/api/dialogue/turn":
+                    self._send_json(
+                        app.dialogue.turn(
+                            body.get("session_id"),
+                            body.get("utterance"),
+                            body.get("brief"),
+                        )
+                    )
+                    return
+                if parsed.path == "/api/dialogue/accept":
+                    self._send_json(
+                        app.dialogue.accept(
+                            body.get("session_id"),
+                            body.get("proposal_id"),
+                            body.get("brief"),
+                        )
+                    )
+                    return
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            if reference_routes.handle_post(
+                self,
+                app.reference_library,
+                parsed,
+                app.reference_sources,
+                app.sample_catalog,
+            ):
+                return
             body = self._read_json()
+            if _workflow_post(self, runtime, parsed, body):
+                return
             if parsed.path == "/api/materialize":
                 seed = body.get("seed")
                 if seed is None:
@@ -119,7 +279,9 @@ def _handler_for(app: StudioApp):
                             brief,
                             seed=int(seed),
                             candidate_id=str(body.get("candidate_id") or "") or None,
-                            parent_candidate_id=str(body.get("parent_candidate_id") or ""),
+                            parent_candidate_id=str(
+                                body.get("parent_candidate_id") or ""
+                            ),
                         )
                     )
                 except (TypeError, ValueError) as exc:
@@ -170,7 +332,7 @@ def _handler_for(app: StudioApp):
                 return
             if parsed.path == "/api/apply":
                 self._send_json(
-                    runtime.apply(
+                    runtime.send_to_ableton(
                         str(body.get("candidate_id") or ""),
                         confirmed=bool(body.get("confirmed")),
                         change_tempo=bool(body.get("change_tempo")),
@@ -220,3 +382,80 @@ def _handler_for(app: StudioApp):
             self.wfile.write(data)
 
     return Handler
+
+
+def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
+    """Read-only workspace, settings and diagnostics routes."""
+    query = parse_qs(parsed.query)
+    candidate_id = (query.get("candidate_id") or [""])[0]
+    if parsed.path == "/api/projects":
+        handler._send_json({"ok": True, "projects": runtime.list_projects()})
+    elif parsed.path == "/api/project":
+        result = runtime.project(candidate_id or runtime.selected_id())
+        handler._send_json(result, 200 if result.get("ok") else 404)
+    elif parsed.path == "/api/settings":
+        handler._send_json({"ok": True, "settings": runtime.settings()})
+    elif parsed.path == "/api/ollama":
+        handler._send_json(runtime.ollama_status())
+    elif parsed.path == "/api/diagnostics":
+        handler._send_json(runtime.diagnostics())
+    elif parsed.path == "/api/ableton/plan":
+        handler._send_json(runtime.ableton_plan(candidate_id or runtime.selected_id()))
+    else:
+        return False
+    return True
+
+
+def _workflow_post(
+    handler: Any, runtime: StudioRuntime, parsed: Any, body: dict[str, Any]
+) -> bool:
+    """Review, revision, approval and Ableton routes. Live writes need approval."""
+    candidate_id = str(body.get("candidate_id") or "")
+    flags = {
+        "change_tempo": bool(body.get("change_tempo")),
+        "skip_instruments": bool(body.get("skip_instruments")),
+    }
+    path = parsed.path
+    if path == "/api/select":
+        handler._send_json(runtime.select(candidate_id))
+    elif path == "/api/review":
+        handler._send_json(runtime.review(candidate_id))
+    elif path == "/api/review/ignore":
+        handler._send_json(runtime.ignore_issue(candidate_id, str(body.get("issue_id") or "")))
+    elif path == "/api/revision":
+        bars = body.get("bars")
+        try:
+            span = (int(bars[0]), int(bars[1])) if bars else None
+        except (TypeError, ValueError, IndexError):
+            handler._send_json({"ok": False, "error": "小節の範囲は 33-49 のように入力してください"}, 400)
+            return True
+        handler._send_json(
+            runtime.propose_revision(
+                candidate_id,
+                issue_ids=[str(item) for item in body.get("issue_ids") or []] or None,
+                scopes=[str(item) for item in body.get("scopes") or []] or None,
+                bars=span,
+            )
+        )
+    elif path == "/api/revision/decide":
+        handler._send_json(
+            runtime.decide_revision(str(body.get("revision_id") or ""), bool(body.get("accept")))
+        )
+    elif path == "/api/approve":
+        handler._send_json(runtime.approve(candidate_id))
+    elif path == "/api/ableton/dry-run":
+        handler._send_json(runtime.dry_run(candidate_id, **flags))
+    elif path == "/api/ableton/send":
+        handler._send_json(
+            runtime.send_to_ableton(candidate_id, confirmed=bool(body.get("confirmed")), **flags)
+        )
+    elif path == "/api/ableton/verify":
+        handler._send_json(runtime.verify(candidate_id))
+    elif path == "/api/settings":
+        changes = body.get("settings")
+        handler._send_json(
+            runtime.update_settings(changes if isinstance(changes, dict) else {})
+        )
+    else:
+        return False
+    return True

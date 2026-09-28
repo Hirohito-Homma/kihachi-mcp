@@ -15,9 +15,15 @@ from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
 from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
+from kihachi_mcp.services.ai_provider import provider_from_settings, split_ollama_url
 from kihachi_mcp.services.candidate_live_planner import (
     AppliedTracks,
     CandidateLivePlanner,
+)
+from kihachi_mcp.services.diagnostics import (
+    DiagnosticsService,
+    default_settings,
+    remote_script_state,
 )
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
 from kihachi_mcp.services.live_bridge import LiveBridgeSession, LocalhostBridgeTransport
@@ -30,12 +36,27 @@ from kihachi_mcp.services.live_transport import LiveTransport, LiveTransportErro
 from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_from_brief
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
 from kihachi_mcp.services.ollama_status import probe_ollama
+from kihachi_mcp.services.production_review import review_candidate
+from kihachi_mcp.services.production_revision import revise_candidate
+from kihachi_mcp.services.production_workspace import local_ableton_plan, project_view
 from kihachi_mcp.services.sound_coverage import coverage_from_snapshot
 from kihachi_mcp.services.studio_interpreter import (
+    DEFAULT_MODEL,
     InferenceCancelled,
     InterpretationError,
     OllamaClient,
-    interpret_brief,
+    interpret_brief_offline,
+    interpret_with_fallback,
+)
+from kihachi_mcp.services.studio_workflow import (
+    EDITABLE_SETTINGS,
+    expected_from_plan,
+    list_saved_projects,
+    readback_verification,
+    revision_record,
+    save_settings,
+    system_statuses,
+    validate_settings,
 )
 
 JOB_IDLE = "idle"
@@ -46,6 +67,10 @@ JOB_CANCELLED = "cancelled"
 
 #: Candidate ids become file names, so only these characters are accepted.
 _CANDIDATE_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+#: The dot keeps this file out of the candidate id pattern.
+REVISION_HISTORY_FILE = ".kihachi-revisions.json"
+#: A model reply that fails validation is asked for again at most this often.
+AI_ATTEMPTS = 2
 
 
 class StudioRuntime:
@@ -121,12 +146,30 @@ class StudioRuntime:
         self._export_dir = Path(
             export_dir or Path.home() / "Music" / "KIHACHI" / "exports"
         )
+        # Read-back verification counts Session notes, which planning skips.
+        self._verify_inspector = (
+            inspector
+            if inspector is not None
+            else _VerifyInspector(self._transport, request_id_factory=_unique_request_ids())
+        )
+        self._settings = default_settings()
+        self._abletongpt_cache: tuple[float, str] | None = None
+        self._approved_ids: set[str] = set()
+        self._ignored_issues: dict[str, set[str]] = {}
+        self._pending_revisions: dict[str, dict[str, Any]] = {}
+        self._pending_children: dict[str, MidiCandidate] = {}
+        self._revision_history: list[dict[str, Any]] = []
+        self._expected: dict[str, dict[str, Any]] = {}
+        self._verifications: dict[str, dict[str, Any]] = {}
         self._last_apply: dict[str, Any] | None = None
         self._applied_ids: set[str] = set()
         # None keeps candidates in memory only, as tests and the MCP server do.
         self._candidate_dir = Path(candidate_dir) if candidate_dir else None
         if self._candidate_dir is not None:
             self._selected_id = _latest_saved_id(self._candidate_dir)
+            self._revision_history = _read_json_list(
+                self._candidate_dir / REVISION_HISTORY_FILE
+            )
 
     def close(self) -> None:
         """Release the Live bridge if this runtime created it."""
@@ -137,17 +180,102 @@ class StudioRuntime:
 
     def health(self) -> dict[str, Any]:
         """Return Ollama and Live connection states without mutating anything."""
-        ollama = probe_ollama()
+        host, port = split_ollama_url(str(self._settings["ollama_url"]))
+        model = str(self._settings.get("ollama_model") or DEFAULT_MODEL)
+        ollama = probe_ollama(host, port, model)
+        if self._settings.get("ai_provider") == "deterministic":
+            ollama = {
+                **ollama,
+                "ok": True,
+                "state": "ready",
+                "message": "AIなしの既定解釈を使います",
+            }
         live = self._live_health()
+        abletongpt = self._abletongpt_state()
         return {
             "ollama": ollama,
             "live": live,
+            "abletongpt": {"state": abletongpt},
             "inference": self.job_status(),
             "selected_candidate_id": self._selected_id,
             "candidate_ids": list(self._candidates),
             "paid_api": False,
             "model_download": False,
+            "statuses": system_statuses(ollama, live, abletongpt, self._selected_id),
+            "settings": self.settings(),
         }
+
+    def _abletongpt_state(self) -> str | None:
+        """Ping AbletonGPT at most every 15 s; a blocked Live makes each ping slow."""
+        if self._kit_loader is None:
+            return None
+        now = time.monotonic()
+        cached = self._abletongpt_cache
+        if cached is not None and now - cached[0] < 15.0:
+            return cached[1]
+        state = remote_script_state(
+            int(self._settings.get("abletongpt_port") or 9877), self._kit_loader.available
+        )
+        self._abletongpt_cache = (now, state)
+        return state
+
+    def settings(self) -> dict[str, Any]:
+        """Settings the Studio shows. Nothing secret is kept here."""
+        return {
+            key: self._settings[key]
+            for key in (
+                "ai_provider",
+                "ollama_url",
+                "ollama_model",
+                "ableton_host",
+                "ableton_port",
+                "abletongpt_port",
+                "default_bpm",
+                "default_bars",
+                "default_style",
+                "project_dir",
+            )
+            if key in self._settings
+        }
+
+    def update_settings(self, changes: dict[str, Any], persist: bool = True) -> dict[str, Any]:
+        """Change the AI provider, Ollama URL or installed model. Never downloads."""
+        picked = {key: changes[key] for key in EDITABLE_SETTINGS if key in changes}
+        if not picked:
+            return {"ok": False, "error": "変更する設定がありません"}
+        candidate = {**self._settings, **picked}
+        try:
+            provider = provider_from_settings(candidate)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        installed = provider.list_models() if candidate.get("ai_provider") == "ollama" else []
+        error = validate_settings(picked, installed)
+        if error:
+            return {"ok": False, "error": error}
+        self._settings = candidate
+        if persist:
+            save_settings(self._settings)
+        return {"ok": True, "settings": self.settings()}
+
+    def ollama_status(self) -> dict[str, Any]:
+        """Provider health, installed models and the selected one."""
+        try:
+            provider = provider_from_settings(self._settings)
+        except ValueError as exc:
+            return {"ok": False, "state": "invalid_url", "message": str(exc), "installed_models": []}
+        report = provider.health()
+        return {
+            **report,
+            "selected_model": self._settings.get("ollama_model"),
+            "capabilities": provider.capabilities(),
+        }
+
+    def diagnostics(self) -> dict[str, Any]:
+        """The same checklist `kihachi doctor` prints, with this Studio's Live state."""
+        probe = self._kit_loader.available if self._kit_loader is not None else None
+        return DiagnosticsService(
+            self._settings, live_probe=self._live_health, remote_script_probe=probe
+        ).run()
 
     def queue_generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
         """Start one background generate. Refuses a second concurrent job."""
@@ -208,10 +336,8 @@ class StudioRuntime:
                 "ok": False,
                 "error": "別の生成が実行中です。完了またはキャンセルを待ってください",
             }
-        client = self._ollama_factory()
         started = time.monotonic()
         with self._lock:
-            self._client = client
             self._job = {
                 "state": JOB_RUNNING,
                 "started_at": time.time(),
@@ -220,10 +346,26 @@ class StudioRuntime:
                 "candidate_id": "",
             }
         try:
-            ollama = probe_ollama()
-            if not ollama["ok"]:
-                raise InterpretationError(str(ollama["message"]))
-            production = interpret_brief(brief, client=client)
+            host, port = split_ollama_url(str(self._settings["ollama_url"]))
+            model = str(self._settings.get("ollama_model") or DEFAULT_MODEL)
+            ollama = probe_ollama(host, port, model)
+            if ollama["ok"] and self._settings.get("ai_provider") != "deterministic":
+
+                def new_client() -> Any:
+                    client = (
+                        OllamaClient(host, port)
+                        if self._ollama_factory is OllamaClient
+                        else self._ollama_factory()
+                    )
+                    with self._lock:
+                        self._client = client
+                    return client
+
+                production = interpret_with_fallback(
+                    brief, new_client, model=model, attempts=AI_ATTEMPTS
+                )
+            else:
+                production = interpret_brief_offline(brief)
             candidate = build_candidate(production, seed=seed)
             self._store(candidate)
             payload = candidate.to_dict()
@@ -298,6 +440,17 @@ class StudioRuntime:
     def selected_candidate(self) -> MidiCandidate | None:
         """Return the candidate currently shown as selected."""
         return self._lookup(self._selected_id)
+
+    def selected_id(self) -> str:
+        return self._selected_id
+
+    def select(self, candidate_id: str) -> dict[str, Any]:
+        """Open a saved project in the workspace. Nothing is regenerated."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        self._selected_id = candidate.candidate_id
+        return {"ok": True, "candidate": candidate.to_dict()}
 
     def export_midi(self, candidate_id: str, directory: Path | None = None) -> dict[str, Any]:
         """Write a Standard MIDI File for the stored candidate."""
@@ -391,6 +544,9 @@ class StudioRuntime:
                 return {"ok": False, "error": exc.message, "preview": preview}
             self._applied_ids.add(candidate_id)
             self._mark_applied(candidate_id)
+            self._remember_expected(
+                candidate_id, expected_from_plan(preview["plan"]), change_tempo
+            )
             receipt = self._executor.execute(
                 plan, approved=True, approval_token=token
             )
@@ -569,6 +725,280 @@ class StudioRuntime:
     def last_apply(self) -> dict[str, Any] | None:
         """Return the most recent apply result."""
         return self._last_apply
+
+    # --- Project workspace, review, revision and approval -------------------
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        """Saved candidates newest first; in-memory ones when nothing is saved."""
+        if self._candidate_dir is not None:
+            return list_saved_projects(self._candidate_dir)
+        rows = []
+        for candidate in reversed(list(self._candidates.values())):
+            brief = candidate.brief
+            rows.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "parent_candidate_id": candidate.parent_candidate_id,
+                    "title": (brief.original_text.strip().splitlines() or [""])[0][:60],
+                    "tempo": brief.tempo.value,
+                    "key": brief.key.value,
+                    "genre": brief.genre.value,
+                    "bars": brief.bars.value,
+                    "notes": candidate.note_count(),
+                    "approved": self.is_approved(candidate.candidate_id),
+                    "applied": candidate.candidate_id in self._applied_ids,
+                    "arranged": candidate.candidate_id in self._arranged_ids,
+                }
+            )
+        return rows
+
+    def project(self, candidate_id: str) -> dict[str, Any]:
+        """Everything the workspace shows for one candidate. Live is not contacted."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        lineage = self._lineage(candidate)
+        return {
+            "ok": True,
+            **project_view(candidate),
+            "review": self.review(candidate_id),
+            "status": {
+                "approved": self.is_approved(candidate_id),
+                "applied": candidate_id in self._applied_ids or self._applied_on_disk(candidate_id),
+                "arranged": self._arranged(candidate_id),
+                "verification": self._verifications.get(candidate_id),
+            },
+            "revisions": [
+                item for item in self._revision_history
+                if item.get("parent_candidate_id") in lineage
+                or item.get("child_candidate_id") in lineage
+            ],
+            "pending_revisions": [
+                _public_revision(item)
+                for item in self._pending_revisions.values()
+                if item["parent_candidate_id"] == candidate_id
+            ],
+            "musical_quality_claimed": False,
+        }
+
+    def review(self, candidate_id: str) -> dict[str, Any]:
+        """Review the notes that would be sent. Ignored issues stay listed apart."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        report = review_candidate(candidate)
+        ignored = self._ignored_issues.get(candidate_id, set())
+        report["ignored"] = [item for item in report["issues"] if item["id"] in ignored]
+        report["issues"] = [item for item in report["issues"] if item["id"] not in ignored]
+        report["approved"] = self.is_approved(candidate_id)
+        return report
+
+    def ignore_issue(self, candidate_id: str, issue_id: str) -> dict[str, Any]:
+        """Hide one review issue for this candidate. Notes are not changed."""
+        if self._lookup(candidate_id) is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        self._ignored_issues.setdefault(candidate_id, set()).add(str(issue_id))
+        return {"ok": True, "review": self.review(candidate_id)}
+
+    def propose_revision(
+        self,
+        candidate_id: str,
+        issue_ids: list[str] | None = None,
+        scopes: list[str] | None = None,
+        bars: tuple[int, int] | None = None,
+    ) -> dict[str, Any]:
+        """Build a local revision as a proposal. Nothing is adopted until accepted."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        ignored = self._ignored_issues.get(candidate_id, set())
+        wanted = [item for item in issue_ids or [] if item not in ignored] or None
+        if issue_ids and wanted is None:
+            return {"ok": False, "error": "選んだ指摘はすべて無視されています"}
+        result = revise_candidate(candidate, scopes=scopes, issue_ids=wanted, bars=bars)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error") or "修正案を作れませんでした"}
+        record = revision_record(result)
+        self._pending_revisions[record["revision_id"]] = record
+        self._pending_children[record["child_candidate_id"]] = result["candidate"]
+        child = result["candidate"]
+        return {
+            "ok": True,
+            "revision": _public_revision(record),
+            "note_count_before": candidate.note_count(),
+            "note_count_after": child.note_count(),
+            "requires_approval": True,
+            "musical_quality_claimed": False,
+        }
+
+    def decide_revision(self, revision_id: str, accept: bool) -> dict[str, Any]:
+        """The human adopts or rejects a proposed revision. Rejection keeps the parent."""
+        record = self._pending_revisions.pop(str(revision_id), None)
+        if record is None:
+            return {"ok": False, "error": "この修正案は見つからないか、すでに判断済みです"}
+        child = self._pending_children.pop(record["child_candidate_id"], None)
+        record = {**record, "decision": "accepted" if accept else "rejected", "decided_at": time.time()}
+        record.pop("review_after", None)
+        if accept and child is not None:
+            self._store(child)
+        self._revision_history.append(record)
+        if self._candidate_dir is not None:
+            _write_json_atomic(
+                self._candidate_dir / REVISION_HISTORY_FILE, self._revision_history[-200:]
+            )
+        return {
+            "ok": True,
+            "decision": record["decision"],
+            "selected_candidate_id": self._selected_id,
+            "revision": record,
+        }
+
+    def approve(self, candidate_id: str) -> dict[str, Any]:
+        """Human approval of this take. Required before anything is sent to Live."""
+        if self._lookup(candidate_id) is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        self._approved_ids.add(candidate_id)
+        self._mark(candidate_id, ".approved")
+        return {"ok": True, "candidate_id": candidate_id, "approved": True}
+
+    def is_approved(self, candidate_id: str) -> bool:
+        if candidate_id in self._approved_ids:
+            return True
+        path = self._candidate_path(candidate_id, ".approved")
+        return path is not None and path.is_file()
+
+    # --- Ableton: dry run, send, read-back verification -----------------------
+
+    def ableton_plan(self, candidate_id: str) -> dict[str, Any]:
+        """The plan from the candidate alone. Works without Live."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        return {**local_ableton_plan(candidate), "candidate_id": candidate_id}
+
+    def dry_run(
+        self, candidate_id: str, change_tempo: bool = False, skip_instruments: bool = False
+    ) -> dict[str, Any]:
+        """Show exactly what Send to Ableton would do. Nothing in Live changes."""
+        plan = self.ableton_plan(candidate_id)
+        if not plan.get("ok"):
+            return plan
+        live = self._live_health()
+        preview: dict[str, Any] | None = None
+        if live.get("state") == "ready":
+            preview = self.apply_preview(
+                candidate_id, change_tempo=change_tempo, skip_instruments=skip_instruments
+            )
+        operations: dict[str, int] = {}
+        for operation in ((preview or {}).get("plan") or {}).get("operations") or []:
+            operations[operation["op"]] = operations.get(operation["op"], 0) + 1
+        approved = self.is_approved(candidate_id)
+        already = candidate_id in self._applied_ids or self._applied_on_disk(candidate_id)
+        blockers = []
+        if not approved:
+            blockers.append("まだ承認されていません。レビューを確認して「この候補を承認」を押してください")
+        if already:
+            blockers.append("この候補はすでに送信を試行済みです（重複配置を防ぐため再送しません）")
+        if preview is None:
+            blockers.append("Liveに接続していないため、Setとの照合ができません（EXTERNAL VERIFICATION REQUIRED）")
+        elif not preview.get("ok"):
+            blockers.append(preview.get("error") or "Liveの状態と計画が衝突しています")
+        elif not preview.get("notes_match_preview"):
+            blockers.append("プレビューと適用計画のノートが一致しません")
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "plan": plan,
+            "live": {"state": live.get("state"), "message": live.get("message")},
+            "live_preview": preview,
+            "live_operations": operations,
+            "approved": approved,
+            "can_send": not blockers,
+            "blockers": blockers,
+            "changes_live": False,
+        }
+
+    def send_to_ableton(
+        self,
+        candidate_id: str,
+        confirmed: bool = False,
+        change_tempo: bool = False,
+        skip_instruments: bool = False,
+    ) -> dict[str, Any]:
+        """Approved candidates only: apply once, then read Live back and compare."""
+        if not self.is_approved(candidate_id):
+            return {
+                "ok": False,
+                "error": "承認されていない候補はLiveへ送りません。先に「この候補を承認」を押してください",
+            }
+        result = self.apply(
+            candidate_id,
+            confirmed=confirmed,
+            change_tempo=change_tempo,
+            skip_instruments=skip_instruments,
+        )
+        if (result.get("receipt") or {}).get("status") == "verified":
+            result["verification"] = self.verify(candidate_id)
+        return result
+
+    def verify(self, candidate_id: str) -> dict[str, Any]:
+        """Read tempo, tracks, clips, notes and arrangement bounds back from Live."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        try:
+            snapshot = self._verify_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "status": "EXTERNAL VERIFICATION REQUIRED",
+                "error": f"Liveから読み戻せません（{exc.code}）: {exc.message}",
+                "lines": [],
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "status": "EXTERNAL VERIFICATION REQUIRED", "error": str(exc), "lines": []}
+        expected = self._load_expected(candidate_id)
+        report = readback_verification(
+            candidate,
+            snapshot,
+            (expected or {}).get("tracks"),
+            tempo_changed=bool((expected or {}).get("change_tempo")),
+            arranged=self._arranged(candidate_id),
+        )
+        report["candidate_id"] = candidate_id
+        report["checked_at"] = time.time()
+        self._verifications[candidate_id] = report
+        return report
+
+    def _remember_expected(
+        self, candidate_id: str, tracks: dict[str, dict[str, int]], change_tempo: bool
+    ) -> None:
+        record = {"tracks": tracks, "change_tempo": change_tempo}
+        self._expected[candidate_id] = record
+        path = self._candidate_path(candidate_id, ".expected.json")
+        if path is not None:
+            _write_json_atomic(path, record)
+
+    def _load_expected(self, candidate_id: str) -> dict[str, Any] | None:
+        if candidate_id in self._expected:
+            return self._expected[candidate_id]
+        path = self._candidate_path(candidate_id, ".expected.json")
+        if path is None or not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _lineage(self, candidate: MidiCandidate) -> set[str]:
+        ids = {candidate.candidate_id}
+        parent = candidate.parent_candidate_id
+        while parent and parent not in ids:
+            ids.add(parent)
+            found = self._lookup(parent)
+            parent = found.parent_candidate_id if found is not None else ""
+        return ids
 
     def fill_drum_samples(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
         """Load bundled Kick/Hats samples onto empty Drum Rack pads only.
@@ -768,7 +1198,7 @@ class StudioRuntime:
         short = candidate.candidate_id[:8]
         track_names = {
             part: managed_track_name(f"KIHACHI {part} {short}")
-            for part in ("Kick", "Hats", "Bass", "Stab")
+            for part in candidate.parts
         }
         devices: dict[str, list[str]] = {}
         summaries: dict[str, dict[str, Any]] = {}
@@ -821,6 +1251,13 @@ class _ArrangementInspector(LiveStateInspector):
         return super().snapshot(include_arrangement=True, count_session_notes=False)
 
 
+class _VerifyInspector(LiveStateInspector):
+    """Inspect Session and Arrangement clips with note counts, for read-back."""
+
+    def snapshot(self) -> Any:
+        return super().snapshot(include_arrangement=True, count_session_notes=True)
+
+
 class _CoverageInspector(LiveStateInspector):
     """Inspect tracks and devices only. Session clips are not required."""
 
@@ -835,7 +1272,11 @@ class _CoverageInspector(LiveStateInspector):
 def _latest_saved_id(directory: Path) -> str:
     """Return the most recently saved candidate id, or "" when there is none."""
     try:
-        saved = [path for path in directory.glob("*.json") if path.is_file()]
+        saved = [
+            path
+            for path in directory.glob("*.json")
+            if path.is_file() and _CANDIDATE_ID_RE.fullmatch(path.stem)
+        ]
     except OSError:
         return ""
     if not saved:
@@ -850,6 +1291,22 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8"
     )
     os.replace(temporary, path)
+
+
+def _read_json_list(path: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _public_revision(record: dict[str, Any]) -> dict[str, Any]:
+    review = record.get("review_after") or {}
+    return {
+        **{key: value for key, value in record.items() if key != "review_after"},
+        "issues_after": review.get("issues") or [],
+    }
 
 
 def _unique_request_ids():
@@ -917,11 +1374,11 @@ def _apply_summary(
         "note_count": candidate.note_count(),
         "note_counts": {
             part: candidate.note_count(part)
-            for part in ("Kick", "Hats", "Bass", "Stab")
+            for part in candidate.parts
         },
         "used_pitches": {
             part: list(candidate.used_pitches(part))
-            for part in ("Kick", "Hats", "Bass", "Stab")
+            for part in candidate.parts
         },
         "replaces_existing_user_clips": False,
         "operation_count": len(plan.operations),

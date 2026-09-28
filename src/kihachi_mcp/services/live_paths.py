@@ -62,4 +62,8 @@ def candidate_store_dir(
     system: str | None = None, environ: Mapping[str, str] | None = None
 ) -> PurePath:
     """Return the directory where Studio keeps candidates across restarts."""
+    env = environ if environ is not None else os.environ
+    override = env.get("KIHACHI_PROJECT_DIR")
+    if override:
+        return PurePath(override)
     return bridge_state_dir(system, environ) / CANDIDATE_DIR_NAME

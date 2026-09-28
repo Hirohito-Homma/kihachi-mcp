@@ -135,6 +135,16 @@
     </div>
   </header>
   <main>
+    <section aria-labelledby="dialogue-heading">
+      <h2 id="dialogue-heading">KIHACHIと対話</h2>
+      <p class="sub">🎙で話すか文字で入力できます。聞き取った内容を対話へ送れます。制作指示への反映は確認後に行います。</p>
+      <label for="dialogue-utterance">話しかける内容</label>
+      <textarea id="dialogue-utterance" placeholder="例: Mutation Funkで、キックは短めに"></textarea>
+      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" class="secondary">話しかける</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div><label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label><label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を対話へ自動送信する（制作指示・Liveは変更しません）</label>
+      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div><p id="dialogue-reply" role="status"></p>
+      <pre id="dialogue-proposal"></pre><div id="dialogue-samples"></div>
+    </section>
+
     <section>
       <h2>制作指示</h2>
       <textarea id="brief">125 BPM、Dマイナー、96小節の暗いテクノ。
@@ -157,16 +167,6 @@
         <a href="/references">参考音源の分類・確認済みBPMを編集</a>
       </details>
       <p id="job-line" class="progress"></p>
-    </section>
-
-    <section aria-labelledby="dialogue-heading">
-      <h2 id="dialogue-heading">KIHACHIと対話</h2>
-      <p class="sub">🎙で話すか文字で入力できます。聞き取った内容を対話へ送れます。制作指示への反映は確認後に行います。</p>
-      <label for="dialogue-utterance">話しかける内容</label>
-      <textarea id="dialogue-utterance" placeholder="例: Mutation Funkで、キックは短めに"></textarea>
-      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" class="secondary">話しかける</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div><label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label><label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を対話へ自動送信する（制作指示・Liveは変更しません）</label>
-      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div><p id="dialogue-reply" role="status"></p>
-      <pre id="dialogue-proposal"></pre><div id="dialogue-samples"></div>
     </section>
 
     <section id="brief-view" class="hidden">

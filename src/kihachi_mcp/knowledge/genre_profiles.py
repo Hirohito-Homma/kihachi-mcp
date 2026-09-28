@@ -60,6 +60,12 @@ DRUM_PATTERNS: dict[str, DrumPattern] = {
     "syncopated_tech_house": DrumPattern(
         (0.0, 1.0, 2.0, 3.0, 3.75), (4, 5), offbeat_open_hat=True
     ),
+    # The alternating kick phrases are chosen by the MIDI builder. This row
+    # supplies the funk backbeat and hat grid without implying a four-on-floor.
+    "mutation_funk": DrumPattern(
+        (0.0, 1.5, 2.75, 3.5), (2, 4), backbeat_pitch=CLAP,
+        hat_offset=0.0, hat_step=0.25, hat_sparse_step=0.5,
+    ),
     # Reggae: beat 1 is the hole; the kick lands with the snare on 3.
     "one_drop": DrumPattern(
         (2.0, 3.5, 0.75), (1, 2), backbeat_positions=(2.0,), backbeat_pitch=SNARE
@@ -216,6 +222,11 @@ FAMILY_PROFILES: dict[str, Profile] = {
 #: a row here claims the other genres of the family play differently.
 GENRE_PROFILES: dict[str, Profile] = {
     "tech_house": Profile(drum_pattern="syncopated_tech_house"),
+    "mutation_funk": Profile(
+        drum_pattern="mutation_funk", articulation="syncopated_comping",
+        bass_role="dominant", hat_density=0.65, harmonic_rhythm_bars=2,
+        swing=0.56,
+    ),
     # KIHACHI Studio addition: dub techno keeps Techno's kick but not its
     # hypnotic stab -- the chord is the echoing dub stab -- and it breathes:
     # fewer hats, and the harmony moves slowly.

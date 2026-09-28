@@ -29,6 +29,7 @@ from functools import lru_cache
 from pathlib import Path
 
 _DATA = Path(__file__).resolve().parents[1] / "resources" / "genre_database.json"
+_LOCAL_ALIASES = {"mutashon funk": "mutation_funk"}
 _LATIN = re.compile(r"^[a-z0-9&'\- ./]+$")
 _NUMERIC = re.compile(r"[0-9 .\-/]+")
 #: "DUB ディレイ" asks for a delay in the dub manner, not for the genre Dub.
@@ -38,6 +39,8 @@ _EFFECT_AFTER = re.compile(
     r"スペース|space|ミックス|mix|処理|風の|っぽい)",
     re.IGNORECASE,
 )
+#: "Swing 54%" sets a groove amount; it does not name the genre Swing.
+_AMOUNT_AFTER = re.compile(r"\s*[:：=]?\s*\d{1,3}(?:\.\d+)?\s*[%％]")
 
 #: A tempo range only says something when it is narrow. Most rows inherit their
 #: family's span ("70 to 180" is an absence of a tempo, not a tempo).
@@ -128,12 +131,24 @@ def _surface_forms() -> tuple[tuple[str, Genre], ...]:
             previous = claimed.get(key)
             if previous is None or (previous.parent is None and genre.parent is not None):
                 claimed[key] = genre
+    for alias, slug in _LOCAL_ALIASES.items():
+        claimed[alias] = _by_slug()[slug]
     for key, genre in list(claimed.items()):
         if "-" in key:
             for variant in (key.replace("-", " "), key.replace("-", "")):
                 if variant.strip():
                     claimed.setdefault(variant, genre)
     return tuple(sorted(claimed.items(), key=lambda item: (-len(item[0]), item[0])))
+
+
+def canonical_genre(value: str) -> str:
+    """Resolve an exact genre name or alias while preserving unknown custom names."""
+    if value in _by_slug():
+        return value
+    matches = match_genres(value)
+    if len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value):
+        return matches[0].genre.slug
+    return value
 
 
 def _is_katakana(char: str) -> bool:
@@ -178,7 +193,7 @@ def match_genres(text: str) -> tuple[GenreMatch, ...]:
     hits: list[tuple[int, int, str, Genre]] = []
     for form, genre in _surface_forms():
         for start, end in _spans(lowered, form):
-            if _EFFECT_AFTER.match(lowered, end):
+            if _EFFECT_AFTER.match(lowered, end) or _AMOUNT_AFTER.match(lowered, end):
                 continue
             hits.append((start, end, form, genre))
     kept: list[tuple[int, int, str, Genre]] = []

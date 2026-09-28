@@ -148,11 +148,21 @@ def test_phrase_ends_are_marked_by_a_fill() -> None:
 def test_the_drop_moves_through_a_chord_progression() -> None:
     candidate = build_candidate(_brief(), seed=5)
     stab = _bars(candidate, "Stab")
-    chords = {tuple(sorted({pitch for _offset, pitch in stab[bar]})) for bar in range(57, 61)}
+    chords = {tuple(sorted({pitch for _offset, pitch in stab[bar]})) for bar in range(57, 65)}
     assert len(chords) >= 2
     bass = _bars(candidate, "Bass")
-    lowest = {min(pitch for _offset, pitch in bass[bar]) for bar in range(57, 61)}
+    lowest = {min(pitch for _offset, pitch in bass[bar]) for bar in range(57, 65)}
     assert len(lowest) >= 2
+
+
+def test_bass_and_stab_follow_the_same_drop_harmony() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    bass = _bars(candidate, "Bass")
+    stab = _bars(candidate, "Stab")
+    # At least one bass note in every Drop bar must be a tone of its chord.
+    for bar in range(57, 73):
+        chord_tones = {pitch % 12 for _offset, pitch in stab[bar]}
+        assert any(pitch % 12 in chord_tones for _offset, pitch in bass[bar]), bar
 
 
 def test_the_drop_is_not_one_bar_repeated() -> None:

@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Any, Self
 
 from kihachi_mcp.models.live_contract import canonical_hash
-from kihachi_mcp.models.production_brief import STUDIO_PARTS, ProductionBrief
+from kihachi_mcp.models.production_brief import (
+    OPTIONAL_STUDIO_PARTS,
+    STUDIO_PARTS,
+    ProductionBrief,
+)
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
 
@@ -19,7 +23,7 @@ class CandidateClip:
     notes: tuple[MidiNote, ...]
 
     def __post_init__(self) -> None:
-        if self.part not in STUDIO_PARTS:
+        if self.part not in (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS):
             raise ValueError(f"unsupported part '{self.part}'")
         if self.start_bar < 1 or self.length_bars < 1:
             raise ValueError("clip bar range is invalid")
@@ -74,8 +78,19 @@ class MidiCandidate:
         if not self.candidate_id:
             raise ValueError("candidate_id must not be empty")
         parts = {clip.part for clip in self.clips}
-        if parts != set(STUDIO_PARTS):
+        if not set(STUDIO_PARTS) <= parts or not parts <= {
+            *STUDIO_PARTS,
+            *OPTIONAL_STUDIO_PARTS,
+        }:
             raise ValueError("a candidate must include Kick, Hats, Bass, and Stab")
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        """Present parts in stable track order, including optional new voices."""
+        present = {clip.part for clip in self.clips}
+        return tuple(
+            part for part in (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS) if part in present
+        )
 
     @property
     def note_fingerprint(self) -> str:
@@ -116,9 +131,11 @@ class MidiCandidate:
             "clips": [clip.to_dict() for clip in self.clips],
             "note_counts": {
                 "total": self.note_count(),
-                **{part: self.note_count(part) for part in STUDIO_PARTS},
+                **{part: self.note_count(part) for part in self.parts},
             },
-            "used_pitches": {part: list(self.used_pitches(part)) for part in STUDIO_PARTS},
+            "used_pitches": {
+                part: list(self.used_pitches(part)) for part in self.parts
+            },
         }
 
     @classmethod

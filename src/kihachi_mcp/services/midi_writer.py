@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from kihachi_mcp.models.midi_candidate import MidiCandidate
-from kihachi_mcp.models.production_brief import STUDIO_PARTS
 
 TICKS_PER_BEAT = 480
 
@@ -12,7 +11,7 @@ def candidate_to_midi_bytes(candidate: MidiCandidate) -> bytes:
     """Return a Format-1 SMF whose notes match the preview exactly."""
     tempo = int(candidate.brief.tempo.value)
     tracks = [_conductor_track(tempo)]
-    for part in STUDIO_PARTS:
+    for part in candidate.parts:
         events: list[tuple[int, bytes]] = []
         beats = candidate.brief.beats_per_bar
         for clip in candidate.clips_for_part(part):

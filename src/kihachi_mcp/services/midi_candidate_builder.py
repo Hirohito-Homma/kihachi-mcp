@@ -18,8 +18,12 @@ from kihachi_mcp.knowledge.genre_profiles import (
 )
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-from kihachi_mcp.models.production_brief import STUDIO_PARTS, ProductionBrief
-from kihachi_mcp.services.brief_parser import read_explicit
+from kihachi_mcp.models.production_brief import (
+    OPTIONAL_STUDIO_PARTS,
+    STUDIO_PARTS,
+    ProductionBrief,
+)
+from kihachi_mcp.services.brief_parser import explicit_swing, read_explicit
 from kihachi_mcp.services.musical_time import beats_per_bar
 from kihachi_mcp.services.session_pattern_builder import (
     MidiNote,
@@ -42,6 +46,7 @@ _MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
 # Scale degrees, 0-based: in minor 0=i 3=iv 4=v 5=VI 6=VII.
 _MINOR_PROGRESSIONS = ((0, 5, 6, 5), (0, 3, 5, 4), (0, 0, 5, 6), (0, 6, 5, 6))
 _MAJOR_PROGRESSIONS = ((0, 5, 3, 4), (0, 3, 4, 3), (0, 4, 5, 3))
+_MUTATION_PROGRESSIONS = ((0, 5, 6, 4), (0, 3, 5, 4), (0, 5, 3, 4))
 # Sixteenth steps in a 4/4 bar. None of them land on the kick's quarter notes.
 _BASS_PATTERNS = {
     "offbeat": (2, 6, 10, 14),
@@ -54,6 +59,19 @@ _BASS_RHYTHMS = {
     "normal": ("offbeat", "gallop", "syncopated"),
     "dense": ("rolling", "gallop", "syncopated"),
 }
+_MUTATION_KICK_GROOVES = (
+    ((0.0, 1.5, 2.75), (0.0, 0.75, 2.5, 3.5)),
+    ((0.0, 1.75, 2.5), (0.0, 1.25, 2.75, 3.5)),
+    ((0.0, 0.75, 2.25), (0.0, 1.5, 2.75, 3.25)),
+)
+_MUTATION_BASS_RHYTHMS = {
+    "sparse": ((0, 6, 13), (0, 7, 14)),
+    "normal": ((0, 3, 6, 10, 13), (0, 2, 7, 10, 14), (0, 3, 6, 9, 13)),
+    "dense": ((0, 3, 6, 9, 10, 13, 15), (0, 2, 3, 7, 10, 13, 14)),
+}
+# Two empty comping bars per eight-bar Drop phrase leave room for the bass.
+# Which answer is silent changes with the seed, while the phrase keeps its anchor.
+_MUTATION_STAB_RESTS = ((2, 6), (3, 7), (1, 5))
 # Mostly the chord root, sometimes its octave, fifth or seventh.
 _BASS_MOTIF_POOL = (0, 0, 0, 0, 12, 7, 10)
 # Velocities per sixteenth for closed hats; the offbeat is the loudest.
@@ -77,11 +95,27 @@ def build_candidate(
     """Return one candidate whose preview notes are the apply notes."""
     resolved_seed = _resolve_seed(brief.original_text, seed)
     rng = Random(resolved_seed)
+    minor = is_minor(str(brief.key.value)) or str(brief.mood.value) in {
+        "暗い",
+        "ダーク",
+    }
+    progression = rng.choice(
+        _MUTATION_PROGRESSIONS
+        if str(brief.genre.value) == "mutation_funk" and minor
+        else _MINOR_PROGRESSIONS
+        if minor
+        else _MAJOR_PROGRESSIONS
+    )
     beats = brief.beats_per_bar
     bars = int(brief.bars.value)
     clips: list[CandidateClip] = []
-    for part in STUDIO_PARTS:
-        song_notes = _notes_for_part(part, brief, bars, beats, rng)
+    parts = (
+        (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS)
+        if str(brief.genre.value) == "mutation_funk"
+        else STUDIO_PARTS
+    )
+    for part in parts:
+        song_notes = _notes_for_part(part, brief, bars, beats, rng, progression)
         for section in brief.sections:
             for start, length in _clip_windows(
                 section.start_bar, section.length_bars, song_notes, beats
@@ -208,19 +242,22 @@ def _notes_for_part(
     bars: int,
     beats: float,
     rng: Random,
+    progression: tuple[int, ...],
 ) -> list[MidiNote]:
     # One generator per part, seeded from the shared one, so a change inside
     # one part does not reshuffle the random choices of the others.
     part_rng = Random(rng.random())
-    plan = _SongPlan(brief, bars, beats, part_rng)
+    plan = _SongPlan(brief, bars, beats, part_rng, progression)
     if part == "Kick":
         notes = _kick_notes(plan)
     elif part == "Hats":
         notes = _hat_notes(plan)
     elif part == "Bass":
         notes = _bass_notes(plan)
-    else:
+    elif part == "Stab":
         notes = _stab_notes(plan)
+    else:
+        notes = _lead_notes(plan)
     return [_inside_bar(note, beats) for note in notes]
 
 
@@ -251,18 +288,23 @@ class _Bar:
         self.left_in_section = section_end - bar
         self.phrase = self.in_section // PHRASE_BARS
         self.phrase_end = self.in_section % PHRASE_BARS == PHRASE_BARS - 1
-        self.long_phrase_end = self.in_section % (PHRASE_BARS * 2) == PHRASE_BARS * 2 - 1
-        self.breakdown = bar in plan.breakdown
-        self.breakdown_left = (
-            plan.breakdown.stop - 1 - bar if self.breakdown else -1
+        self.long_phrase_end = (
+            self.in_section % (PHRASE_BARS * 2) == PHRASE_BARS * 2 - 1
         )
+        self.breakdown = bar in plan.breakdown
+        self.breakdown_left = plan.breakdown.stop - 1 - bar if self.breakdown else -1
 
 
 class _SongPlan:
     """Choices shared by every bar of one part: patterns, progression, accents."""
 
     def __init__(
-        self, brief: ProductionBrief, bars: int, beats: float, rng: Random
+        self,
+        brief: ProductionBrief,
+        bars: int,
+        beats: float,
+        rng: Random,
+        progression: tuple[int, ...],
     ) -> None:
         self.brief = brief
         self.bars = bars
@@ -275,9 +317,7 @@ class _SongPlan:
             "ダーク",
         }
         self.scale = _MINOR_SCALE if self.minor else _MAJOR_SCALE
-        self.progression = rng.choice(
-            _MINOR_PROGRESSIONS if self.minor else _MAJOR_PROGRESSIONS
-        )
+        self.progression = progression
         self.breakdown = _breakdown_bars(brief)
         self._sections = tuple(brief.sections)
         # What the genre's family plays. An unknown genre gets four on the
@@ -286,9 +326,14 @@ class _SongPlan:
         self.pattern = drum_pattern(self.profile.drum_pattern)
         self.articulation = chord_articulation(self.profile.articulation)
         self.bass_role = bass_role(self.profile.bass_role)
-        self.hat_density = self.profile.hat_density if self.profile.hat_density is not None else 0.85
+        self.hat_density = (
+            self.profile.hat_density if self.profile.hat_density is not None else 0.85
+        )
         self.harmonic_rhythm = self.profile.harmonic_rhythm_bars or 2
-        self.swing = self.profile.swing or 0.5
+        stated_swing = explicit_swing(brief.original_text)
+        self.swing = (
+            stated_swing if stated_swing is not None else (self.profile.swing or 0.5)
+        )
         self.echo_requested = bool(read_explicit(brief.original_text)[0].get("echo"))
         # A recipe that puts a real Echo on the chords does the repeats; writing
         # them as notes as well doubles the delay.
@@ -313,6 +358,16 @@ class _SongPlan:
             return 0.3 + 0.3 * progress
         if bar.section == "Build":
             return 0.6 + 0.25 * progress
+        if bar.section == "VerseA":
+            return 0.55 + 0.1 * progress
+        if bar.section == "VerseB":
+            return 0.7 + 0.12 * progress
+        if bar.section == "Break":
+            return 0.2 + 0.5 * progress
+        if bar.section == "ChorusA":
+            return 0.92
+        if bar.section == "ChorusB":
+            return 1.0
         if bar.section == "Outro":
             return 0.75 - 0.55 * progress
         return 1.0
@@ -329,7 +384,14 @@ class _SongPlan:
         """Return the scale degree the harmony sits on in this bar."""
         if bar.section in {"Intro", "Outro"} and not bar.breakdown:
             return 0
-        in_drop = bar.section == "Drop" and not bar.breakdown
+        if self.profile.drum_pattern == "mutation_funk":
+            if bar.section == "VerseA":
+                return (0, 5)[(bar.in_section // 4) % 2]
+            if bar.section == "VerseB":
+                return (3, 4)[(bar.in_section // 4) % 2]
+            if bar.section == "Break":
+                return 4 if bar.left_in_section < 2 else 0
+        in_drop = bar.section in {"Drop", "ChorusA", "ChorusB"} and not bar.breakdown
         bars_per_chord = self.harmonic_rhythm * (1 if in_drop else 2)
         index = (bar.in_section // bars_per_chord) % len(self.progression)
         return self.progression[index]
@@ -350,7 +412,9 @@ class _SongPlan:
 
 def _breakdown_bars(brief: ProductionBrief) -> range:
     """The last bars of the Build: the kick drops out so the Drop lands."""
-    build = next((section for section in brief.sections if section.name == "Build"), None)
+    build = next(
+        (section for section in brief.sections if section.name == "Build"), None
+    )
     if build is None or build.length_bars < 4:
         return range(0)
     length = min(PHRASE_BARS, build.length_bars // 2)
@@ -360,16 +424,31 @@ def _breakdown_bars(brief: ProductionBrief) -> range:
 def _kick_notes(plan: _SongPlan) -> list[MidiNote]:
     notes: list[MidiNote] = []
     fill = plan.rng.choice(_KICK_FILLS)
+    mutation_phrases: dict[tuple[str, int], tuple[tuple[float, ...], ...]] = {}
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
         if bar.breakdown:
+            continue
+        if bar.section == "Break" and bar.in_section < max(
+            1, plan.section_of(number).length_bars - 2
+        ):
             continue
         if bar.section == "Outro" and bar.left_in_section == 0:
             continue  # leave the last bar open for whatever comes next
         half_time = (
             bar.section == "Intro" and plan.density == "sparse" and bar.phrase == 0
         )
-        slots = plan.pattern.kick_positions[: plan.steps_for(plan.pattern.kick_steps, bar)]
+        if plan.profile.drum_pattern == "mutation_funk":
+            phrase_key = (bar.section, bar.phrase)
+            if phrase_key not in mutation_phrases:
+                mutation_phrases[phrase_key] = plan.rng.choice(_MUTATION_KICK_GROOVES)
+            slots = mutation_phrases[phrase_key][bar.in_section % 2]
+            if bar.section in {"Intro", "Outro"}:
+                slots = slots[:2]
+        else:
+            slots = plan.pattern.kick_positions[
+                : plan.steps_for(plan.pattern.kick_steps, bar)
+            ]
         if half_time:
             slots = slots[::2]
         positions = [
@@ -381,7 +460,7 @@ def _kick_notes(plan: _SongPlan) -> list[MidiNote]:
         if bar.long_phrase_end and not next_is_breakdown and bar.left_in_section > 0:
             positions = [item for item in positions if item[0] < plan.beats - 1]
             positions.extend((plan.beats - 1 + offset, 96) for offset in fill)
-        boost = 4 if bar.section == "Drop" else 0
+        boost = 4 if bar.section in {"Drop", "ChorusA", "ChorusB"} else 0
         for offset, base in positions:
             notes.append(
                 MidiNote(
@@ -406,6 +485,10 @@ def _hat_notes(plan: _SongPlan) -> list[MidiNote]:
         if bar.breakdown:
             notes.extend(_breakdown_hats(plan, bar))
             continue
+        if bar.section == "Break":
+            if bar.left_in_section < 2:
+                notes.extend(_hat_roll(plan, bar))
+            continue
         if bar.section == "Intro" and bar.phrase == 0:
             continue  # kick alone first, so the hats have something to arrive on
         if bar.section == "Outro" and bar.left_in_section < PHRASE_BARS // 2:
@@ -426,7 +509,9 @@ def _hat_notes(plan: _SongPlan) -> list[MidiNote]:
                 continue
             if open_hats and step % 4 == 2:
                 notes.append(
-                    MidiNote(OPEN_HAT_PITCH, plan.at(bar, position), 0.25, plan.velocity(84))
+                    MidiNote(
+                        OPEN_HAT_PITCH, plan.at(bar, position), 0.25, plan.velocity(84)
+                    )
                 )
                 continue
             notes.append(
@@ -446,11 +531,21 @@ def _hat_notes(plan: _SongPlan) -> list[MidiNote]:
             and _clap_plays(plan, bar)
         ):
             notes.append(
-                MidiNote(_backbeat_pitch(plan), plan.at(bar, plan.beats - 0.25), 0.2, plan.velocity(64))
+                MidiNote(
+                    _backbeat_pitch(plan),
+                    plan.at(bar, plan.beats - 0.25),
+                    0.2,
+                    plan.velocity(64),
+                )
             )
         elif variation == "open_push" and open_hats:
             notes.append(
-                MidiNote(OPEN_HAT_PITCH, round(bar.start + plan.beats - 0.25, 6), 0.25, plan.velocity(70))
+                MidiNote(
+                    OPEN_HAT_PITCH,
+                    round(bar.start + plan.beats - 0.25, 6),
+                    0.25,
+                    plan.velocity(70),
+                )
             )
         if _clap_plays(plan, bar):
             for slot in plan.pattern.backbeat_positions:
@@ -463,6 +558,17 @@ def _hat_notes(plan: _SongPlan) -> list[MidiNote]:
                             plan.velocity(100),
                         )
                     )
+            if plan.profile.drum_pattern == "mutation_funk" and bar.section in {
+                "Build",
+                "Drop",
+                "VerseB",
+                "ChorusA",
+                "ChorusB",
+            }:
+                ghost_slot = 0.75 if bar.in_section % 2 == 0 else 2.75
+                notes.append(
+                    MidiNote(37, plan.at(bar, ghost_slot), 0.1, plan.velocity(43, 3))
+                )
     return notes
 
 
@@ -481,7 +587,9 @@ def _hat_grid(plan: _SongPlan, density: str) -> tuple[float, ...]:
 
 def _backbeat_pitch(plan: _SongPlan) -> int:
     """The family's backbeat sound, or the clap when the groove has none."""
-    return plan.pattern.backbeat_pitch if plan.pattern.backbeat_positions else CLAP_PITCH
+    return (
+        plan.pattern.backbeat_pitch if plan.pattern.backbeat_positions else CLAP_PITCH
+    )
 
 
 def _hat_roll(plan: _SongPlan, bar: _Bar) -> list[MidiNote]:
@@ -535,6 +643,8 @@ def _breakdown_hats(plan: _SongPlan, bar: _Bar) -> list[MidiNote]:
 def _clap_plays(plan: _SongPlan, bar: _Bar) -> bool:
     if bar.section == "Intro":
         return bar.left_in_section < PHRASE_BARS
+    if bar.section == "VerseA":
+        return bar.in_section % 2 == 0
     if bar.section == "Outro":
         return bar.in_section < PHRASE_BARS
     return True
@@ -543,9 +653,11 @@ def _clap_plays(plan: _SongPlan, bar: _Bar) -> bool:
 def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
     octave = {"low": -1, "mid": 0, "high": 1}[str(plan.brief.bass_register.value)]
     root = root_pitch(str(plan.brief.key.value), octave_offset=octave)
+    mutation = plan.profile.drum_pattern == "mutation_funk"
     choices = _BASS_RHYTHMS[plan.density]
     notes: list[MidiNote] = []
     rhythms: dict[tuple[str, int], tuple[int, ...]] = {}
+    mutation_rhythms: dict[tuple[str, int], tuple[tuple[int, ...], ...]] = {}
     motifs: dict[tuple[str, int], tuple[int, ...]] = {}
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
@@ -553,18 +665,33 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
         if bar.breakdown:
             notes.append(MidiNote(chord_root, bar.start, plan.beats * 0.95, 92))
             continue
+        if bar.section == "Break":
+            if bar.in_section in {0, max(0, plan.section_of(number).length_bars - 2)}:
+                notes.append(MidiNote(chord_root, bar.start, plan.beats * 0.9, 83))
+            continue
         if bar.section == "Intro" and bar.in_section < _intro_bass_entry(bar, plan):
             continue
         if bar.section == "Outro" and bar.left_in_section < PHRASE_BARS:
             continue
         key = (bar.section, bar.phrase)
-        if key not in rhythms:
-            name = "offbeat" if bar.section == "Intro" else plan.rng.choice(choices)
-            rhythms[key] = _BASS_PATTERNS[name]
+        if key not in motifs:
+            if mutation:
+                mutation_rhythms[key] = tuple(
+                    plan.rng.sample(_MUTATION_BASS_RHYTHMS[plan.density], 2)
+                )
+            else:
+                name = "offbeat" if bar.section == "Intro" else plan.rng.choice(choices)
+                rhythms[key] = _BASS_PATTERNS[name]
             motifs[key] = tuple(plan.rng.choice(_BASS_MOTIF_POOL) for _ in range(4))
-        steps = _role_steps(
-            [step for step in rhythms[key] if step < plan.steps], plan.bass_role.density_scale
+        pattern_steps = (
+            mutation_rhythms[key][bar.in_section % 2] if mutation else rhythms[key]
         )
+        steps = _role_steps(
+            [step for step in pattern_steps if step < plan.steps],
+            plan.bass_role.density_scale,
+        )
+        if mutation and bar.section == "Intro":
+            steps = steps[:2]
         motif = motifs[key]
         length = 0.2 if len(steps) > 6 else 0.4
         base = plan.bass_role.velocity
@@ -574,12 +701,15 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
                 interval = 12  # lift at the end of a phrase
             if interval == 10 and not plan.minor:
                 interval = 7  # a major seventh in the bass sounds wrong here
+            ghost = mutation and step % 4 == 3
             notes.append(
                 MidiNote(
                     chord_root + interval,
                     plan.at(bar, step / 4),
-                    length,
-                    plan.velocity(base + 2 if step % 4 == 2 else base - 6, 4),
+                    0.12 if ghost else length,
+                    plan.velocity(
+                        48 if ghost else base + 2 if step % 4 == 2 else base - 6, 4
+                    ),
                 )
             )
     return notes
@@ -610,12 +740,17 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
     extra = 3.75 if plan.density == "dense" else None
     notes: list[MidiNote] = []
     rhythms: dict[tuple[str, int], tuple[float, ...]] = {}
+    mutation_rests: dict[tuple[str, int], tuple[int, int]] = {}
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
         chord = _voiced_chord(plan, tonic, plan.chord_degree(bar))
         if bar.breakdown:
             # Held chords, one per bar: a note may not cross a clip boundary.
             notes.extend(_chord_notes(chord, bar.start, plan.beats * 0.95, 70))
+            continue
+        if bar.section == "Break":
+            if bar.in_section == 0 or bar.left_in_section == 1:
+                notes.extend(_chord_notes(chord, bar.start, plan.beats * 0.7, 65))
             continue
         first = articulation.positions[0]
         if bar.section == "Intro":
@@ -627,6 +762,15 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
                 notes.extend(_stab(plan, bar, chord, first, articulation.duration, 70))
             continue
         rhythm_key = (bar.section, bar.phrase)
+        if plan.profile.drum_pattern == "mutation_funk" and bar.section in {
+            "Drop",
+            "ChorusA",
+            "ChorusB",
+        }:
+            if rhythm_key not in mutation_rests:
+                mutation_rests[rhythm_key] = plan.rng.choice(_MUTATION_STAB_RESTS)
+            if bar.in_section % PHRASE_BARS in mutation_rests[rhythm_key]:
+                continue
         if rhythm_key not in rhythms:
             # The family's slots in groove order: the essential ones always,
             # and a different choice of the optional ones each phrase.
@@ -636,10 +780,21 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
             chosen = plan.rng.sample(optional, min(len(optional), count - low))
             rhythms[rhythm_key] = tuple(articulation.positions[:low]) + tuple(chosen)
         hits = [hit for hit in rhythms[rhythm_key] if hit < plan.beats]
+        if bar.section == "VerseA":
+            hits = hits[:1]
+        elif bar.section == "VerseB":
+            hits = hits[:2]
+        elif bar.section == "ChorusB" and plan.beats - 0.5 not in hits:
+            hits.append(plan.beats - 0.5)
         if bar.section == "Build" and bar.phrase == 0:
             hits = hits[:1]
         short = articulation.duration < 0.5
-        if short and extra is not None and bar.section == "Drop" and extra < plan.beats:
+        if (
+            short
+            and extra is not None
+            and bar.section in {"Drop", "ChorusB"}
+            and extra < plan.beats
+        ):
             hits.append(extra)
         if short and bar.phrase_end and plan.beats - 0.75 not in hits:
             hits.append(plan.beats - 0.75)
@@ -652,8 +807,69 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
     return notes
 
 
+def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
+    """A chord-tone hook with short scale passing notes in the upper register."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=3)
+    motifs = ((0, 2, 4, 2), (2, 4, 2, 0), (4, 2, 0, 2))
+    phrase_motifs: dict[tuple[str, int], tuple[int, ...]] = {}
+    notes: list[MidiNote] = []
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        if bar.breakdown or bar.section == "Intro":
+            continue
+        if bar.section == "Break":
+            if bar.left_in_section >= 2:
+                continue
+            offsets = (2.0, 2.75, 3.5)
+        elif bar.section == "VerseA":
+            if bar.in_section < 4 or bar.in_section % 2:
+                continue
+            offsets = (1.5, 3.0)
+        elif bar.section == "VerseB":
+            offsets = (0.5, 2.0, 3.25) if bar.in_section % 2 == 0 else (1.5, 3.0)
+        elif bar.section in {"ChorusA", "ChorusB"}:
+            offsets = (0.5, 1.5, 2.5, 3.5)
+        elif bar.section == "Outro":
+            if bar.in_section % 2:
+                continue
+            offsets = (1.5, 3.0)
+        else:
+            offsets = (0.5, 2.0, 3.5)
+        key = (bar.section, bar.phrase)
+        if key not in phrase_motifs:
+            phrase_motifs[key] = plan.rng.choice(motifs)
+        motif = phrase_motifs[key]
+        chord_degree = plan.chord_degree(bar)
+        for index, offset in enumerate(offsets):
+            if offset >= plan.beats:
+                continue
+            degree = chord_degree + motif[index % len(motif)]
+            # The last pickup is a quiet diatonic neighbour, resolving on the
+            # next bar's chord tone rather than a random out-of-key pitch.
+            passing = index == len(offsets) - 1 and bar.in_section % 2 == 1
+            if passing:
+                degree += 1
+            pitch = tonic + plan.degree_offset(degree)
+            if pitch > 96:
+                pitch -= 12
+            notes.append(
+                MidiNote(
+                    pitch,
+                    plan.at(bar, offset),
+                    0.18 if passing else 0.32,
+                    plan.velocity(69 if passing else 88, 4),
+                )
+            )
+    return notes
+
+
 def _stab(
-    plan: _SongPlan, bar: _Bar, chord: tuple[int, ...], offset: float, length: float, velocity: int
+    plan: _SongPlan,
+    bar: _Bar,
+    chord: tuple[int, ...],
+    offset: float,
+    length: float,
+    velocity: int,
 ) -> list[MidiNote]:
     """One chord, held for the articulation's length but never past the bar."""
     start = swung(offset, plan.swing)
@@ -673,7 +889,11 @@ def _echoes(plan: _SongPlan, bar: _Bar) -> bool:
     if plan.articulation.echo:
         return True
     # 「ところどころ」: the second half of every other eight-bar phrase.
-    return plan.echo_requested and bar.phrase % 2 == 1 and bar.in_section % PHRASE_BARS >= 4
+    return (
+        plan.echo_requested
+        and bar.phrase % 2 == 1
+        and bar.in_section % PHRASE_BARS >= 4
+    )
 
 
 def _echo(
@@ -695,7 +915,9 @@ def _echo(
                 break
             taken.add(offset)
             notes.extend(
-                _chord_notes(chord, bar.start + offset, duration, max(1, round(velocity * level)))
+                _chord_notes(
+                    chord, bar.start + offset, duration, max(1, round(velocity * level))
+                )
             )
     return notes
 

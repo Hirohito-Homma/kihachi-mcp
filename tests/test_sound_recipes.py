@@ -5,6 +5,7 @@ from live_fixtures import gate
 
 from kihachi_mcp.knowledge.sound_recipes import (
     DUB_TECHNO,
+    MUTATION_FUNK,
     RECIPES,
     Setting,
     recipe_for,
@@ -112,6 +113,24 @@ def test_dub_techno_applies_its_recipe_by_parameter_name(tmp_path: Path) -> None
     assert stab["device_parameters"]["0"]["Flt 1 Freq"] == 0.58
     assert stab["device_parameters"]["1"]["Channel Mode"] == "Ping Pong"
     assert stab["device_parameters"]["1"]["Dry Wet"] == 0.35
+
+
+def test_mutation_funk_uses_distinct_short_bass_and_stab_settings(tmp_path: Path) -> None:
+    assert recipe_for("mutation_funk") is MUTATION_FUNK
+    result, transport = _apply(tmp_path, "Mutation Funk、32小節")
+    assert result["ok"] is True, result.get("error")
+    bass = _track(transport, "Bass")
+    stab = _track(transport, "Stab")
+    lead = _track(transport, "Lead")
+    kick = _track(transport, "Kick")
+    assert bass["device_names"] == ["Analog"]
+    assert stab["device_names"] == ["Wavetable"]
+    assert lead["device_names"] == ["Wavetable"]
+    assert lead["device_parameters"]["0"]["Flt 1 Freq"] == 0.78
+    assert any(pad.get("name") == "kihachi-kick-deep" for pad in kick.get("occupied_pads", []))
+    assert bass["device_parameters"]["0"]["F1 Freq"] == 0.52
+    assert stab["device_parameters"]["0"]["Amp Decay"] == 0.22
+    assert stab["device_parameters"]["0"]["Flt 1 Freq"] != 0.58
 
 
 def test_a_genre_without_a_recipe_keeps_the_stock_instruments(tmp_path: Path) -> None:

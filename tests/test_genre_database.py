@@ -47,6 +47,14 @@ def test_english_and_japanese_names_are_recognised() -> None:
     assert _slugs("テックハウスとダブ") == ["tech_house", "dub"]
 
 
+def test_user_confirmed_mutashon_spelling_means_mutation_funk() -> None:
+    assert _slugs("Mutashon Funkで作って") == ["mutation_funk"]
+    assert _slugs("Mutation Funkで作って") == ["mutation_funk"]
+    brief = assemble_brief(extract_explicit("Mutashon Funkで64小節"), _intent())
+    assert brief.genre.value == "mutation_funk"
+    assert brief.genre.source == "user"
+
+
 def test_a_longer_name_wins_over_the_one_inside_it() -> None:
     assert _slugs("ハードテクノ") == ["hard_techno"]
 

@@ -162,7 +162,80 @@ DUB_TECHNO = SoundRecipe(
     },
 )
 
-RECIPES: dict[str, SoundRecipe] = {"dub_techno": DUB_TECHNO}
+MUTATION_FUNK = SoundRecipe(
+    name="mutation_funk",
+    parts={
+        "Bass": PartRecipe(
+            DeviceRecipe(
+                "Analog",
+                (
+                    _i("Voices", "Mono"),
+                    _i("OSC2 Shape", "Sine"),
+                    _s("F1 Freq", 0.52),
+                    _s("F1 Resonance", 0.28),
+                    _s("F1 Freq < Env", 0.8),
+                    _s("FEG1 Decay", 0.32),
+                    _s("FEG1 Sustain", 0.05),
+                    _s("AEG1 Decay", 0.38),
+                    _s("AEG1 Sustain", 0.2),
+                    _s("AEG1 Rel", 0.3),
+                    _s("AMP1 Level", 0.75),
+                ),
+            )
+        ),
+        "Stab": PartRecipe(
+            DeviceRecipe(
+                "Wavetable",
+                (
+                    _s("Osc 1 Pos", 0.6),
+                    _i("Osc 2 On", "On"),
+                    _s("Osc 2 Detune", 0.53),
+                    _s("Osc 2 Pos", 0.25),
+                    _i("Flt 1 Slope", "24"),
+                    _s("Flt 1 Freq", 0.72),
+                    _s("Flt 1 Res", 0.38),
+                    _s("Amp Decay", 0.22),
+                    _s("Amp Sustain", 0.08),
+                    _s("Amp Release", 0.22),
+                ),
+            )
+        ),
+        "Lead": PartRecipe(
+            DeviceRecipe(
+                "Wavetable",
+                (
+                    _s("Osc 1 Pos", 0.42),
+                    _i("Osc 2 On", "On"),
+                    _s("Osc 2 Detune", 0.52),
+                    _s("Osc 2 Pos", 0.48),
+                    _i("Flt 1 Slope", "24"),
+                    _s("Flt 1 Freq", 0.78),
+                    _s("Flt 1 Res", 0.22),
+                    _s("Amp Decay", 0.36),
+                    _s("Amp Sustain", 0.26),
+                    _s("Amp Release", 0.32),
+                ),
+            )
+        ),
+    },
+    tone={
+        "brightness": (
+            ToneStep("Stab", "Wavetable", "Flt 1 Freq", 0.05),
+            ToneStep("Bass", "Analog", "F1 Freq", 0.04),
+            ToneStep("Lead", "Wavetable", "Flt 1 Freq", 0.05),
+        ),
+        "length": (
+            ToneStep("Stab", "Wavetable", "Amp Decay", 0.04),
+            ToneStep("Stab", "Wavetable", "Amp Release", 0.04),
+            ToneStep("Bass", "Analog", "AEG1 Decay", 0.04),
+        ),
+    },
+)
+
+RECIPES: dict[str, SoundRecipe] = {
+    "dub_techno": DUB_TECHNO,
+    "mutation_funk": MUTATION_FUNK,
+}
 
 
 def recipe_for(genre: str) -> SoundRecipe | None:

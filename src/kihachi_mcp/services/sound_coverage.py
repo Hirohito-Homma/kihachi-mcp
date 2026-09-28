@@ -14,7 +14,7 @@ DRUM_PARTS = frozenset({"Kick", "Hats"})
 
 def expected_pitches(candidate: "MidiCandidate | AppliedTracks") -> dict[str, list[int]]:
     """Return the pitches each part will send to Live."""
-    return {part: list(candidate.used_pitches(part)) for part in STUDIO_PARTS}
+    return {part: list(candidate.used_pitches(part)) for part in getattr(candidate, "parts", STUDIO_PARTS)}
 
 
 def coverage_from_snapshot(
@@ -28,7 +28,7 @@ def coverage_from_snapshot(
     automatic: list[str] = []
     manual: list[str] = []
     summaries = drum_summaries or {}
-    for part in STUDIO_PARTS:
+    for part in getattr(candidate, "parts", STUDIO_PARTS):
         track_name = track_names.get(part, "")
         devices = device_names_by_track.get(part, [])
         pitches = candidate.used_pitches(part)

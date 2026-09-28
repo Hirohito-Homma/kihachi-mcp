@@ -1,4 +1,7 @@
+from live_fixtures import snapshot_of
+
 from kihachi_mcp.models.live_contract import OP_LOAD_DRUM_PAD_SAMPLE
+from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.candidate_live_planner import CandidateLivePlanner
 from kihachi_mcp.services.drum_samples import (
     CLAP_NOTE,
@@ -9,9 +12,6 @@ from kihachi_mcp.services.drum_samples import (
     is_bundled_sample,
 )
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
-from live_fixtures import snapshot_of
-
-from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
 from kihachi_mcp.services.studio_interpreter import assemble_brief
 

@@ -42,7 +42,7 @@ CONFLICT_USER_CLIP = "user_owned_clip"
 CONFLICT_SESSION_MISSING = "session_clip_missing"
 CONFLICT_ARRANGEMENT_OCCUPIED = "arrangement_range_occupied"
 
-_TRACK_COLORS = {"Kick": "2", "Hats": "20", "Bass": "14", "Stab": "9"}
+_TRACK_COLORS = {"Kick": "2", "Hats": "20", "Bass": "14", "Stab": "9", "Lead": "16"}
 _SHORT_ID_RE = re.compile(r"[0-9a-f]{8}")
 
 
@@ -66,6 +66,11 @@ class AppliedTracks:
     def candidate_id(self) -> str:
         """Return the short id where a candidate would give its full id."""
         return self.short_id
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        """The legacy four-track layout used for a short-ID pad repair."""
+        return STUDIO_PARTS
 
     @property
     def note_fingerprint(self) -> str:
@@ -259,7 +264,7 @@ class _Builder:
             return [], self._conflicts, self._warnings
         beats = self._snapshot.time_signature.beats_per_bar
         reserved: dict[int, list[tuple[float, float]]] = {}
-        for part in STUDIO_PARTS:
+        for part in self._candidate.parts:
             track_name = managed_track_name(f"KIHACHI {part} {self._short_id}")
             track = self._snapshot.track_by_name(track_name)
             if track is None:
@@ -506,7 +511,7 @@ class _Builder:
 
     def _plan_tracks(self) -> list[dict[str, Any]]:
         planned: list[dict[str, Any]] = []
-        for part in STUDIO_PARTS:
+        for part in self._candidate.parts:
             name = managed_track_name(f"KIHACHI {part} {self._short_id}")
             existing = self._snapshot.track_by_name(name)
             if existing is not None:
@@ -680,7 +685,9 @@ class _Builder:
             if "Drum Rack" not in track["device_names"]:
                 continue
             for note in self._candidate.used_pitches(track["part"]):
-                path = sample_path_for_note(note)
+                brief = getattr(self._candidate, "brief", None)
+                genre = str(brief.genre.value) if brief is not None else ""
+                path = sample_path_for_note(note, genre=genre)
                 self._operations.append(
                     LiveMutationOperation(
                         operation_id=self._next_id(OP_LOAD_DRUM_PAD_SAMPLE),
@@ -710,7 +717,9 @@ class _Builder:
             key = (clip.section_name, clip.start_bar)
             if key not in keys:
                 keys.append(key)
-        for section_name, start_bar in keys:
+        # Clips are grouped by part, whose UDP splits can differ. Collect all
+        # scene boundaries before appending them in musical time order.
+        for section_name, start_bar in sorted(keys, key=lambda key: key[1]):
             scene_name = managed_track_name(
                 f"{section_name} {start_bar} {self._short_id}"
             )

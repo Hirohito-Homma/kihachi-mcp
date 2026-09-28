@@ -18,6 +18,7 @@ SUPPORTED_GENRES = ("tech_house", "dub_techno", "melodic_techno")
 DENSITY_VALUES = ("sparse", "normal", "dense")
 REGISTER_VALUES = ("low", "mid", "high")
 STUDIO_PARTS = ("Kick", "Hats", "Bass", "Stab")
+OPTIONAL_STUDIO_PARTS = ("Lead",)
 
 KEY_ENUM = tuple(
     f"{root}{suffix}"

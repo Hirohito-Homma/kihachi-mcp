@@ -49,7 +49,8 @@ _UNHANDLED_PATTERNS = (
 Span = tuple[int, int, str]
 
 _TEMPO_RES = (
-    re.compile(r"(?<!\d)(\d{2,3})\s*(?:BPM|bpm|ＢＰＭ)"),
+    re.compile(r"(?<!\d)(\d{2,3})\s*(?:BPM|bpm|ＢＰＭ|ビーピーエム)"),
+    re.compile(r"(?:BPM|bpm|ＢＰＭ|ビーピーエム)\s*(\d{2,3})"),
     re.compile(r"テンポ\s*(\d{2,3})"),
 )
 # 「57小節目」 is a position, not a length.
@@ -74,6 +75,12 @@ _MOOD_WORDS = ("暗い", "ダーク", "明るい", "優しい", "激しい", "�
 #: A delay or echo request. KIHACHI writes MIDI, so it answers with quieter
 #: repeats of the chord stabs rather than an effect device.
 _ECHO_RE = re.compile(r"ディレイ|delay|エコー|echo", re.IGNORECASE)
+_BARS_EN_RE = re.compile(r"(?<!\d)(\d{2,3})\s*-?\s*bars?\b", re.IGNORECASE)
+_DURATION_RE = re.compile(r"約?\s*(\d+(?:\.\d+)?)\s*分")
+_SWING_RES = (
+    re.compile(r"(?:スイング|swing)\s*(\d{2,3})\s*%?", re.IGNORECASE),
+    re.compile(r"(\d{2,3})\s*%\s*(?:スイング|swing)", re.IGNORECASE),
+)
 _STRONGER = r"(とても|かなり|すごく|もっと|めちゃくちゃ|すごい)"
 _DELAY = r"(ディレイ|エコー|delay|echo)"
 #: (field, direction, pattern). A sound word, read as a step of a recipe's tone
@@ -121,7 +128,10 @@ def read_explicit(text: str) -> tuple[dict[str, Any], list[Span]]:
     first("tempo", _find_tempo(text))
     first("key", _find_key(text))
     first("bars", _find_bars(text))
+    if "bars" not in fields and "tempo" in fields:
+        first("bars", _bars_from_duration(text, int(fields["tempo"])))
     first("drop_start_bar", _find_drop(text))
+    first("swing", _find_swing(text))
     for name, value, pattern in _HAT_RULES:
         if name in fields:
             continue
@@ -182,11 +192,46 @@ def _find_tempo(text: str) -> tuple[int, int, int] | None:
     return None
 
 
+def explicit_swing(text: str) -> float | None:
+    """Return a user-written swing ratio, such as 54% -> 0.54."""
+    found = _find_swing(text)
+    return None if found is None else float(found[0])
+
+
 def _find_bars(text: str) -> tuple[int, int, int] | None:
     for match in _BARS_RE.finditer(text):
         bars = int(match.group(1))
         if 16 <= bars <= 256 and bars % 4 == 0:
             return bars, match.start(), match.end()
+    match = _BARS_EN_RE.search(text)
+    if match:
+        bars = int(match.group(1))
+        if 16 <= bars <= 256 and bars % 4 == 0:
+            return bars, match.start(), match.end()
+    return None
+
+
+def _bars_from_duration(text: str, tempo: int) -> tuple[int, int, int] | None:
+    """Turn 「約5分」 into bars when the brief did not name a bar count."""
+    match = _DURATION_RE.search(text)
+    if match is None or tempo <= 0:
+        return None
+    minutes = float(match.group(1))
+    if not 0.5 <= minutes <= 20:
+        return None
+    bars = int(round((minutes * tempo / 4.0) / 4.0) * 4)
+    bars = min(256, max(16, bars))
+    return bars, match.start(), match.end()
+
+
+def _find_swing(text: str) -> tuple[float, int, int] | None:
+    for pattern in _SWING_RES:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        percent = int(match.group(1))
+        if 50 <= percent <= 75:
+            return percent / 100.0, match.start(), match.end()
     return None
 
 

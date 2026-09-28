@@ -25,6 +25,13 @@ def test_extracts_explicit_tempo_key_bars_drop_and_hats() -> None:
     assert extracted["fields"]["mood"] == "暗い"
 
 
+@pytest.mark.parametrize("spoken", ["ビーピーエム125", "125ビーピーエム", "BPM 125"])
+def test_spoken_bpm_is_preserved_as_an_explicit_value(spoken: str) -> None:
+    extracted = extract_explicit(f"Mutashon Funkで、{spoken}")
+    assert extracted["fields"]["genre"] == "mutation_funk"
+    assert extracted["fields"]["tempo"] == 125
+
+
 def test_user_values_win_over_conflicting_model_output() -> None:
     extracted = extract_explicit(BRIEF)
     intent = {

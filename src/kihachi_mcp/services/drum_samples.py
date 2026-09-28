@@ -29,6 +29,7 @@ _SAMPLES = {
     "kihachi-snare.wav": SNARE_NOTE,
     "kihachi-ride.wav": RIDE_NOTE,
 }
+_MUTATION_KICK = "kihachi-kick-deep.wav"
 
 
 def sample_dir() -> Path:
@@ -49,8 +50,13 @@ def ensure_drum_samples() -> dict[int, Path]:
     return paths
 
 
-def sample_path_for_note(note: int) -> Path:
+def sample_path_for_note(note: int, genre: str = "") -> Path:
     """Return the bundled sample for one MIDI note."""
+    if note == KICK_NOTE and genre == "mutation_funk":
+        path = sample_dir() / _MUTATION_KICK
+        if not path.is_file() or path.stat().st_size < 64:
+            _write_wav(path, _deep_kick_frames())
+        return path
     paths = ensure_drum_samples()
     if note not in paths:
         raise ValueError(f"no bundled drum sample for note {note}")
@@ -64,7 +70,7 @@ def is_bundled_sample(path: str | Path) -> bool:
         resolved.relative_to(sample_dir().resolve())
     except ValueError:
         return False
-    return resolved.name in _SAMPLES and resolved.is_file()
+    return resolved.name in {*_SAMPLES, _MUTATION_KICK} and resolved.is_file()
 
 
 def _write_wav(path: Path, frames: list[int]) -> None:
@@ -83,6 +89,20 @@ def _kick_frames() -> list[int]:
         body = math.sin(2 * math.pi * (58 - 28 * t) * t) * math.exp(-18 * t)
         click = math.sin(2 * math.pi * 1800 * t) * math.exp(-90 * t) * 0.35
         frames.append(_clamp(body + click))
+    return frames
+
+
+def _deep_kick_frames() -> list[int]:
+    """Longer 52 Hz body with a brief downward pitch sweep and soft attack."""
+    length = int(SAMPLE_RATE * 0.38)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        phase = 2 * math.pi * (52 * t + 65 * 0.025 * (1 - math.exp(-t / 0.025)))
+        body = math.sin(phase) * math.exp(-8 * t) * 0.83
+        attack = math.sin(2 * math.pi * 420 * t) * math.exp(-100 * t) * 0.07
+        fade = min(1.0, (length - index) / (SAMPLE_RATE * 0.025))
+        frames.append(_clamp((body + attack) * fade))
     return frames
 
 

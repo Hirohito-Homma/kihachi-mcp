@@ -303,6 +303,16 @@
       <div id="effects-summary"></div>
       <div id="effects-result"></div>
 
+      <h2>エフェクトのつまみを設定し直す</h2>
+      <p class="sub">選んだパートのエフェクトのつまみを、今のレシピの値に設定し直します。デバイスの追加・削除はしません。トラックにレシピどおりのエフェクトが並んでいないパートは変えません。</p>
+      <div id="retune-parts" class="actions"></div>
+      <div class="actions">
+        <button id="preview-retune" class="secondary">設定し直す内容を確認</button>
+        <button id="retune" disabled>この内容でつまみを設定し直す</button>
+      </div>
+      <div id="retune-summary"></div>
+      <div id="retune-result"></div>
+
       <h2>MIX</h2>
       <p class="sub">各トラックの音量(dB)とパンをクラブ向けに揃えます。キックを一番上に、120Hz以下のパートは中央、マスターに約6dBの余裕を残します。音量とパン以外は変えません。</p>
       <div class="actions">
@@ -323,12 +333,21 @@
 
       <h2>マスタリング</h2>
       <p class="sub">Setのマスタートラックに EQ → Glue Compressor → Saturator → Utility（低域モノ）→ Limiter（True Peak, 天井 -1.2dB）を追加します。マスターに既にあるデバイスは消さず、その後ろに入れます。毎回確認してから送ります。</p>
+      <label><input type="checkbox" id="master-retune"> 以前追加したマスタリングのつまみを、今のレシピの値に設定し直す（デバイスは追加しません）</label>
       <div class="actions">
         <button id="preview-master" class="secondary">マスタリング内容を確認</button>
-        <button id="master" disabled>この内容でマスターに追加</button>
+        <button id="master" disabled>この内容でマスターに送る</button>
       </div>
       <div id="master-summary"></div>
       <div id="master-result"></div>
+
+      <h2>音圧を測る</h2>
+      <p class="sub">Live で書き出した WAV / AIFF / FLAC のパスを入れます（Finder でファイルを選んで ⌥⌘C でパスをコピーし、貼り付け）。Live には触れません。選択中の候補があればセクション別にも測ります。</p>
+      <input id="measure-path" type="text" placeholder="/Volumes/.../KIHACHI_TEST008.wav" style="width:100%">
+      <div class="actions">
+        <button id="measure" class="secondary">音圧を測る</button>
+      </div>
+      <div id="measure-result"></div>
     </section>
 
     <section id="recover-view">
@@ -376,7 +395,7 @@
     </section>
   </main>
   <script>
-    const state = { candidate: null, poll: null, applying: false };
+    const state = { candidate: null, poll: null, applying: false, masterRetune: false };
     let pendingRevision = null;
     const $ = (id) => document.getElementById(id);
 
@@ -689,6 +708,7 @@
 
     function renderCandidate(candidate, coverage) {
       state.candidate = candidate;
+      renderRetuneParts(candidate);
       $("brief-view").classList.remove("hidden");
       $("candidate-view").classList.remove("hidden");
       $("apply-view").classList.remove("hidden");
@@ -925,21 +945,49 @@
       return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     }
 
+    function renderRetuneParts(candidate) {
+      const parts = Object.keys(candidate.used_pitches || {});
+      $("retune-parts").innerHTML = parts.map((part) =>
+        `<label><input type="checkbox" class="retune-part" value="${escapeHtml(part)}"> ${escapeHtml(part)}</label>`
+      ).join(" ");
+      $("retune").disabled = true;
+      $("retune-summary").innerHTML = "";
+      $("retune-result").innerHTML = "";
+    }
+
+    function pickedRetuneParts() {
+      return [...document.querySelectorAll(".retune-part:checked")].map((box) => box.value);
+    }
+
+    const stageBody = {
+      retune: () => ({ parts: pickedRetuneParts() })
+    };
+
+    $("retune-parts").onchange = () => { $("retune").disabled = true; };
+    $("master-retune").onchange = () => { $("master").disabled = true; };
+
+    // A send repeats the body its preview used, whatever is ticked by then.
+    const previewedBody = {};
+
     async function postStage(stage, confirmed) {
+      const extra = confirmed
+        ? previewedBody[stage] || {}
+        : (previewedBody[stage] = stageBody[stage] ? stageBody[stage]() : {});
       return getJson(`/api/ableton/${stage}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_id: state.candidate.candidate_id, confirmed })
+        body: JSON.stringify({ candidate_id: state.candidate.candidate_id, confirmed, ...extra })
       });
     }
 
     const stageRow = {
       effects: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}`,
       mix: (row) => `${escapeHtml(row.track)}: ${row.volume_db.toFixed(1)} dB / pan ${row.panning.toFixed(2)}`,
-      sidechain: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}（キーはキック）`
+      sidechain: (chain) => `${escapeHtml(chain.track)}: ${chain.devices.map(escapeHtml).join(" → ")}（キーはキック）`,
+      retune: (row) => `${escapeHtml(row.track)} #${row.device_index} ${escapeHtml(row.device)} / ${escapeHtml(row.parameter)} = ${escapeHtml(row.setting)}`
     };
 
-    for (const stage of ["effects", "mix", "sidechain"]) {
+    for (const stage of ["effects", "mix", "sidechain", "retune"]) {
       $(`preview-${stage}`).onclick = async () => {
         if (!state.candidate) return;
         $(stage).disabled = true;
@@ -969,13 +1017,14 @@
       return getJson("/api/ableton/master", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmed })
+        body: JSON.stringify({ confirmed, retune: state.masterRetune })
       });
     }
 
     $("preview-master").onclick = async () => {
       $("master").disabled = true;
       $("master-result").innerHTML = "";
+      state.masterRetune = $("master-retune").checked;
       const result = await postMaster(false);
       if (!result.ok) {
         $("master-summary").innerHTML = `<p class="bad">${escapeHtml(result.error || "")}</p>`;
@@ -983,7 +1032,10 @@
       }
       $("master-summary").innerHTML = `
         <p>既存: ${escapeHtml((result.existing || []).join(" → ") || "（なし）")}</p>
-        <p>追加: ${result.added.map(escapeHtml).join(" → ")}（${result.operations} 操作）</p>
+        <p>${state.masterRetune
+          ? `つまみを設定し直す（${result.operations} 操作。デバイスは追加しません）`
+          : `追加: ${result.added.map(escapeHtml).join(" → ")}（${result.operations} 操作）`}</p>
+        <ul>${(result.settings || []).map((s) => `<li>${escapeHtml(s.device)} / ${escapeHtml(s.parameter)} = ${escapeHtml(s.setting)}</li>`).join("")}</ul>
         ${(result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("")}
       `;
       $("master").disabled = false;
@@ -993,6 +1045,37 @@
       $("master").disabled = true;
       $("master-result").innerHTML = "<p>Liveへ送っています…</p>";
       renderStageResult("master", await postMaster(true));
+    };
+
+    $("measure").onclick = async () => {
+      const path = $("measure-path").value.trim();
+      if (!path) return;
+      $("measure").disabled = true;
+      $("measure-result").innerHTML = "<p>測っています…（数秒〜十数秒）</p>";
+      const r = await getJson("/api/measure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, candidate_id: state.candidate ? state.candidate.candidate_id : "" })
+      });
+      $("measure").disabled = false;
+      if (!r.ok) {
+        $("measure-result").innerHTML = `<p class="bad">${escapeHtml(r.error || "測定できません")}</p>`;
+        return;
+      }
+      const metric = (label, value) => `<div class="metric"><b>${label}</b>${escapeHtml(value)}</div>`;
+      $("measure-result").innerHTML = `
+        <p>${escapeHtml(r.file)}（${r.seconds} 秒, ${r.sample_rate} Hz）</p>
+        <div class="grid">
+          ${metric("Integrated", `${r.integrated_lufs} LUFS`)}
+          ${metric("Short-term max", `${r.short_term_max_lufs} LUFS`)}
+          ${metric("Loudness range", `${r.loudness_range_lu} LU`)}
+          ${metric("True Peak", `${r.true_peak_dbtp} dBTP`)}
+          ${metric("PLR", `${r.plr_db} dB`)}
+          ${metric("120Hz以下の比率", `${r.low_end_share_db} dB`)}
+        </div>
+        ${(r.sections || []).length ? `<ul>${r.sections.map((s) => `<li>${escapeHtml(s.bars)} ${escapeHtml(s.name)}: ${s.lufs} LUFS</li>`).join("")}</ul>` : ""}
+        <ul>${(r.verdict || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
+      `;
     };
 
     function renderStageResult(stage, result) {

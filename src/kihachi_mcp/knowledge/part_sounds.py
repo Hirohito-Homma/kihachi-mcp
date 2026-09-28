@@ -92,13 +92,29 @@ def step(device: str, name: str, index: int) -> Setting:
     )
 
 
-def _eq(high_pass_hz: float, low_pass_hz: float | None = None) -> DeviceRecipe:
-    """Band 1 as a 12 dB high-pass; band 8 as a 12 dB low-pass when asked."""
+def _eq(
+    high_pass_hz: float,
+    low_pass_hz: float | None = None,
+    cut: tuple[float, float, float] | None = None,
+) -> DeviceRecipe:
+    """Band 1 as a 12 dB high-pass; band 8 as a 12 dB low-pass when asked.
+
+    ``cut`` is (Hz, dB, Q) for a bell on band 2.
+    """
     eq = "EQ Eight"
     settings = [
         item(eq, "1 Filter Type A", "High Pass 12dB"),
         at(eq, "1 Frequency A", high_pass_hz),
     ]
+    if cut is not None:
+        hz, gain_db, q = cut
+        settings += [
+            item(eq, "2 Filter On A", "On"),
+            item(eq, "2 Filter Type A", "Bell"),
+            at(eq, "2 Frequency A", hz),
+            at(eq, "2 Gain A", gain_db),
+            at(eq, "2 Q A", q),
+        ]
     if low_pass_hz is not None:
         settings += [
             item(eq, "8 Filter On A", "On"),
@@ -163,7 +179,8 @@ def _saturator(drive_db: float, kind: str, wet_percent: float = 100) -> DeviceRe
 
 #: Effects after each part's instrument, first to last.
 PART_EFFECTS: dict[str, tuple[DeviceRecipe, ...]] = {
-    "Kick": (_eq(30), _saturator(3, "Soft Sine")),
+    # The 55 Hz boom filled most of the mix's energy and held the limiter down.
+    "Kick": (_eq(30, cut=(55, -3, 1.34)), _saturator(3, "Soft Sine")),
     "Snare": (_eq(150), _compressor(-18, 4, 10, 127), _reverb(15, 900, 30)),
     "Hats": (_eq(400),),
     "OpenHat": (_eq(300),),

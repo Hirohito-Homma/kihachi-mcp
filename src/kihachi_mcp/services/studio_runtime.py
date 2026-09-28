@@ -1081,6 +1081,14 @@ class StudioRuntime:
         """Duck Sub, Bass and Pad from the kick. Previews unless confirmed."""
         return self._apply_stage("sidechain", candidate_id, confirmed)
 
+    def apply_retune(
+        self, candidate_id: str, parts: tuple[str, ...], confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Set the named parts' effect knobs again on their existing devices."""
+        if not parts:
+            return {"ok": False, "error": "設定し直すパートを指定してください"}
+        return self._apply_stage("retune", candidate_id, confirmed, parts)
+
     def _ducked_parts(self, candidate: MidiCandidate, snapshot: Any) -> frozenset[str]:
         """Parts whose track already has a Compressor keyed from this kick."""
         short_id = candidate.candidate_id[:8]
@@ -1098,7 +1106,9 @@ class StudioRuntime:
                     ducked.add(part)
         return frozenset(ducked)
 
-    def _apply_stage(self, kind: str, candidate_id: str, confirmed: bool) -> dict[str, Any]:
+    def _apply_stage(
+        self, kind: str, candidate_id: str, confirmed: bool, parts: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
@@ -1116,6 +1126,8 @@ class StudioRuntime:
                 plan = self._planner.create_sidechain_plan(candidate, snapshot, ducked)
             elif kind == "effects":
                 plan = self._planner.create_effects_plan(candidate, snapshot)
+            elif kind == "retune":
+                plan = self._planner.create_retune_plan(candidate, snapshot, parts)
             else:
                 plan = self._planner.create_mix_plan(candidate, snapshot)
             if plan.status == "blocked":
@@ -1124,7 +1136,8 @@ class StudioRuntime:
                     "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
                     "conflicts": [item.to_dict() for item in plan.conflicts],
                 }
-            chains = _mix_summary(plan) if kind == "mix" else _effect_summary(plan)
+            summary = {"mix": _mix_summary, "retune": _retune_summary}.get(kind, _effect_summary)
+            chains = summary(plan)
             if not plan.operations:
                 return {
                     "ok": False,
@@ -1132,6 +1145,7 @@ class StudioRuntime:
                         "effects": "追加するエフェクトはありません",
                         "mix": "MIXするトラックがありません",
                         "sidechain": "サイドチェインを追加するトラックはありません",
+                        "retune": "設定し直すつまみはありません",
                     }[kind],
                     "warnings": list(plan.warnings),
                 }
@@ -1622,6 +1636,24 @@ def _mix_summary(plan: Any) -> list[dict[str, Any]]:
         )
         rows.append({"track": track, **operation.arguments})
     return rows
+
+
+def _retune_summary(plan: Any) -> list[dict[str, Any]]:
+    """The knobs a retune plan sets, in order."""
+    return [
+        {
+            "track": next(
+                item.arguments.get("name", "")
+                for item in operation.preconditions
+                if item.kind == "track_name_at_index"
+            ),
+            "device_index": operation.target["device_index"],
+            "device": operation.arguments["device_name"],
+            "parameter": operation.arguments["parameter_name"],
+            "setting": operation.arguments.get("item", operation.arguments.get("value")),
+        }
+        for operation in plan.operations
+    ]
 
 
 def _effect_summary(plan: Any) -> list[dict[str, Any]]:

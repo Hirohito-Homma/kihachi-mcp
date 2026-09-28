@@ -118,6 +118,13 @@ def _parser() -> argparse.ArgumentParser:
     sidechain.add_argument("project")
     sidechain.add_argument("--yes", action="store_true", help="確認の質問を省略する")
     sidechain.set_defaults(handler=_ableton_effects, stage="sidechain")
+    retune = steps.add_parser(
+        "retune", help="指定パートの既存エフェクトのつまみをレシピどおりに設定し直します"
+    )
+    retune.add_argument("project")
+    retune.add_argument("--part", action="append", required=True, help="例: --part Kick")
+    retune.add_argument("--yes", action="store_true", help="確認の質問を省略する")
+    retune.set_defaults(handler=_ableton_retune)
     master = steps.add_parser(
         "master", help="マスタートラックの既存デバイスの後ろにクラブ向けマスタリングを追加します"
     )
@@ -171,6 +178,36 @@ def _ableton_effects(args: argparse.Namespace) -> int:
         route,
         {"candidate_id": candidate_id, "confirmed": True},
         timeout=SEND_TIMEOUT_SECONDS,
+    )
+    receipt = result.get("receipt") or {}
+    print(f"\n結果: {receipt.get('status') or result.get('error')}")
+    for item in receipt.get("mismatches") or []:
+        print(f"  ! {item.get('operation_id')} {item.get('field_name')}: 計画 {item.get('expected')} / Live {item.get('observed')}")
+    return 0 if result.get("ok") else 1
+
+
+def _ableton_retune(args: argparse.Namespace) -> int:
+    candidate_id = _resolve(_runtime(), args.project)
+    if not studio_running():
+        print(NOT_RUNNING, file=sys.stderr)
+        return 1
+    body = {"candidate_id": candidate_id, "parts": args.part}
+    preview = studio_post("/api/ableton/retune", body)
+    if not preview.get("ok"):
+        print(preview.get("error"), file=sys.stderr)
+        return 1
+    print(f"つまみを設定し直します（{preview['operations']} 操作。デバイスの追加・削除はしません）")
+    for row in preview["chains"]:
+        print(f"  {row['track']} #{row['device_index']} {row['device']} / {row['parameter']} = {row['setting']}")
+    for line in preview.get("warnings") or []:
+        print(f"  ! {line}")
+    if not args.yes:
+        answer = input("\nこの内容でLiveへ1回だけ送ります。よろしいですか？ [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("送信しませんでした。")
+            return 1
+    result = studio_post(
+        "/api/ableton/retune", {**body, "confirmed": True}, timeout=SEND_TIMEOUT_SECONDS
     )
     receipt = result.get("receipt") or {}
     print(f"\n結果: {receipt.get('status') or result.get('error')}")

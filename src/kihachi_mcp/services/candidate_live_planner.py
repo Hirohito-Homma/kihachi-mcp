@@ -396,12 +396,29 @@ class CandidateLivePlanner:
             warnings=warnings,
         )
 
+    def create_retune_plan(
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+        parts: tuple[str, ...],
+    ) -> LiveMutationPlan:
+        """Set the named parts' effect knobs again. Loads and removes nothing."""
+        return self._stage_plan(candidate, snapshot, "retune", parts)
+
     def _stage_plan(
-        self, candidate: MidiCandidate, snapshot: LiveStateSnapshot, kind: str
+        self,
+        candidate: MidiCandidate,
+        snapshot: LiveStateSnapshot,
+        kind: str,
+        parts: tuple[str, ...] = (),
     ) -> LiveMutationPlan:
         builder = _Builder(candidate, snapshot, change_tempo=False)
-        build = builder.build_effects_only if kind == "effects" else builder.build_mix_only
-        operations, conflicts, warnings = build()
+        if kind == "retune":
+            operations, conflicts, warnings = builder.build_retune_only(parts)
+        elif kind == "effects":
+            operations, conflicts, warnings = builder.build_effects_only()
+        else:
+            operations, conflicts, warnings = builder.build_mix_only()
         request_id = self._request_id_factory()
         return LiveMutationPlan(
             request_id=request_id,
@@ -718,6 +735,60 @@ class _Builder:
             )
         if not self._operations:
             self._warnings.append("追加するエフェクトはありません（すべて載っています）")
+        return self._operations, self._conflicts, self._warnings
+
+    def build_retune_only(
+        self, parts: tuple[str, ...]
+    ) -> tuple[list[LiveMutationOperation], list[LiveConflict], list[str]]:
+        """Set each named part's effect knobs again on devices already on its track.
+
+        Only a track holding the part's whole chain, in order and back to back,
+        is touched; nothing is loaded or removed.
+        """
+        self._guard_transport()
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
+        for part in parts:
+            chain = PART_EFFECTS.get(part)
+            if not chain:
+                self._conflicts.append(
+                    LiveConflict("unknown_part", f"{part} のエフェクトのレシピがありません")
+                )
+                continue
+            name = managed_track_name(f"KIHACHI {part} {self._short_id}")
+            existing = self._snapshot.track_by_name(name)
+            if existing is None:
+                self._conflicts.append(LiveConflict("track_not_found", f"{name} がありません"))
+                continue
+            devices = list(existing.device_names)
+            names = [recipe.device for recipe in chain]
+            starts = [
+                index
+                for index in range(len(devices) - len(names) + 1)
+                if devices[index : index + len(names)] == names
+            ]
+            if not starts:
+                self._conflicts.append(
+                    LiveConflict(
+                        "effect_chain_not_found",
+                        f"{name} に {' → '.join(names)} が並んでいないため、つまみは変えません",
+                    )
+                )
+                continue
+            track = {"name": name, "index": existing.index}
+            for offset, recipe in enumerate(chain):
+                for setting in recipe.settings:
+                    self._operations.append(
+                        _parameter_operation(
+                            self._next_id(OP_SET_DEVICE_PARAMETER),
+                            track,
+                            starts[-1] + offset,
+                            recipe.device,
+                            setting,
+                        )
+                    )
+        if self._conflicts:
+            return [], self._conflicts, self._warnings
         return self._operations, self._conflicts, self._warnings
 
     def build_sidechain_only(

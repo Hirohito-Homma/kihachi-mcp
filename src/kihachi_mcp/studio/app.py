@@ -459,6 +459,14 @@ def _workflow_post(
         handler._send_json(
             runtime.apply_sidechain(candidate_id, confirmed=bool(body.get("confirmed")))
         )
+    elif path == "/api/ableton/retune":
+        handler._send_json(
+            runtime.apply_retune(
+                candidate_id,
+                tuple(str(part) for part in body.get("parts") or ()),
+                confirmed=bool(body.get("confirmed")),
+            )
+        )
     elif path == "/api/ableton/mix":
         handler._send_json(runtime.apply_mix(candidate_id, confirmed=bool(body.get("confirmed"))))
     elif path == "/api/ableton/device":

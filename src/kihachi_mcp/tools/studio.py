@@ -131,6 +131,22 @@ def apply_ableton_sidechain(candidate_id: str, confirmed: bool = False) -> dict[
     )
 
 
+def apply_ableton_retune(
+    candidate_id: str, parts: list[str], confirmed: bool = False
+) -> dict[str, Any]:
+    """Set the named parts' effect knobs again to the current recipe, e.g. ["Kick"].
+
+    Only a track that already holds the part's whole effect chain is touched;
+    nothing is loaded or removed. Without confirmed=True this only lists the knobs.
+    """
+    body = {"candidate_id": candidate_id, "parts": parts}
+    if not confirmed:
+        return studio_post("/api/ableton/retune", body)
+    return studio_post(
+        "/api/ableton/retune", {**body, "confirmed": True}, timeout=SEND_TIMEOUT_SECONDS
+    )
+
+
 def apply_ableton_mix(candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
     """Set each [KIHACHI] track's fader (dB) and pan for a club mix.
 

@@ -144,6 +144,27 @@ def test_retune_resets_the_chain_it_added_and_refuses_anything_else() -> None:
     assert refused.status == "blocked"
 
 
+def test_part_retune_only_sets_knobs_on_the_chain_already_there() -> None:
+    candidate = _candidate()
+    transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.5", tempo=125))
+    planner = CandidateLivePlanner()
+    assert _run(transport, planner.create_plan(candidate, snapshot_of(transport))).status == "verified"
+    assert _run(transport, planner.create_effects_plan(candidate, snapshot_of(transport))).status == "verified"
+    kick = next(t for t in transport.live_set.tracks if " Kick " in t["name"])
+    devices = list(kick["device_names"])
+
+    plan = planner.create_retune_plan(candidate, snapshot_of(transport), ("Kick",))
+    assert {op.op for op in plan.operations} == {OP_SET_DEVICE_PARAMETER}
+    assert "2 Gain A" in {op.arguments["parameter_name"] for op in plan.operations}
+    assert _run(transport, plan).status == "verified"
+    assert kick["device_names"] == devices
+
+    kick["device_names"].remove("Saturator")
+    refused = planner.create_retune_plan(candidate, snapshot_of(transport), ("Kick",))
+    assert refused.status == "blocked"
+    assert refused.operations == []
+
+
 def test_sidechain_keys_a_new_compressor_from_the_kick_before_any_knob() -> None:
     candidate = _candidate()
     transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.5", tempo=125))

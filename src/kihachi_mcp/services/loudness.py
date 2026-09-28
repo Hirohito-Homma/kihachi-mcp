@@ -163,6 +163,16 @@ def club_verdict(report: dict[str, Any]) -> list[str]:
         lines.append(f"True Peak {peak} dBTP は上限 {CLUB_TRUE_PEAK_DBTP} 以下です")
     if report["plr_db"] < 6:
         lines.append(f"ピークと平均の差 {report['plr_db']} dB は小さく、キックのアタックが潰れている可能性があります")
+    if integrated < low and peak > CLUB_TRUE_PEAK_DBTP - 0.5:
+        lines.append(
+            f"ピークは既に天井付近なのに平均が低い（ピークと平均の差 {report['plr_db']} dB）。"
+            "ゲインを足すだけだとリミッターがキックを潰すので、先にキックと低域の重なりを減らすと音圧を上げやすくなります"
+        )
+    if report["low_end_share_db"] > -3:
+        lines.append(
+            f"120Hz以下が全体のエネルギーの大半を占めています（{report['low_end_share_db']} dB）。"
+            "サイドチェインか Sub/Bass の音量で低域を整理する余地があります"
+        )
     return lines
 
 
@@ -176,7 +186,12 @@ def sections_of(candidate: Any) -> list[Section]:
     for clip in candidate.clips:
         starts.setdefault(clip.start_bar, clip.section_name)
         end = max(end, clip.start_bar + clip.length_bars)
-    ordered = sorted(starts.items())
+    # A sparse part's clip can start inside a section; that is not a new one.
+    ordered = [
+        (start, name)
+        for index, (start, name) in enumerate(sorted(starts.items()))
+        if index == 0 or name != sorted(starts.items())[index - 1][1]
+    ]
     return [
         Section(name, start, (ordered[index + 1][0] if index + 1 < len(ordered) else end) - start)
         for index, (start, name) in enumerate(ordered)

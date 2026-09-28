@@ -46,6 +46,22 @@ def test_a_quieter_section_measures_quieter(tmp_path) -> None:
     assert report["verdict"]
 
 
+def test_sections_merge_clips_that_start_inside_a_section() -> None:
+    from types import SimpleNamespace
+
+    from kihachi_mcp.services.loudness import sections_of
+
+    clip = lambda name, start, bars: SimpleNamespace(section_name=name, start_bar=start, length_bars=bars)
+    candidate = SimpleNamespace(
+        clips=[clip("Intro", 1, 8), clip("Drop", 9, 8), clip("Drop", 13, 4), clip("Intro", 17, 8)]
+    )
+    assert sections_of(candidate) == [
+        Section("Intro", 1, 8),
+        Section("Drop", 9, 8),
+        Section("Intro", 17, 8),
+    ]
+
+
 def test_low_end_share_rises_with_a_sub_tone(tmp_path) -> None:
     rate = 48000
     t = np.arange(rate * 5) / rate

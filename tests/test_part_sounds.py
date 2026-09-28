@@ -2,6 +2,7 @@ from live_fixtures import executor, gate, snapshot_of
 from test_candidate_live_planner import _candidate
 
 from kihachi_mcp.knowledge.part_sounds import (
+    MASTER_CHAIN,
     PART_EFFECTS,
     PART_INSTRUMENTS,
     PART_MIX,
@@ -98,6 +99,38 @@ def test_the_kick_leads_and_low_parts_stay_centred() -> None:
     assert max(PART_MIX.values())[0] == PART_MIX["Kick"][0]
     for part in ("Kick", "Sub", "Bass"):
         assert PART_MIX[part][1] == 0.0
+
+
+def test_master_chain_goes_after_existing_master_devices_and_keeps_them() -> None:
+    live = FakeLiveSet(live_version="12.4.5")
+    live.master["device_names"] = ["Spectrum"]
+    transport = FakeLiveTransport(live)
+    planner = CandidateLivePlanner()
+
+    plan = planner.create_master_plan(snapshot_of(transport))
+    loads = [op for op in plan.operations if op.op == OP_LOAD_LIVE_DEVICE]
+    assert [op.arguments["device_name"] for op in loads] == [r.device for r in MASTER_CHAIN]
+    assert all(op.target == {"master": True} for op in loads)
+    assert loads[0].expected_readback["device_index"] == 1
+    assert _run(transport, plan).status == "verified"
+    assert live.master["device_names"] == ["Spectrum", *[r.device for r in MASTER_CHAIN]]
+    assert all(track.get("mixer") is None for track in live.tracks)
+
+    assert planner.create_master_plan(snapshot_of(transport)).operations == []
+
+
+def test_master_is_refused_while_live_records() -> None:
+    transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.5", is_recording=True))
+    plan = CandidateLivePlanner().create_master_plan(snapshot_of(transport))
+    assert plan.status == "blocked"
+    assert plan.operations == []
+
+
+def test_the_limiter_ends_the_chain_below_zero() -> None:
+    limiter = MASTER_CHAIN[-1]
+    assert limiter.device == "Limiter"
+    ceiling = next(s for s in limiter.settings if s.parameter == "Ceiling")
+    assert ceiling.value == 0.9  # -1.0 dB in Live's reading
 
 
 def test_effects_are_refused_while_live_plays() -> None:

@@ -22,6 +22,7 @@ from kihachi_mcp.tools import (
 from kihachi_mcp.tools.local_ai import preview_local_ai_song
 from kihachi_mcp.tools.studio import (
     apply_ableton_effects,
+    apply_ableton_master,
     apply_ableton_mix,
     approve_song,
     create_song,
@@ -48,6 +49,7 @@ for _tool in (
     execute_ableton_plan,
     apply_ableton_effects,
     apply_ableton_mix,
+    apply_ableton_master,
     verify_ableton_project,
     ollama_status,
     doctor,

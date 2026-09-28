@@ -95,6 +95,7 @@ class FakeLiveSet:
     )
     #: Parameter lists by device name, in the shape device_probe saves.
     device_parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
+    master: dict[str, Any] = field(default_factory=lambda: {"device_names": []})
 
     def add_track(
         self, name: str, track_type: str = "midi", color: str = ""
@@ -260,6 +261,7 @@ class FakeLiveTransport:
             "is_recording": live.is_recording,
             "observed_at": self.observed_at,
             "tracks": [dict(track) for track in live.tracks],
+            "master_device_names": list(live.master["device_names"]),
             "scenes": [dict(scene) for scene in live.scenes],
             "session_clips": [
                 {
@@ -387,7 +389,11 @@ class FakeLiveTransport:
             if kind == "arrangement_range_free":
                 self._require_free_range(arguments)
             if kind == "device_name_at_index":
-                track = self._track(int(arguments.get("track_index") or 0))
+                track = (
+                    live.master
+                    if arguments.get("master") is True
+                    else self._track(int(arguments.get("track_index") or 0))
+                )
                 names = list(track["device_names"]) if track else []
                 position = int(arguments.get("device_index") or 0)
                 expected = str(arguments.get("name") or "")
@@ -412,6 +418,13 @@ class FakeLiveTransport:
             if track["index"] == index:
                 return track
         return None
+
+    def _owner(self, target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The master or the addressed track, and how a readback names it."""
+        if target.get("master") is True:
+            return self.live_set.master, {"master": True}
+        track = self._require_track(int(target.get("track_index") or 0))
+        return track, {"track_index": track["index"], "master": False}
 
     def _require_track(self, index: int) -> dict[str, Any]:
         track = self._track(index)
@@ -465,11 +478,11 @@ class FakeLiveTransport:
             return self._replace_clip_notes(target, arguments)
 
         if op == OP_LOAD_LIVE_DEVICE:
-            track = self._require_track(int(target.get("track_index") or 0))
+            track, owner = self._owner(target)
             device_name = str(arguments.get("device_name") or "")
             track["device_names"].append(device_name)
             return {
-                "track_index": track["index"],
+                **owner,
                 "device_name": device_name,
                 "device_index": len(track["device_names"]) - 1,
             }
@@ -512,7 +525,7 @@ class FakeLiveTransport:
         if op == OP_SET_DEVICE_PARAMETER:
             # The simulator knows no parameter lists: it records what was set,
             # keyed by device position and parameter name, and reads it back.
-            track = self._require_track(int(target.get("track_index") or 0))
+            track, owner = self._owner(target)
             position = int(target.get("device_index") or 0)
             names = track["device_names"]
             if position >= len(names) or names[position] != arguments.get("device_name"):
@@ -520,7 +533,7 @@ class FakeLiveTransport:
             store = track.setdefault("device_parameters", {}).setdefault(str(position), {})
             name = str(arguments.get("parameter_name") or "")
             readback: dict[str, Any] = {
-                "track_index": track["index"],
+                **owner,
                 "device_index": position,
                 "parameter_name": name,
             }

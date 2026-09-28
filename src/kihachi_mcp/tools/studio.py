@@ -130,6 +130,17 @@ def apply_ableton_mix(candidate_id: str, confirmed: bool = False) -> dict[str, A
     )
 
 
+def apply_ableton_master(confirmed: bool = False) -> dict[str, Any]:
+    """Append club mastering (EQ, Glue, Saturator, Utility, Limiter) to the master track.
+
+    Without confirmed=True this only lists the master's devices and what would
+    be added after them. Confirmed, it sends once; nothing is removed.
+    """
+    if not confirmed:
+        return studio_post("/api/ableton/master", {})
+    return studio_post("/api/ableton/master", {"confirmed": True}, timeout=SEND_TIMEOUT_SECONDS)
+
+
 def verify_ableton_project(candidate_id: str) -> dict[str, Any]:
     """Read tempo, tracks, clips, notes and arrangement back from Live and compare."""
     return studio_post("/api/ableton/verify", {"candidate_id": candidate_id})

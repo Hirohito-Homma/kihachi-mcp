@@ -311,6 +311,15 @@
       </div>
       <div id="mix-summary"></div>
       <div id="mix-result"></div>
+
+      <h2>マスタリング</h2>
+      <p class="sub">Setのマスタートラックに EQ → Glue Compressor → Saturator → Utility（低域モノ）→ Limiter（True Peak, -1dB）を追加します。マスターに既にあるデバイスは消さず、その後ろに入れます。毎回確認してから送ります。</p>
+      <div class="actions">
+        <button id="preview-master" class="secondary">マスタリング内容を確認</button>
+        <button id="master" disabled>この内容でマスターに追加</button>
+      </div>
+      <div id="master-summary"></div>
+      <div id="master-result"></div>
     </section>
 
     <section id="recover-view">
@@ -945,6 +954,36 @@
         renderStageResult(stage, result);
       };
     }
+
+    async function postMaster(confirmed) {
+      return getJson("/api/ableton/master", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed })
+      });
+    }
+
+    $("preview-master").onclick = async () => {
+      $("master").disabled = true;
+      $("master-result").innerHTML = "";
+      const result = await postMaster(false);
+      if (!result.ok) {
+        $("master-summary").innerHTML = `<p class="bad">${escapeHtml(result.error || "")}</p>`;
+        return;
+      }
+      $("master-summary").innerHTML = `
+        <p>既存: ${escapeHtml((result.existing || []).join(" → ") || "（なし）")}</p>
+        <p>追加: ${result.added.map(escapeHtml).join(" → ")}（${result.operations} 操作）</p>
+        ${(result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("")}
+      `;
+      $("master").disabled = false;
+    };
+
+    $("master").onclick = async () => {
+      $("master").disabled = true;
+      $("master-result").innerHTML = "<p>Liveへ送っています…</p>";
+      renderStageResult("master", await postMaster(true));
+    };
 
     function renderStageResult(stage, result) {
       const receipt = result.receipt || {};

@@ -27,7 +27,7 @@ outlets = 2;
 var PROTOCOL_NAME = "kihachi.live";
 var PROTOCOL_VERSION = 1;
 var SCHEMA_VERSION = 1;
-var DEVICE_VERSION = "kihachi-live-device/0.3.3";
+var DEVICE_VERSION = "kihachi-live-device/0.3.4";
 var INSERT_DEVICE_MIN_LIVE_MAJOR = 12;
 var INSERT_DEVICE_MIN_LIVE_MINOR = 3;
 var REPLACE_SAMPLE_MIN_LIVE_MAJOR = 12;
@@ -390,8 +390,26 @@ function readState(options) {
             ? readSessionClips(trackCount, sceneCount, countSessionNotes)
             : [],
         arrangement_clips: includeArrangement ? readArrangementClips(trackCount) : [],
-        devices: readDevices()
+        devices: readDevices(),
+        master_device_names: readMasterDevices()
     };
+}
+
+function readMasterDevices() {
+    var master = liveApi("live_set master_track");
+    var names = [];
+    var total = countChildren(master, "devices");
+    for (var index = 0; index < total; index += 1) {
+        names.push(String(getProperty(liveApi("live_set master_track devices " + index), "name") || ""));
+    }
+    return names;
+}
+
+/* The master track when target.master is true, otherwise track N. */
+function trackPathOf(target) {
+    return target.master === true
+        ? "live_set master_track"
+        : "live_set tracks " + target.track_index;
 }
 
 /* ------------------------------------------------------------- preconditions */
@@ -485,12 +503,10 @@ function checkPreconditions(operation) {
             requireFreeRange(args);
         }
         if (kind === "device_name_at_index") {
-            var placed = liveApi(
-                "live_set tracks " + args.track_index + " devices " + args.device_index
-            );
+            var placed = liveApi(trackPathOf(args) + " devices " + args.device_index);
             if (String(getProperty(placed, "name") || "") !== args.name) {
                 refuse(
-                    "device " + args.device_index + " on track " + args.track_index +
+                    "device " + args.device_index + " on " + trackPathOf(args) +
                     " is not '" + args.name + "'"
                 );
             }
@@ -667,7 +683,7 @@ function replaceClipNotes(target, args) {
 }
 
 function loadDevice(target, args) {
-    var track = liveApi("live_set tracks " + target.track_index);
+    var track = liveApi(trackPathOf(target));
     var before = countChildren(track, "devices");
     if (!supportsInsertDevice()) {
         refuse(
@@ -683,11 +699,10 @@ function loadDevice(target, args) {
             "' was not inserted by Ableton Live"
         );
     }
-    var device = liveApi(
-        "live_set tracks " + target.track_index + " devices " + (after - 1)
-    );
+    var device = liveApi(trackPathOf(target) + " devices " + (after - 1));
     return {
         track_index: target.track_index,
+        master: target.master === true,
         device_name: String(getProperty(device, "name") || ""),
         device_index: after - 1
     };
@@ -700,7 +715,7 @@ function loadDevice(target, args) {
  * min..max; a switch arrives as one of its value_items.
  */
 function setDeviceParameter(target, args) {
-    var path = "live_set tracks " + target.track_index + " devices " + target.device_index;
+    var path = trackPathOf(target) + " devices " + target.device_index;
     var device = liveApi(path);
     var deviceName = String(getProperty(device, "name") || "");
     if (deviceName !== args.device_name) {
@@ -745,6 +760,7 @@ function setDeviceParameter(target, args) {
     var value = Number(getProperty(parameter, "value"));
     var readback = {
         track_index: target.track_index,
+        master: target.master === true,
         device_index: target.device_index,
         parameter_name: args.parameter_name,
         normalized_value: high > low ? Math.round((value - low) / (high - low) * 1000) / 1000 : 0

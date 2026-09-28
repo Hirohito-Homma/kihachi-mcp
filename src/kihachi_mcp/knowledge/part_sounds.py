@@ -197,6 +197,45 @@ PART_MIX: dict[str, tuple[float, float]] = {
     "FX": (-18.0, 0.0),
 }
 
+#: Club mastering on the master track, first to last. Glue Compressor's
+#: Attack, Ratio and Release move in steps (0..6, 0..2, 0..6), so those are
+#: positions: Attack 5/6 = 10 ms, Ratio 0 = 2:1, Release 1.0 = Auto.
+MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
+    DeviceRecipe(
+        "EQ Eight",
+        (
+            item("EQ Eight", "1 Filter Type A", "High Pass 12dB"),
+            at("EQ Eight", "1 Frequency A", 25),
+        ),
+    ),
+    DeviceRecipe(
+        "Glue Compressor",
+        (
+            at("Glue Compressor", "Threshold", -12),
+            value("Glue Compressor", "Ratio", 0.0),
+            value("Glue Compressor", "Attack", round(5 / 6, 4)),
+            value("Glue Compressor", "Release", 1.0),
+        ),
+    ),
+    _saturator(2, "Soft Sine", 30),
+    DeviceRecipe(
+        "Utility",
+        (
+            # Everything under 120 Hz in mono: club systems sum the low end.
+            item("Utility", "Bass Mono", "On"),
+            at("Utility", "Bass Freq", 120),
+        ),
+    ),
+    DeviceRecipe(
+        "Limiter",
+        (
+            item("Limiter", "Mode", "True Peak"),
+            at("Limiter", "Ceiling", -1.0),
+            at("Limiter", "Input Gain", 4.8),
+        ),
+    ),
+)
+
 #: A playable patch for parts no genre recipe covers. The instrument named here
 #: must be the one live_device_catalog.suggest_instrument picks for the part.
 PART_INSTRUMENTS: dict[str, DeviceRecipe] = {

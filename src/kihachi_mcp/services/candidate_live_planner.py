@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS, PART_INSTRUMENTS, PART_MIX
+from kihachi_mcp.knowledge.part_sounds import (
+    MASTER_CHAIN,
+    PART_EFFECTS,
+    PART_INSTRUMENTS,
+    PART_MIX,
+)
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_LOCATOR,
@@ -242,6 +247,82 @@ class CandidateLivePlanner:
     ) -> LiveMutationPlan:
         """Plan fader and pan settings on tracks an earlier apply created."""
         return self._stage_plan(candidate, snapshot, "mix")
+
+    def create_master_plan(self, snapshot: LiveStateSnapshot) -> LiveMutationPlan:
+        """Append the club mastering chain to the master track.
+
+        Devices already on the master stay where they are and are never
+        changed; a chain device that is already there is not added twice.
+        """
+        conflicts = _transport_conflicts(snapshot)
+        operations: list[LiveMutationOperation] = []
+        warnings: list[str] = []
+        present = list(snapshot.master_device_names)
+        missing = [recipe for recipe in MASTER_CHAIN if recipe.device not in present]
+        available = snapshot.available_device_names()
+        unavailable = [
+            recipe.device for recipe in missing if recipe.device not in available
+        ]
+        if unavailable:
+            warnings.append(
+                f"このLiveでは {', '.join(unavailable)} を読み込めないため、マスタリングは計画しません"
+            )
+            missing = []
+        if present:
+            warnings.append(
+                f"マスターの既存デバイス（{' → '.join(present)}）は変えず、その後ろに追加します"
+            )
+        if not conflicts:
+            sequence = 0
+            for offset, recipe in enumerate(missing):
+                position = len(present) + offset
+                sequence += 1
+                operations.append(
+                    LiveMutationOperation(
+                        operation_id=f"{sequence:03d}-{OP_LOAD_LIVE_DEVICE}",
+                        op=OP_LOAD_LIVE_DEVICE,
+                        target={"master": True},
+                        arguments={"device_name": recipe.device},
+                        preconditions=[
+                            LivePrecondition("not_recording"),
+                            LivePrecondition("device_available", {"device_name": recipe.device}),
+                        ],
+                        destructive=False,
+                        expected_readback={
+                            "master": True,
+                            "device_name": recipe.device,
+                            "device_index": position,
+                        },
+                    )
+                )
+                for setting in recipe.settings:
+                    sequence += 1
+                    operations.append(
+                        _master_parameter_operation(
+                            f"{sequence:03d}-{OP_SET_DEVICE_PARAMETER}", position, recipe.device, setting
+                        )
+                    )
+            if not missing and not unavailable:
+                warnings.append("マスタリングのデバイスはすべて載っています")
+        request_id = self._request_id_factory()
+        return LiveMutationPlan(
+            request_id=request_id,
+            idempotency_key=canonical_hash(
+                {
+                    "request_id": request_id,
+                    "kind": "master",
+                    "set_fingerprint": snapshot.set_fingerprint,
+                }
+            ),
+            source_plan_hash=canonical_hash({"master_chain": [r.device for r in MASTER_CHAIN]}),
+            set_fingerprint=snapshot.set_fingerprint,
+            expires_at=(
+                self._clock() + timedelta(seconds=self._ttl_seconds)
+            ).isoformat(),
+            operations=operations if not conflicts else [],
+            conflicts=conflicts,
+            warnings=warnings,
+        )
 
     def _stage_plan(
         self, candidate: MidiCandidate, snapshot: LiveStateSnapshot, kind: str
@@ -607,20 +688,7 @@ class _Builder:
         return self._operations, self._conflicts, self._warnings
 
     def _guard_transport(self) -> None:
-        if self._snapshot.is_recording:
-            self._conflicts.append(
-                LiveConflict(
-                    CONFLICT_RECORDING,
-                    "Ableton Live が録音中です。録音を止めてから適用してください",
-                )
-            )
-        if self._snapshot.is_playing:
-            self._conflicts.append(
-                LiveConflict(
-                    CONFLICT_PLAYING,
-                    "Ableton Live が再生中です。再生を止めてから適用してください",
-                )
-            )
+        self._conflicts.extend(_transport_conflicts(self._snapshot))
 
     def _plan_tempo(self) -> None:
         target = float(self._candidate.brief.tempo.value)
@@ -1008,6 +1076,57 @@ def tone_steps(brief: Any) -> dict[str, int]:
         if value:
             steps[control] = int(value)
     return steps
+
+
+def _transport_conflicts(snapshot: LiveStateSnapshot) -> list[LiveConflict]:
+    conflicts: list[LiveConflict] = []
+    if snapshot.is_recording:
+        conflicts.append(
+            LiveConflict(
+                CONFLICT_RECORDING,
+                "Ableton Live が録音中です。録音を止めてから適用してください",
+            )
+        )
+    if snapshot.is_playing:
+        conflicts.append(
+            LiveConflict(
+                CONFLICT_PLAYING,
+                "Ableton Live が再生中です。再生を止めてから適用してください",
+            )
+        )
+    return conflicts
+
+
+def _master_parameter_operation(
+    operation_id: str, position: int, device: str, setting: Any
+) -> LiveMutationOperation:
+    arguments: dict[str, Any] = {"device_name": device, "parameter_name": setting.parameter}
+    readback: dict[str, Any] = {
+        "master": True,
+        "device_index": position,
+        "parameter_name": setting.parameter,
+    }
+    if setting.item is not None:
+        arguments["item"] = setting.item
+        readback["item"] = setting.item
+    else:
+        arguments["value"] = setting.value
+        readback["normalized_value"] = round(float(setting.value), 3)
+    return LiveMutationOperation(
+        operation_id=operation_id,
+        op=OP_SET_DEVICE_PARAMETER,
+        target={"master": True, "device_index": position},
+        arguments=arguments,
+        preconditions=[
+            LivePrecondition("not_recording"),
+            LivePrecondition(
+                "device_name_at_index",
+                {"master": True, "device_index": position, "name": device},
+            ),
+        ],
+        destructive=False,
+        expected_readback=readback,
+    )
 
 
 def _parameter_operation(

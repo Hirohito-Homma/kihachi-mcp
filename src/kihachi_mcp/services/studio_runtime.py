@@ -1134,6 +1134,54 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
+    def apply_master(self, confirmed: bool = False) -> dict[str, Any]:
+        """Append the club mastering chain to the Set's master track.
+
+        Unconfirmed, this lists the master's current devices and what would
+        follow them. Confirmed, it sends once. Nothing on the master is removed.
+        """
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            snapshot, failure = self._snapshot()
+            if snapshot is None:
+                return failure or {"ok": False, "error": "Live状態を取得できません"}
+            plan = self._planner.create_master_plan(snapshot)
+            if plan.status == "blocked":
+                return {
+                    "ok": False,
+                    "error": plan.conflicts[0].detail if plan.conflicts else "計画できません",
+                }
+            added = [
+                operation.arguments["device_name"]
+                for operation in plan.operations
+                if operation.op == "load_live_device"
+            ]
+            summary = {
+                "existing": list(snapshot.master_device_names),
+                "added": added,
+                "operations": len(plan.operations),
+                "warnings": list(plan.warnings),
+            }
+            if not plan.operations:
+                return {"ok": False, "error": "追加するマスタリングのデバイスはありません", **summary}
+            if not confirmed:
+                return {"ok": True, "preview": True, **summary}
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message}
+            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            return {
+                "ok": receipt.status == "verified",
+                "receipt": receipt.to_dict(),
+                "partial": receipt.status == "partially_applied",
+                "musical_quality_claimed": False,
+                **summary,
+            }
+        finally:
+            self._apply_lock.release()
+
     def verify_effects(self, candidate_id: str) -> dict[str, Any]:
         """Read each recipe knob back from Live and list any that differ. Read-only."""
         candidate = self._lookup(candidate_id)

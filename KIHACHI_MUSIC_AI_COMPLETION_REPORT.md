@@ -1,10 +1,10 @@
 # KIHACHI MUSIC AI COMPLETION REPORT
 
-確認日: 2026-09-28 / Intel Mac（i9-9980HK, 32 GB）/ Ableton Live 12.4.5 Suite
+確認日: 2026-09-29 / Intel Mac（i9-9980HK, 32 GB）/ Ableton Live 12.4.5 Suite
 
 ## STATUS
 
-制作画面から、日本語の指示で曲の候補を作り、レビュー・修正・承認・ドライランを経て Ableton Live へ1回だけ送り、Live から読み戻して検証するまでが動きます。実機スモークテストは `PROJECT READY`。音楽的な完成度は検証対象外です。
+制作画面から、日本語の指示で曲の候補を作り、レビュー・修正・承認・ドライランを経て Ableton Live へ1回だけ送り、Live から読み戻して検証するまでが動きます。続けてエフェクト・MIX・サイドチェイン・マスタリングを同じ「確認 → 1回だけ送信 → 読み戻し」で行い、書き出した WAV の音圧を測れます。実機では全段階が `verified`、TEST008 は −12.2 LUFS / True Peak −1.19 dBTP。音楽的な完成度は検証対象外です。
 
 ## Repositories
 
@@ -24,6 +24,13 @@
 | `460ad63` | 制作画面を制作の中枢に（AI provider、レビュー・修正・承認、ドライラン、送信、読み戻し検証、状態・設定・診断） |
 | `813dc61` | `kihachi` CLI と MCP ツール（共有 StudioRuntime） |
 | `ec24140` | セットアップ・画面・Ollama・Ableton・現状の文書とスクリプト |
+| `16af465` `7140bbb` | パートを15種類に（Snare / OpenHat / Perc / Sub / Pad / Arp / Vocal / FX / Guitar / Horn を追加） |
+| `118f238` `a8a6baf` | パートごとのエフェクトと音色（実機で読んだつまみの目盛りから変換）、読み戻し検証 |
+| `a28a958` | MIX（音量 dB・パン、`set_track_mixer`） |
+| `d8a4429` `2e7b1dc` | マスタートラックへのクラブ向けマスタリング、段階つまみの補正、設定し直し |
+| `20978ff` `01ea152` | 書き出した WAV の音圧測定（BS.1770 LUFS・True Peak・LRA・低域比率・セクション別） |
+| `413c99d` | キックをキーにした Sub・Bass・Pad のサイドチェイン（`set_sidechain_source`） |
+| `4af4446`〜`a6b97cb` | 測定に基づく調整（Sub/Bass −3 dB、キック 55Hz −3 dB、Limiter Input Gain +15.6 dB・Ceiling −1.2 dB）と、パートのエフェクトのつまみの設定し直し |
 
 ## PRs
 
@@ -55,8 +62,8 @@
 | 項目 | 内容 |
 | --- | --- |
 | Services | StudioRuntime、AIProvider（Ollama / deterministic）、studio_interpreter、midi_candidate_builder、production_review / revision / workspace、studio_workflow（状態語・読み戻し比較・設定）、diagnostics、live_execution_service + approval gate |
-| MCP Tools | 29（新規 11: create_song, list_projects, get_project, review_song, revise_song, approve_song, dry_run_ableton_plan, execute_ableton_plan, verify_ableton_project, ollama_status, doctor） |
-| CLI | `kihachi` start / doctor / create / projects / inspect / review / revise / approve / ableton plan・dry-run・execute・verify |
+| MCP Tools | 35（新規 17: create_song, list_projects, get_project, review_song, revise_song, approve_song, dry_run_ableton_plan, execute_ableton_plan, verify_ableton_project, ollama_status, doctor, apply_ableton_effects, apply_ableton_mix, apply_ableton_sidechain, apply_ableton_retune, apply_ableton_master, measure_loudness） |
+| CLI | `kihachi` start / doctor / create / projects / inspect / review / revise / approve / ableton plan・dry-run・execute・verify・effects・mix・sidechain・retune・master / measure |
 | Status | READY |
 
 ## AbletonGPT
@@ -80,17 +87,21 @@ PASS（110 BPM / D#m / mutation_funk / Swing 54% / 136小節 4.95分 / SLAP BASS
 
 PASS（120 BPM / Cマイナー / 32小節。Tempo 120 PASS / Tracks 4 PASS / Clips 16 PASS / Notes 576 PASS / Arrangement SKIP（未展開）→ PROJECT READY。ユーザー承認のうえ1回だけ送信）
 
+TEST008（12トラック、KIHACHI Live Device 0.3.5）: エフェクト 108 操作、MIX 12、サイドチェイン 21、マスタリング 19（以後の設定し直し 14 ×3）、キック EQ の設定し直し 10、すべて `verified`。どれもユーザー承認のうえ1回だけ送信。書き出し7回の音圧の経過は `docs/CURRENT_SYSTEM_STATUS.md`。
+
 ## Tests
 
 | Passed | Failed | Skipped |
 | --- | --- | --- |
-| 532 | 0 | 0 |
+| 562 | 0 | 0 |
 
 `uv run ruff check src tests`: すべて通過（既存の `tests/test_drum_samples.py` の import 順も修正）。
 
 ## Known Limitations
 
-- パートは最大5つ（Kick / Hats / Bass / Stab / Lead）。依頼書の11パートは未対応。
+- パートは15種類。どれが鳴るかはジャンルと指示で決まります。
+- 音圧はクラブ目安（−8〜−6 LUFS）に届かず −12.2 LUFS。リミッターをこれ以上上げても潰れるだけでした。
+- つまみの設定し直しと音圧測定は CLI / MCP のみで、制作画面には未表示。
 - 複数ジャンル指定は先頭だけを使用（画面に明記）。
 - 「4つ打ちKick」「Tight snare」「Vocoder」など規則で読めない語は「未反映」と表示（音に入ったとは言わない）。
 - Memory / Knowledge は MCP のみで、制作画面には未表示。
@@ -116,3 +127,5 @@ PASS（120 BPM / Cマイナー / 32小節。Tempo 120 PASS / Tracks 4 PASS / Cli
 8. 「この候補を承認」を押します。
 9. 「適用内容を確認」で送る内容を見てから、「この内容でLiveへ適用」を押します（1回だけ送信）。
 10. `ABLETON VERIFICATION` が `PROJECT READY` なら、Live の KIHACHI トラックで再生して確かめます。
+11. Live の再生を止め、「エフェクト処理」→「MIX」→「サイドチェイン」→「マスタリング」の順に、それぞれ確認してから送ります。
+12. Live で WAV を書き出し、`uv run kihachi measure <WAVのパス> --project <候補ID>` で音圧を測ります。

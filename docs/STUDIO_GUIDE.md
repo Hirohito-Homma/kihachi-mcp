@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | Ollama: READY | `gemma4:latest` | AI 解釈が使えます |
 | Ollama: OFFLINE | | 既定解釈で制作を続けられます |
-| Live: READY | `Live 12.4.5 / kihachi-live-device/0.3.1` | 送信できます |
+| Live: READY | `Live 12.4.5 / kihachi-live-device/0.3.5` | 送信できます |
 | AbletonGPT: WARNING | 接続できますが応答しません | Live のダイアログが開いていないか確認 |
 | Project: READY | 候補ID | 選択中の候補があります |
 
@@ -52,6 +52,19 @@ BEFORE / AFTER、変更範囲、ノート数の変化、修正後の指摘数を
 3. 「Liveから読み戻して検証」: いつでも再確認できます。Live に接続できないときは `EXTERNAL VERIFICATION REQUIRED` と表示します。
 
 `ABLETON VERIFICATION` の各行は `PASS` / `FAIL` / `SKIP`。テンポを変えない設定なら Tempo は SKIP、未展開なら Arrangement は SKIP です。
+
+## エフェクト処理 / MIX / サイドチェイン / マスタリング
+
+`PROJECT READY` の後に上から順に使います。各欄とも「〜を確認」で送る内容（トラックごとのデバイスの並び、音量とパン）を表示し、次のボタンで1回だけ送って読み戻します。Live が再生・録音中なら送りません。既存のデバイスは消さず、同じデバイスを二重に入れません。
+
+| 欄 | 変えるもの |
+| --- | --- |
+| エフェクト処理 | 各トラックの音源の後ろに、パートごとの EQ・コンプ・サチュレーター・リバーブ・ディレイ |
+| MIX | 各トラックの音量(dB)とパン。キックが最大、120Hz以下は中央 |
+| サイドチェイン | Sub・Bass・Pad の最後に、キック（エフェクト後・フェーダー前）をキーにしたコンプ |
+| マスタリング | マスタートラックの最後に EQ → Glue Compressor → Saturator → Utility（低域モノ）→ Limiter（True Peak, 天井 −1.2 dB） |
+
+結果が `verified` 以外なら、計画値と Live の値が食い違ったつまみを一覧します。つまみの設定し直し（`kihachi ableton retune` / `master --retune`）と音圧の測定（`kihachi measure`）は CLI と MCP で行います。→ [QUICKSTART.md](QUICKSTART.md)
 
 ## システム（状態・設定・診断）
 

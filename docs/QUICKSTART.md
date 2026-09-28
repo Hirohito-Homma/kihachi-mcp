@@ -41,6 +41,23 @@ Dub chord。Mutation synth。Swing 54%。約5分。
 5. 「この内容でLiveへ適用」（1回だけ。自動再試行なし）。
 6. 結果の `ABLETON VERIFICATION` がすべて PASS / SKIP なら `PROJECT READY` です。
 
+## 6. 音作り → MIX → マスタリング → 音圧の測定
+
+`PROJECT READY` の後、制作画面の下の欄を上から順に使います。どれも「確認」で内容を見てから送る（1回だけ）形で、Live の再生・録音中は止まります。既存のデバイスは消しません。
+
+1. 「エフェクト処理」: 各トラックの音源の後ろにパートごとの EQ・コンプ・サチュレーター・リバーブ・ディレイを追加。
+2. 「MIX」: 各トラックの音量(dB)とパンを揃える（キックが最大、120Hz以下は中央）。
+3. 「サイドチェイン」: Sub・Bass・Pad の最後に、キックで音量を沈めるコンプを追加。
+4. 「マスタリング」: マスタートラックの最後に EQ → Glue Compressor → Saturator → Utility → Limiter を追加。
+5. Live で WAV を書き出し、`uv run kihachi measure <WAVのパス> --project <候補ID>` で音圧（LUFS）・True Peak・セクション別音圧を測ります（Live 不要）。
+
+レシピ（`src/kihachi_mcp/knowledge/part_sounds.py`）を変えたときは、制作画面を再起動してから次で設定し直します。どちらもつまみだけを変え、デバイスの追加・削除はしません。
+
+```bash
+uv run kihachi ableton retune <候補ID> --part Kick   # パートのエフェクト
+uv run kihachi ableton master --retune               # マスタリング
+```
+
 ## CLI だけで行う場合
 
 ```bash
@@ -50,8 +67,13 @@ uv run kihachi approve <候補ID>
 uv run kihachi ableton dry-run <候補ID>
 uv run kihachi ableton execute <候補ID>   # 確認の質問に y と答えると1回だけ送信
 uv run kihachi ableton verify <候補ID>
+uv run kihachi ableton effects <候補ID>
+uv run kihachi ableton mix <候補ID>
+uv run kihachi ableton sidechain <候補ID>
+uv run kihachi ableton master
+uv run kihachi measure <WAVのパス> --project <候補ID>
 ```
 
-Live に触れる手順（dry-run / execute / verify）は、起動中の制作画面を通して行います。候補IDは先頭数文字で指定できます。
+Live に触れる手順（`ableton` の各コマンド）は、起動中の制作画面を通して行います。`measure` は Live も制作画面も不要です。候補IDは先頭数文字で指定できます。
 
 困ったときは [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。

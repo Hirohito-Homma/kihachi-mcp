@@ -86,7 +86,7 @@ PASS（120 BPM / Cマイナー / 32小節。Tempo 120 PASS / Tracks 4 PASS / Cli
 | --- | --- | --- |
 | 532 | 0 | 0 |
 
-`uv run ruff check src tests`: 既存の `tests/test_drum_samples.py` の I001 のみ（今回の変更外）。
+`uv run ruff check src tests`: すべて通過（既存の `tests/test_drum_samples.py` の import 順も修正）。
 
 ## Known Limitations
 
@@ -99,7 +99,8 @@ PASS（120 BPM / Cマイナー / 32小節。Tempo 120 PASS / Tracks 4 PASS / Cli
 
 ## Remaining External Actions
 
-- コミット・プッシュ・PR 作成（ユーザー確認後。`*.asd`、`.cursor/mcp.json`、`.gitignore`、`.codex/`、`ai-company-os/` は含めない）。
+- GitHub の請求問題を解消し、PR #9 の CI を再実行（有料アカウント操作のため未実施）。
+- PR #9 のレビューとマージ。
 - Live のダイアログを閉じて AbletonGPT の ping 応答を確認。
 - 必要なら実機でアレンジメント展開 →「Liveから読み戻して検証」で Arrangement 行を確認。
 

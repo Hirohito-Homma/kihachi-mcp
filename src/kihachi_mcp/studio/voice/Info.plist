@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>local.kihachi.studio.ondeviceasr</string>
+  <key>CFBundleName</key><string>KIHACHI On-Device Speech</string>
+  <key>CFBundleExecutable</key><string>OnDeviceASR</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSUIElement</key><true/>
+  <key>NSSpeechRecognitionUsageDescription</key><string>KIHACHIの音声指示をこのMac内で文字に変換します。クラウド認識は使用しません。</string>
+</dict></plist>

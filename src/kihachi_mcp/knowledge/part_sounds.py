@@ -287,7 +287,8 @@ MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
         "Limiter",
         (
             item("Limiter", "Mode", "True Peak"),
-            at("Limiter", "Ceiling", -1.0),
+            # The export overshot a -1.0 ceiling by 0.01 dB true peak.
+            at("Limiter", "Ceiling", -1.2),
             at("Limiter", "Input Gain", 15.6),
         ),
     ),

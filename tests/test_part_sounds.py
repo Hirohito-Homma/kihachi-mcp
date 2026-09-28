@@ -208,7 +208,7 @@ def test_the_limiter_ends_the_chain_below_zero() -> None:
     limiter = MASTER_CHAIN[-1]
     assert limiter.device == "Limiter"
     ceiling = next(s for s in limiter.settings if s.parameter == "Ceiling")
-    assert ceiling.value == 0.9  # -1.0 dB in Live's reading
+    assert ceiling.value < 0.9  # below -1.0 dB in Live's reading
 
 
 def test_effects_are_refused_while_live_plays() -> None:

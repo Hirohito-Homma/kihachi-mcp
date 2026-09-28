@@ -10,10 +10,18 @@ from kihachi_mcp.services.brief_parser import explicit_swing
 
 _PART_LABELS = {
     "Kick": "KICK",
-    "Hats": "DRUMS",
+    "Snare": "SNARE / CLAP",
+    "Hats": "HATS",
+    "OpenHat": "OPEN HAT",
+    "Perc": "PERC",
+    "Sub": "SUB BASS",
     "Bass": "BASS",
     "Stab": "CHORDS",
+    "Pad": "PAD",
+    "Arp": "ARP",
     "Lead": "LEAD",
+    "Vocal": "VOCAL CHOP",
+    "FX": "FX",
 }
 #: Names that describe what the genre's rules actually write for a part.
 _GENRE_LABELS = {

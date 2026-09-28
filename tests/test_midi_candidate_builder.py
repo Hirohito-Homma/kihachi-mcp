@@ -1,11 +1,24 @@
+import hashlib
+
+from kihachi_mcp.models.production_brief import (
+    ARRANGEMENT_PARTS,
+    DRUM_PARTS,
+    PART_ORDER,
+)
 from kihachi_mcp.services.brief_parser import extract_explicit
-from kihachi_mcp.services.drum_samples import sample_path_for_note
+from kihachi_mcp.services.drum_samples import (
+    IMPACT_NOTE,
+    RISER_NOTE,
+    RISER_SECONDS,
+    sample_path_for_note,
+)
 from kihachi_mcp.services.midi_candidate_builder import (
     CLAP_PITCH,
     HAT_PITCH,
     KICK_PITCH,
     OPEN_HAT_PITCH,
     SAFE_UDP_REQUEST_BYTES,
+    SNARE_PITCHES,
     build_candidate,
     estimate_replace_request_bytes,
     hat_counts_by_half,
@@ -122,7 +135,7 @@ def test_the_kick_drops_out_for_a_breakdown_before_the_drop() -> None:
 
 
 def test_the_drop_has_a_clap_on_two_and_four() -> None:
-    hats = _bars(build_candidate(_brief(), seed=5), "Hats", {CLAP_PITCH})
+    hats = _bars(build_candidate(_brief(), seed=5), "Snare", {CLAP_PITCH})
     for bar in range(57, 81):
         offsets = {offset for offset, _pitch in hats[bar]}
         assert {1.0, 3.0} <= offsets
@@ -186,8 +199,10 @@ def test_a_different_seed_changes_the_notes_not_just_the_ids() -> None:
 
 def test_every_drum_pitch_has_a_bundled_sample_and_velocities_are_valid() -> None:
     candidate = build_candidate(_brief(), seed=209419474)
-    assert set(candidate.used_pitches("Hats")) <= {CLAP_PITCH, HAT_PITCH, OPEN_HAT_PITCH}
-    for part in ("Kick", "Hats"):
+    assert set(candidate.used_pitches("Hats")) == {HAT_PITCH}
+    assert set(candidate.used_pitches("OpenHat")) == {OPEN_HAT_PITCH}
+    assert CLAP_PITCH in candidate.used_pitches("Snare")
+    for part in DRUM_PARTS:
         for pitch in candidate.used_pitches(part):
             assert sample_path_for_note(pitch).is_file()
     for clip in candidate.clips:
@@ -203,3 +218,91 @@ def test_the_bass_stays_in_its_register() -> None:
     pitches = candidate.used_pitches("Bass")
     assert max(pitches) - min(pitches) <= 24
     assert min(pitches) >= 12
+
+
+def test_every_arrangement_part_is_written_in_track_order() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    assert candidate.parts == PART_ORDER[:10] + ("Vocal", "FX")
+    assert "Lead" not in candidate.parts  # still mutation_funk only
+
+
+def _digest(candidate, parts) -> str:
+    beats = candidate.brief.beats_per_bar
+    notes = sorted(
+        (
+            round((clip.start_bar - 1) * beats + note.start_beats, 6),
+            note.pitch,
+            note.duration_beats,
+            note.velocity,
+        )
+        for part in parts
+        for clip in candidate.clips_for_part(part)
+        for note in clip.notes
+    )
+    return hashlib.sha256(repr(notes).encode()).hexdigest()[:16]
+
+
+def test_new_parts_leave_the_original_four_note_for_note() -> None:
+    """Digests taken before the new parts existed, when Hats held the clap."""
+    candidate = build_candidate(_brief(), seed=5)
+    assert _digest(candidate, ["Kick"]) == "c90869c03358bf75"
+    assert _digest(candidate, ["Hats", "Snare", "OpenHat"]) == "f55e567fcd364dd1"
+    assert _digest(candidate, ["Bass"]) == "fff5ca50a2e51fb5"
+    assert _digest(candidate, ["Stab"]) == "592b603ad2396ede"
+    snare = {pitch for _beat, pitch, _velocity in _part_notes(candidate, "Snare")}
+    assert snare <= SNARE_PITCHES
+
+
+def test_sparse_parts_send_no_empty_clips() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    for clip in candidate.clips:
+        if clip.part in ARRANGEMENT_PARTS:
+            assert clip.notes, (clip.part, clip.section_name, clip.start_bar)
+
+
+def test_the_sub_follows_the_bass_an_octave_down_and_leaves_the_breakdown() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    sub = _part_notes(candidate, "Sub")
+    bass_beats = {beat for beat, _pitch, _velocity in _part_notes(candidate, "Bass")}
+    assert sub
+    assert all(24 <= pitch <= 35 for _beat, pitch, _velocity in sub)
+    assert {beat for beat, _pitch, _velocity in sub} <= bass_beats
+    assert all(_bar_of(beat, beats) not in range(49, 57) for beat, *_ in sub)
+
+
+def test_the_pad_holds_four_note_chords_inside_each_bar() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    by_bar: dict[int, set[int]] = {}
+    for beat, pitch, _velocity in _part_notes(candidate, "Pad"):
+        assert beat % beats == 0
+        by_bar.setdefault(_bar_of(beat, beats), set()).add(pitch)
+    assert by_bar and all(len(pitches) == 4 for pitches in by_bar.values())
+    assert all(max(p) - min(p) <= 18 for p in by_bar.values())
+
+
+def test_the_riser_ends_on_the_drop_and_the_impact_lands_on_it() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    drop_beat = 56 * beats
+    fx = _part_notes(candidate, "FX")
+    impacts = [beat for beat, pitch, _velocity in fx if pitch == IMPACT_NOTE]
+    risers = [beat for beat, pitch, _velocity in fx if pitch == RISER_NOTE]
+    assert drop_beat in impacts
+    riser_beats = RISER_SECONDS * 125 / 60
+    assert any(abs(drop_beat - beat - riser_beats) <= 0.25 for beat in risers)
+
+
+def test_arp_and_vocal_play_chord_tones_at_the_peaks_only() -> None:
+    candidate = build_candidate(_brief(), seed=5)
+    beats = candidate.brief.beats_per_bar
+    intro = range(1, 17)
+    for part in ("Arp", "Vocal"):
+        notes = _part_notes(candidate, part)
+        assert notes, part
+        assert all(_bar_of(beat, beats) not in intro for beat, *_ in notes)
+        pitch_classes = {pitch % 12 for _beat, pitch, _velocity in notes}
+        d_minor = {2, 4, 5, 7, 9, 10, 0}
+        assert pitch_classes <= d_minor
+

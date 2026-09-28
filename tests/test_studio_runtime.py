@@ -381,6 +381,6 @@ def test_skip_instruments_leaves_the_tracks_for_another_loader(tmp_path: Path) -
     result = runtime.apply(candidate.candidate_id, confirmed=True, skip_instruments=True)
     assert result["ok"] is True
     kihachi = [t for t in transport.live_set.tracks if "[KIHACHI]" in t["name"]]
-    assert len(kihachi) == 4
+    assert len(kihachi) == len(candidate.parts)
     assert all(track["device_names"] == [] for track in kihachi)
     assert result["sound_coverage"]["has_missing_sounds"] is True

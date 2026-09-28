@@ -6,6 +6,7 @@ from typing import Any, Self
 from kihachi_mcp.models.live_contract import canonical_hash
 from kihachi_mcp.models.production_brief import (
     OPTIONAL_STUDIO_PARTS,
+    PART_ORDER,
     STUDIO_PARTS,
     ProductionBrief,
 )
@@ -88,9 +89,7 @@ class MidiCandidate:
     def parts(self) -> tuple[str, ...]:
         """Present parts in stable track order, including optional new voices."""
         present = {clip.part for clip in self.clips}
-        return tuple(
-            part for part in (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS) if part in present
-        )
+        return tuple(part for part in PART_ORDER if part in present)
 
     @property
     def note_fingerprint(self) -> str:

@@ -18,7 +18,28 @@ SUPPORTED_GENRES = ("tech_house", "dub_techno", "melodic_techno")
 DENSITY_VALUES = ("sparse", "normal", "dense")
 REGISTER_VALUES = ("low", "mid", "high")
 STUDIO_PARTS = ("Kick", "Hats", "Bass", "Stab")
-OPTIONAL_STUDIO_PARTS = ("Lead",)
+#: Parts every genre gets when its rules write notes for them. Lead stays
+#: mutation_funk only.
+ARRANGEMENT_PARTS = ("Snare", "OpenHat", "Perc", "Sub", "Pad", "Arp", "Vocal", "FX")
+OPTIONAL_STUDIO_PARTS = ("Lead", *ARRANGEMENT_PARTS)
+#: Live track order, top to bottom: drums, low end, harmony, top line, effects.
+PART_ORDER = (
+    "Kick",
+    "Snare",
+    "Hats",
+    "OpenHat",
+    "Perc",
+    "Sub",
+    "Bass",
+    "Stab",
+    "Pad",
+    "Arp",
+    "Lead",
+    "Vocal",
+    "FX",
+)
+#: Parts played by a Drum Rack of one-shots, one pad per MIDI note.
+DRUM_PARTS = frozenset({"Kick", "Snare", "Hats", "OpenHat", "Perc", "FX"})
 
 KEY_ENUM = tuple(
     f"{root}{suffix}"

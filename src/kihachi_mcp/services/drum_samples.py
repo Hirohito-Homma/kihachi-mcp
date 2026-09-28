@@ -18,6 +18,13 @@ CLAP_NOTE = 39
 HAT_NOTE = 42
 OPEN_HAT_NOTE = 46
 RIDE_NOTE = 51
+CONGA_HIGH_NOTE = 63
+CONGA_LOW_NOTE = 64
+SHAKER_NOTE = 70
+RISER_NOTE = 48
+IMPACT_NOTE = 49
+#: The riser sweeps for this long, so the builder can end it on a downbeat.
+RISER_SECONDS = 4.0
 # Existing files are never rewritten: a Set that already loaded one keeps the
 # sound it was made with. New voices get new file names.
 _SAMPLES = {
@@ -28,6 +35,11 @@ _SAMPLES = {
     "kihachi-side-stick.wav": SIDE_STICK_NOTE,
     "kihachi-snare.wav": SNARE_NOTE,
     "kihachi-ride.wav": RIDE_NOTE,
+    "kihachi-conga-high.wav": CONGA_HIGH_NOTE,
+    "kihachi-conga-low.wav": CONGA_LOW_NOTE,
+    "kihachi-shaker.wav": SHAKER_NOTE,
+    "kihachi-riser.wav": RISER_NOTE,
+    "kihachi-impact.wav": IMPACT_NOTE,
 }
 _MUTATION_KICK = "kihachi-kick-deep.wav"
 
@@ -206,7 +218,79 @@ def _ride_frames() -> list[int]:
     return frames
 
 
+def _shaker_frames() -> list[int]:
+    """Bright hiss with a soft 6 ms attack, the way beads land in a shell."""
+    length = int(SAMPLE_RATE * 0.09)
+    noise = _noise(0x7171)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        attack = min(1.0, t / 0.006)
+        frames.append(_clamp(highpass * attack * math.exp(-40 * t) * 0.5))
+    return frames
+
+
+def _conga_frames(pitch_hz: float) -> list[int]:
+    """A skin tone that settles slightly flat, over a short palm slap."""
+    length = int(SAMPLE_RATE * 0.3)
+    noise = _noise(0x6363 + int(pitch_hz))
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        phase = 2 * math.pi * (pitch_hz * t + pitch_hz * 0.08 * 0.02 * math.exp(-t / 0.02))
+        tone = math.sin(phase) * math.exp(-13 * t) * 0.7
+        slap = next(noise) * math.exp(-180 * t) * 0.25
+        frames.append(_clamp(tone + slap))
+    return frames
+
+
+def _riser_frames() -> list[int]:
+    """Noise and a tone that both climb for RISER_SECONDS, getting louder."""
+    length = int(SAMPLE_RATE * RISER_SECONDS)
+    noise = _noise(0x4848)
+    frames: list[int] = []
+    band = 0.0
+    phase = 0.0
+    for index in range(length):
+        progress = index / length
+        hiss = next(noise)
+        # A one-pole low-pass whose corner opens as the riser climbs.
+        band += (0.03 + 0.6 * progress * progress) * (hiss - band)
+        phase += 2 * math.pi * (180 * 8 ** progress) / SAMPLE_RATE
+        tone = math.sin(phase) * 0.25
+        level = progress**1.6
+        fade = min(1.0, (length - index) / (SAMPLE_RATE * 0.01))
+        frames.append(_clamp((band * 0.8 + tone) * level * fade))
+    return frames
+
+
+def _impact_frames() -> list[int]:
+    """A falling sub boom with a burst of dark noise on top."""
+    length = int(SAMPLE_RATE * 1.6)
+    noise = _noise(0x4949)
+    frames: list[int] = []
+    band = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        phase = 2 * math.pi * (38 * t + 40 * 0.12 * (1 - math.exp(-t / 0.12)))
+        boom = math.sin(phase) * math.exp(-2.4 * t) * 0.8
+        band += 0.12 * (next(noise) - band)
+        burst = band * math.exp(-7 * t) * 1.4
+        fade = min(1.0, (length - index) / (SAMPLE_RATE * 0.05))
+        frames.append(_clamp((boom + burst) * fade))
+    return frames
+
+
 _FRAMES = {
+    CONGA_HIGH_NOTE: lambda: _conga_frames(330.0),
+    CONGA_LOW_NOTE: lambda: _conga_frames(220.0),
+    SHAKER_NOTE: _shaker_frames,
+    RISER_NOTE: _riser_frames,
+    IMPACT_NOTE: _impact_frames,
     SIDE_STICK_NOTE: _side_stick_frames,
     SNARE_NOTE: _snare_frames,
     RIDE_NOTE: _ride_frames,

@@ -12,6 +12,7 @@ from kihachi_mcp.knowledge.genre_profiles import (
     profile_for,
     swung,
 )
+from kihachi_mcp.models.production_brief import DRUM_PARTS
 from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.drum_samples import sample_path_for_note
 from kihachi_mcp.services.midi_candidate_builder import (
@@ -110,7 +111,7 @@ def test_every_family_builds_notes_that_stay_inside_their_clips(text: str) -> No
             assert 0 <= note.start_beats < length
             assert note.start_beats + note.duration_beats <= length + 1e-6
             assert 1 <= note.velocity <= 127
-    for part in ("Kick", "Hats"):
+    for part in DRUM_PARTS:
         for pitch in candidate.used_pitches(part):
             assert sample_path_for_note(pitch).is_file()
 
@@ -120,7 +121,7 @@ def test_reggae_leaves_beat_one_empty_and_drops_the_snare_on_three() -> None:
     kick = _notes_in(candidate, "Kick", _drop_bars(candidate))
     assert kick and all(offset != 0.0 for _bar, offset, *_ in kick)
     snare = [
-        n for n in _notes_in(candidate, "Hats", _drop_bars(candidate)) if n[2] == 38
+        n for n in _notes_in(candidate, "Snare", _drop_bars(candidate)) if n[2] == 38
     ]
     loud = {offset for _bar, offset, _p, _d, velocity in snare if velocity >= 80}
     assert loud == {2.0}  # quieter ghost notes elsewhere are fine
@@ -149,7 +150,7 @@ def test_mutation_funk_has_broken_two_bar_pocket_and_seed_variation() -> None:
         assert patterns[0] != patterns[1]
         assert all(set(pattern) != {0.0, 1.0, 2.0, 3.0} for pattern in patterns)
         kick_phrases.append(tuple(patterns))
-        drums = _notes_in(candidate, "Hats", bars)
+        drums = _notes_in(candidate, "Snare", bars)
         assert any(
             pitch == 37 and velocity < 60 for _bar, _off, pitch, _dur, velocity in drums
         )

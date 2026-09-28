@@ -20,7 +20,12 @@ from kihachi_mcp.services.diagnostics import (
     port_open,
 )
 from kihachi_mcp.services.live_paths import candidate_store_dir
-from kihachi_mcp.services.studio_client import NOT_RUNNING, studio_post, studio_running
+from kihachi_mcp.services.studio_client import (
+    NOT_RUNNING,
+    SEND_TIMEOUT_SECONDS,
+    studio_post,
+    studio_running,
+)
 from kihachi_mcp.services.studio_runtime import StudioRuntime
 
 STUDIO_URL = f"http://{STUDIO_HOST}:{STUDIO_PORT}/"
@@ -302,7 +307,9 @@ def _ableton_live(args: argparse.Namespace) -> int:
         if answer not in {"y", "yes"}:
             print("送信しませんでした。")
             return 1
-    result = studio_post("/api/ableton/send", {**body, "confirmed": True})
+    result = studio_post(
+        "/api/ableton/send", {**body, "confirmed": True}, timeout=SEND_TIMEOUT_SECONDS
+    )
     receipt = result.get("receipt") or {}
     print(f"\n結果: {receipt.get('status') or result.get('error')}")
     if result.get("verification"):

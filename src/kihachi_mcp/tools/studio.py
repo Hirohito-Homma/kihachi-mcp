@@ -12,7 +12,7 @@ from typing import Any
 
 from kihachi_mcp.services.diagnostics import DiagnosticsService
 from kihachi_mcp.services.live_paths import candidate_store_dir
-from kihachi_mcp.services.studio_client import studio_post
+from kihachi_mcp.services.studio_client import SEND_TIMEOUT_SECONDS, studio_post
 from kihachi_mcp.services.studio_runtime import StudioRuntime
 
 _runtime: StudioRuntime | None = None
@@ -97,6 +97,7 @@ def execute_ableton_plan(
     return studio_post(
         "/api/ableton/send",
         {"candidate_id": candidate_id, "confirmed": True, "change_tempo": change_tempo},
+        timeout=SEND_TIMEOUT_SECONDS,
     )
 
 

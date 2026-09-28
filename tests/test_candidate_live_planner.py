@@ -118,7 +118,9 @@ def test_existing_scene_is_reused_without_moving_it() -> None:
         op for op in plan.operations
         if op.op == OP_REPLACE_CLIP_NOTES and op.target["scene_index"] == 1
     ]
-    assert len(intro_notes) == len(STUDIO_PARTS)
+    intro_parts = {clip.part for clip in candidate.clips if clip.start_bar == 1}
+    assert set(STUDIO_PARTS) <= intro_parts
+    assert len(intro_notes) == len(intro_parts)
 
 
 def test_user_owned_clip_is_not_replaced() -> None:

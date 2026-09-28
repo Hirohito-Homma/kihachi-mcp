@@ -3,14 +3,11 @@
 from typing import TYPE_CHECKING, Any
 
 from kihachi_mcp.models.midi_candidate import MidiCandidate
-from kihachi_mcp.models.production_brief import STUDIO_PARTS
+from kihachi_mcp.models.production_brief import DRUM_PARTS, STUDIO_PARTS
 from kihachi_mcp.services import live_device_catalog
 
 if TYPE_CHECKING:
     from kihachi_mcp.services.candidate_live_planner import AppliedTracks
-
-DRUM_PARTS = frozenset({"Kick", "Hats"})
-
 
 def expected_pitches(candidate: "MidiCandidate | AppliedTracks") -> dict[str, list[int]]:
     """Return the pitches each part will send to Live."""

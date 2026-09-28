@@ -17,6 +17,8 @@ from kihachi_mcp.services.production_review import (
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
 _SCOPES = {"bass", "drums", "section", "velocity", "arrangement"}
+#: The drums a revision thins or softens; the kick carries the groove and stays.
+_TOP_DRUMS = frozenset({"Hats", "Snare", "OpenHat", "Perc"})
 _SCOPE_LABELS = {
     "bass": "ベース",
     "drums": "ドラム",
@@ -123,7 +125,7 @@ def _rewrite_clip(
         late = bars is not None or bar_in_clip >= clip.length_bars // 2
         if clip.part == "Bass" and "bass" in scopes and late and index % 2 == 1 and pitch + 12 <= 72:
             pitch += 12
-        if clip.part == "Hats" and "drums" in scopes and index % 4 == 0:
+        if clip.part in _TOP_DRUMS and "drums" in scopes and index % 4 == 0:
             velocity = max(1, velocity - 12)
         if (
             "velocity" in scopes
@@ -135,7 +137,7 @@ def _rewrite_clip(
         if (
             "section" in scopes
             and clip.section_name in {"Build", "Break"}
-            and clip.part == "Hats"
+            and clip.part in _TOP_DRUMS
             and bar_in_clip >= clip.length_bars - 2
         ):
             continue

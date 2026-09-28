@@ -4,7 +4,7 @@ from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
 from kihachi_mcp.services.studio_interpreter import assemble_brief
 
 
-def test_midi_file_contains_header_and_four_parts() -> None:
+def test_midi_file_contains_header_and_one_track_per_part() -> None:
     brief = assemble_brief(
         extract_explicit("32小節 125 BPM Dm"),
         {
@@ -22,7 +22,8 @@ def test_midi_file_contains_header_and_four_parts() -> None:
             "ambiguous": [],
         },
     )
-    data = candidate_to_midi_bytes(build_candidate(brief, seed=1))
+    candidate = build_candidate(brief, seed=1)
+    data = candidate_to_midi_bytes(candidate)
     assert data.startswith(b"MThd")
     assert data[8:10] == (1).to_bytes(2, "big")
-    assert data.count(b"MTrk") == 5
+    assert data.count(b"MTrk") == 1 + len(candidate.parts)

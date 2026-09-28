@@ -7,6 +7,7 @@ import pytest
 from live_fixtures import gate
 
 from kihachi_mcp.knowledge.genre_database import match_genres
+from kihachi_mcp.services.live_bridge import MAX_PLAN_OPERATIONS
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import LiveStateInspector
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
@@ -238,7 +239,11 @@ def test_kihachi_golden_path_shapes_the_notes(tmp_path: Path) -> None:
     assert 4.5 <= spec["duration_minutes"] <= 5.5
     assert "Swing" not in " ".join(candidate.brief.interpretations)
     labels = {track["label"] for track in project["tracks"]}
-    assert {"KICK", "DRUMS", "SLAP BASS", "DUB CHORDS", "MUTATION SYNTH"} <= labels
+    assert {"KICK", "HATS", "SLAP BASS", "DUB CHORDS", "MUTATION SYNTH"} <= labels
+    assert {"SNARE / CLAP", "PERC", "SUB BASS", "PAD", "ARP", "VOCAL CHOP", "FX"} <= labels
+    preview = runtime.apply_preview(candidate_id)
+    assert preview["ok"] is True
+    assert len(preview["plan"]["operations"]) <= MAX_PLAN_OPERATIONS
     names = [section["name"] for section in project["arrangement"]["sections"]]
     assert "Break" in names
     energies = {s["name"]: s["energy"] for s in project["arrangement"]["sections"]}

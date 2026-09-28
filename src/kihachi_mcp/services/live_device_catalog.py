@@ -64,6 +64,7 @@ _ROLE_BY_TRACK_KEYWORD: tuple[tuple[str, str], ...] = (
     ("hat", "Drum Rack"),
     ("clap", "Drum Rack"),
     ("snare", "Drum Rack"),
+    ("fx", "Drum Rack"),
     ("bass", "Operator"),
     ("sub", "Operator"),
     ("pad", "Wavetable"),
@@ -73,6 +74,7 @@ _ROLE_BY_TRACK_KEYWORD: tuple[tuple[str, str], ...] = (
     ("lead", "Drift"),
     ("arp", "Drift"),
     ("pluck", "Drift"),
+    ("vocal", "Wavetable"),
 )
 
 DEFAULT_INSTRUMENT = "Simpler"

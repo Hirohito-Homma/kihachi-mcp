@@ -1,4 +1,4 @@
-"""Build reproducible Kick/Hats/Bass/Stab notes from a production brief."""
+"""Build reproducible drum, bass, harmony and effect notes from a production brief."""
 
 import hashlib
 import json
@@ -19,11 +19,20 @@ from kihachi_mcp.knowledge.genre_profiles import (
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.production_brief import (
-    OPTIONAL_STUDIO_PARTS,
+    ARRANGEMENT_PARTS,
+    PART_ORDER,
     STUDIO_PARTS,
     ProductionBrief,
 )
 from kihachi_mcp.services.brief_parser import explicit_swing, read_explicit
+from kihachi_mcp.services.drum_samples import (
+    CONGA_HIGH_NOTE,
+    CONGA_LOW_NOTE,
+    IMPACT_NOTE,
+    RISER_NOTE,
+    RISER_SECONDS,
+    SHAKER_NOTE,
+)
 from kihachi_mcp.services.musical_time import beats_per_bar
 from kihachi_mcp.services.session_pattern_builder import (
     MidiNote,
@@ -36,6 +45,12 @@ CLAP_PITCH = 39
 HAT_PITCH = 42
 OPEN_HAT_PITCH = 46
 HAT_PITCHES = frozenset({HAT_PITCH, OPEN_HAT_PITCH, RIDE})
+#: Side stick, snare and clap: the backbeat voices, played on their own track.
+SNARE_PITCHES = frozenset({37, 38, CLAP_PITCH})
+#: Written by a generator of their own, after the original parts.
+_GENERATED_EXTRAS = ("Perc", "Pad", "Arp", "Vocal", "FX")
+#: The sub sits in this octave whatever register the bass plays in.
+SUB_LOWEST_PITCH = 24
 MAX_CLIP_BARS = 16
 PHRASE_BARS = 8
 # macOS loopback UDP send defaults to 9216 bytes. Stay under that so one
@@ -109,24 +124,35 @@ def build_candidate(
     beats = brief.beats_per_bar
     bars = int(brief.bars.value)
     clips: list[CandidateClip] = []
+    # Generation order fixes each part's random draws: new parts come last so
+    # the original four keep the notes they always had.
     parts = (
-        (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS)
-        if str(brief.genre.value) == "mutation_funk"
-        else STUDIO_PARTS
+        (*STUDIO_PARTS, "Lead") if str(brief.genre.value) == "mutation_funk" else STUDIO_PARTS
     )
-    for part in parts:
-        song_notes = _notes_for_part(part, brief, bars, beats, rng, progression)
+    song: dict[str, list[MidiNote]] = {}
+    for part in (*parts, *_GENERATED_EXTRAS):
+        song[part] = _notes_for_part(part, brief, bars, beats, rng, progression)
+    song.update(_split_drums(song.pop("Hats")))
+    song["Sub"] = _sub_notes(song["Bass"], brief, beats)
+    for part in PART_ORDER:
+        song_notes = song.get(part)
+        if song_notes is None:
+            continue
+        sparse = part in ARRANGEMENT_PARTS
         for section in brief.sections:
             for start, length in _clip_windows(
                 section.start_bar, section.length_bars, song_notes, beats
             ):
+                notes = _clip_notes(song_notes, start, length, beats)
+                if sparse and not notes:
+                    continue  # every clip is Live operations; skip silent ones
                 clips.append(
                     CandidateClip(
                         part=part,
                         section_name=section.name,
                         start_bar=start,
                         length_bars=length,
-                        notes=_clip_notes(song_notes, start, length, beats),
+                        notes=notes,
                     )
                 )
     return MidiCandidate(
@@ -256,9 +282,55 @@ def _notes_for_part(
         notes = _bass_notes(plan)
     elif part == "Stab":
         notes = _stab_notes(plan)
+    elif part == "Perc":
+        notes = _perc_notes(plan)
+    elif part == "Pad":
+        notes = _pad_notes(plan)
+    elif part == "Arp":
+        notes = _arp_notes(plan)
+    elif part == "Vocal":
+        notes = _vocal_notes(plan)
+    elif part == "FX":
+        notes = _fx_notes(plan)
     else:
         notes = _lead_notes(plan)
     return [_inside_bar(note, beats) for note in notes]
+
+
+def _split_drums(hats: list[MidiNote]) -> dict[str, list[MidiNote]]:
+    """Give the backbeat and the open hat their own tracks, notes unchanged."""
+    return {
+        "Hats": [
+            note
+            for note in hats
+            if note.pitch not in SNARE_PITCHES and note.pitch != OPEN_HAT_PITCH
+        ],
+        "Snare": [note for note in hats if note.pitch in SNARE_PITCHES],
+        "OpenHat": [note for note in hats if note.pitch == OPEN_HAT_PITCH],
+    }
+
+
+def _sub_notes(
+    bass: list[MidiNote], brief: ProductionBrief, beats: float
+) -> list[MidiNote]:
+    """The bass rhythm an octave or two down, one pitch class per note.
+
+    Ghost notes stay out, and the sub drops out of the breakdown and the Break
+    so the Drop arrives with the low end.
+    """
+    quiet_bars = set(_breakdown_bars(brief))
+    for section in brief.sections:
+        if section.name == "Break":
+            quiet_bars.update(range(section.start_bar, section.end_bar + 1))
+    notes: list[MidiNote] = []
+    for note in bass:
+        if note.velocity < 60 or int(note.start_beats // beats) + 1 in quiet_bars:
+            continue
+        pitch = SUB_LOWEST_PITCH + (note.pitch - SUB_LOWEST_PITCH) % 12
+        notes.append(
+            MidiNote(pitch, note.start_beats, note.duration_beats, min(110, note.velocity + 6))
+        )
+    return notes
 
 
 def _inside_bar(note: MidiNote, beats: float) -> MidiNote:
@@ -863,6 +935,200 @@ def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
     return notes
 
 
+_PEAK_SECTIONS = frozenset({"Drop", "ChorusA", "ChorusB"})
+# Conga answers between the kicks, one figure per phrase.
+_CONGA_FIGURES = (
+    (0.75, 1.5, 2.25, 3.5),
+    (0.5, 1.75, 2.5, 3.25),
+    (0.75, 2.0, 2.75, 3.5),
+)
+
+
+def _perc_notes(plan: _SongPlan) -> list[MidiNote]:
+    """A shaker that fills in with the energy, and congas at the peaks."""
+    notes: list[MidiNote] = []
+    figures: dict[tuple[str, int], tuple[float, ...]] = {}
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        if bar.breakdown or bar.section in {"Intro", "Break"}:
+            continue
+        if bar.section == "VerseA" and bar.in_section < 4:
+            continue
+        if bar.section == "Outro" and bar.in_section >= PHRASE_BARS:
+            continue
+        sixteenths = plan.energy(bar) >= 0.8
+        for step in range(plan.steps):
+            offbeat = step % 4 == 2
+            if not sixteenths and step % 2:
+                continue
+            notes.append(
+                MidiNote(
+                    SHAKER_NOTE,
+                    plan.at(bar, step / 4),
+                    0.1,
+                    plan.velocity(74 if offbeat else 46, 4),
+                )
+            )
+        if bar.section in _PEAK_SECTIONS or (
+            bar.section == "VerseB" and bar.in_section % 2 == 1
+        ):
+            key = (bar.section, bar.phrase)
+            if key not in figures:
+                figures[key] = plan.rng.choice(_CONGA_FIGURES)
+            for index, offset in enumerate(figures[key]):
+                if offset >= plan.beats:
+                    continue
+                notes.append(
+                    MidiNote(
+                        CONGA_HIGH_NOTE if index % 2 == 0 else CONGA_LOW_NOTE,
+                        plan.at(bar, offset),
+                        0.2,
+                        plan.velocity(82 if index % 2 == 0 else 72, 5),
+                    )
+                )
+    return notes
+
+
+def _pad_notes(plan: _SongPlan) -> list[MidiNote]:
+    """Held four-note chords under everything, loudest where the song thins out."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=1)
+    notes: list[MidiNote] = []
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        section = plan.section_of(number)
+        length = section.length_bars if section else plan.bars
+        if bar.section == "Intro" and bar.in_section < length // 2:
+            continue
+        if bar.section == "Outro" and bar.left_in_section < PHRASE_BARS // 2:
+            continue
+        if bar.breakdown:
+            velocity = 58 + 2 * (len(plan.breakdown) - 1 - bar.breakdown_left)
+        elif bar.section == "Break":
+            velocity = 62
+        elif bar.section in _PEAK_SECTIONS:
+            velocity = 46
+        else:
+            velocity = 52
+        chord = _pad_chord(plan, tonic, plan.chord_degree(bar))
+        notes.extend(_chord_notes(chord, bar.start, plan.beats - 0.02, min(127, velocity)))
+    return notes
+
+
+def _pad_chord(plan: _SongPlan, tonic: int, degree: int) -> tuple[int, ...]:
+    """The triad of _voiced_chord with its seventh, kept within an octave and a half."""
+    triad = _voiced_chord(plan, tonic, degree)
+    seventh = tonic + plan.degree_offset(degree + 6)
+    while seventh <= triad[-1]:
+        seventh += 12
+    if seventh - triad[0] > 18:
+        seventh -= 12
+    return tuple(sorted({*triad, seventh}))
+
+
+# Indexes into root, third, fifth, octave. One order per phrase.
+_ARP_ORDERS = ((0, 1, 2, 3), (0, 2, 1, 3), (3, 2, 1, 0), (0, 1, 2, 3, 2, 1))
+
+
+def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
+    """Chord tones in sixteenths at the peaks, eighths while the verse builds."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=2)
+    notes: list[MidiNote] = []
+    orders: dict[tuple[str, int], tuple[int, ...]] = {}
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        rising = 0.0
+        if bar.breakdown:
+            position_in = len(plan.breakdown) - 1 - bar.breakdown_left
+            if position_in < len(plan.breakdown) // 2:
+                continue
+            step, rising = 0.25, position_in / max(1, len(plan.breakdown) - 1)
+        elif bar.section in _PEAK_SECTIONS or bar.section == "Build":
+            step = 0.25
+        elif bar.section == "VerseB" or (bar.section == "Break" and bar.left_in_section < 2):
+            step = 0.5
+        else:
+            continue
+        key = (bar.section, bar.phrase)
+        if key not in orders:
+            orders[key] = plan.rng.choice(_ARP_ORDERS)
+        order = orders[key]
+        degree = plan.chord_degree(bar)
+        tones = [tonic + plan.degree_offset(degree + k) for k in (0, 2, 4, 7)]
+        count = int(plan.beats / step)
+        for index in range(count):
+            base = 84 if index % 4 == 0 else 60
+            if rising:
+                base = round(base * (0.6 + 0.4 * rising))
+            notes.append(
+                MidiNote(
+                    tones[order[index % len(order)]],
+                    plan.at(bar, index * step),
+                    round(step * 0.6, 6),
+                    plan.velocity(base, 4),
+                )
+            )
+    return notes
+
+
+# Short chopped syllables, placed like a vocal hook around the backbeat.
+_CHOP_RHYTHMS = (
+    (0.0, 0.5, 0.75, 1.5, 2.5, 3.0),
+    (0.0, 0.25, 1.0, 1.75, 2.5, 3.25),
+    (0.5, 1.0, 1.5, 2.75, 3.5),
+)
+_CHOP_MOTIFS = ((0, 2, 4, 2, 0, 4), (4, 2, 0, 2, 4, 7), (0, 0, 2, 4, 2, 2))
+
+
+def _vocal_notes(plan: _SongPlan) -> list[MidiNote]:
+    """A chopped hook on chord tones, for a vocal sampler or a vocoder carrier."""
+    tonic = root_pitch(str(plan.brief.key.value), octave_offset=2)
+    notes: list[MidiNote] = []
+    phrases: dict[tuple[str, int], tuple[tuple[float, ...], tuple[int, ...]]] = {}
+    for number in range(1, plan.bars + 1):
+        bar = plan.bar(number)
+        if bar.breakdown:
+            continue
+        if bar.section in _PEAK_SECTIONS:
+            limit = None
+        elif bar.section == "VerseB" and bar.in_section % 2 == 1:
+            limit = 3
+        elif bar.section == "Break" and bar.left_in_section == 0:
+            limit = 2
+        else:
+            continue
+        key = (bar.section, bar.phrase)
+        if key not in phrases:
+            phrases[key] = (plan.rng.choice(_CHOP_RHYTHMS), plan.rng.choice(_CHOP_MOTIFS))
+        rhythm, motif = phrases[key]
+        degree = plan.chord_degree(bar)
+        for index, offset in enumerate(rhythm[:limit]):
+            if offset >= plan.beats:
+                continue
+            notes.append(
+                MidiNote(
+                    tonic + plan.degree_offset(degree + motif[index % len(motif)]),
+                    plan.at(bar, offset),
+                    0.2,
+                    plan.velocity(90 if index == 0 else 76, 4),
+                )
+            )
+    return notes
+
+
+def _fx_notes(plan: _SongPlan) -> list[MidiNote]:
+    """A riser that ends where each peak section starts, and an impact on it."""
+    notes: list[MidiNote] = []
+    riser_beats = RISER_SECONDS * int(plan.brief.tempo.value) / 60
+    for section in plan.brief.sections:
+        if section.name not in _PEAK_SECTIONS or section.start_bar == 1:
+            continue
+        target = (section.start_bar - 1) * plan.beats
+        start = max(0.0, round((target - riser_beats) * 4) / 4)
+        notes.append(MidiNote(RISER_NOTE, round(start, 6), round(target - start, 6), 100))
+        notes.append(MidiNote(IMPACT_NOTE, round(target, 6), 1.0, plan.velocity(112, 3)))
+    return notes
+
+
 def _stab(
     plan: _SongPlan,
     bar: _Bar,
@@ -944,10 +1210,11 @@ def hat_counts_by_half(candidate: MidiCandidate) -> tuple[int, int]:
     beats = beats_per_bar(
         candidate.brief.meter_numerator, candidate.brief.meter_denominator
     )
-    for clip in candidate.clips_for_part("Hats"):
+    clips = [*candidate.clips_for_part("Hats"), *candidate.clips_for_part("OpenHat")]
+    for clip in clips:
         for note in clip.notes:
             if note.pitch not in HAT_PITCHES:
-                continue  # the clap shares the Hats track but is not a hat
+                continue  # a candidate saved before the split kept the clap here
             absolute_bar = clip.start_bar + note.start_beats / beats
             if absolute_bar <= midpoint:
                 first += 1

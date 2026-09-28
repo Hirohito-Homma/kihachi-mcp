@@ -9,6 +9,8 @@ from typing import Any
 from kihachi_mcp.services.diagnostics import STUDIO_HOST, STUDIO_PORT, port_open
 
 NOT_RUNNING = "Liveとの接続は制作画面が持ちます。先に kihachi start で制作画面を起動してください。"
+# A full song is hundreds of Live operations; loading devices takes seconds each.
+SEND_TIMEOUT_SECONDS = 1800.0
 
 
 def studio_running() -> bool:

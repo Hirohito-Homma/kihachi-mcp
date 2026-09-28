@@ -31,7 +31,7 @@ from kihachi_mcp.models.live_mutation import (
 )
 from kihachi_mcp.models.live_state import TRACK_TYPE_MIDI, LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-from kihachi_mcp.models.production_brief import STUDIO_PARTS
+from kihachi_mcp.models.production_brief import DRUM_PARTS, STUDIO_PARTS
 from kihachi_mcp.services import live_device_catalog
 from kihachi_mcp.services.drum_samples import HAT_NOTE, KICK_NOTE, sample_path_for_note
 from kihachi_mcp.services.live_approval_gate import APPROVAL_TTL_SECONDS
@@ -42,7 +42,21 @@ CONFLICT_USER_CLIP = "user_owned_clip"
 CONFLICT_SESSION_MISSING = "session_clip_missing"
 CONFLICT_ARRANGEMENT_OCCUPIED = "arrangement_range_occupied"
 
-_TRACK_COLORS = {"Kick": "2", "Hats": "20", "Bass": "14", "Stab": "9", "Lead": "16"}
+_TRACK_COLORS = {
+    "Kick": "2",
+    "Snare": "3",
+    "Hats": "20",
+    "OpenHat": "21",
+    "Perc": "22",
+    "Sub": "13",
+    "Bass": "14",
+    "Stab": "9",
+    "Pad": "10",
+    "Arp": "17",
+    "Lead": "16",
+    "Vocal": "25",
+    "FX": "26",
+}
 _SHORT_ID_RE = re.compile(r"[0-9a-f]{8}")
 
 
@@ -445,7 +459,9 @@ class _Builder:
         if self._conflicts:
             return [], self._conflicts, self._warnings
         tracks: list[dict[str, Any]] = []
-        for part in ("Kick", "Hats"):
+        for part in self._candidate.parts:
+            if part not in DRUM_PARTS:
+                continue
             name = managed_track_name(f"KIHACHI {part} {self._short_id}")
             existing = self._snapshot.track_by_name(name)
             if existing is None:
@@ -676,11 +692,11 @@ class _Builder:
         if not _supports_replace_sample(self._snapshot.live_version):
             self._warnings.append(
                 "Drum Rack へのサンプル自動配置は Live 12.4 以降が必要です。"
-                "Kick/Hats のパッドは手動で入れてください"
+                "ドラム系トラックのパッドは手動で入れてください"
             )
             return
         for track in tracks:
-            if track["part"] not in {"Kick", "Hats"}:
+            if track["part"] not in DRUM_PARTS:
                 continue
             if "Drum Rack" not in track["device_names"]:
                 continue

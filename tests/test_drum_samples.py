@@ -5,9 +5,14 @@ from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.candidate_live_planner import CandidateLivePlanner
 from kihachi_mcp.services.drum_samples import (
     CLAP_NOTE,
+    CONGA_HIGH_NOTE,
+    CONGA_LOW_NOTE,
     HAT_NOTE,
+    IMPACT_NOTE,
     KICK_NOTE,
     OPEN_HAT_NOTE,
+    RISER_NOTE,
+    SHAKER_NOTE,
     ensure_drum_samples,
     is_bundled_sample,
 )
@@ -53,5 +58,7 @@ def test_apply_plan_loads_kick_and_hat_samples() -> None:
         if operation.op == OP_LOAD_DRUM_PAD_SAMPLE
     ]
     notes = {operation.arguments["note"] for operation in sample_ops}
-    assert notes == {KICK_NOTE, CLAP_NOTE, HAT_NOTE, OPEN_HAT_NOTE}
+    drums = {KICK_NOTE, CLAP_NOTE, HAT_NOTE, OPEN_HAT_NOTE}
+    extras = {SHAKER_NOTE, CONGA_HIGH_NOTE, CONGA_LOW_NOTE, RISER_NOTE, IMPACT_NOTE}
+    assert drums <= notes <= drums | extras
     assert all(is_bundled_sample(operation.arguments["sample_path"]) for operation in sample_ops)

@@ -288,7 +288,7 @@ MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
         (
             item("Limiter", "Mode", "True Peak"),
             at("Limiter", "Ceiling", -1.0),
-            at("Limiter", "Input Gain", 10.8),
+            at("Limiter", "Input Gain", 15.6),
         ),
     ),
 )

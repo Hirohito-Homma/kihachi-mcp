@@ -146,6 +146,14 @@ def apply_ableton_master(confirmed: bool = False, retune: bool = False) -> dict[
     )
 
 
+def measure_loudness(file_path: str, candidate_id: str = "") -> dict[str, Any]:
+    """Measure an exported WAV: integrated LUFS, true peak, range, low end, per section.
+
+    Export the song from Live first (File > Export Audio). Read-only.
+    """
+    return _studio().measure_mix(file_path, candidate_id)
+
+
 def verify_ableton_project(candidate_id: str) -> dict[str, Any]:
     """Read tempo, tracks, clips, notes and arrangement back from Live and compare."""
     return studio_post("/api/ableton/verify", {"candidate_id": candidate_id})

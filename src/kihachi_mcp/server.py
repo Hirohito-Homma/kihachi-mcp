@@ -31,6 +31,7 @@ from kihachi_mcp.tools.studio import (
     execute_ableton_plan,
     get_project,
     list_projects,
+    measure_loudness,
     ollama_status,
     review_song,
     revise_song,
@@ -51,6 +52,7 @@ for _tool in (
     apply_ableton_mix,
     apply_ableton_master,
     verify_ableton_project,
+    measure_loudness,
     ollama_status,
     doctor,
 ):

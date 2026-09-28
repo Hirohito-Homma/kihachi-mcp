@@ -120,6 +120,12 @@ def _parser() -> argparse.ArgumentParser:
         "--retune", action="store_true", help="以前追加したマスタリングのつまみを設定し直す"
     )
     master.set_defaults(handler=_ableton_master)
+    measure = commands.add_parser(
+        "measure", help="書き出したWAVの音圧(LUFS)・True Peak・セクション別音圧を測ります（Live不要）"
+    )
+    measure.add_argument("file")
+    measure.add_argument("--project", default="", help="セクション別に測る候補（IDの先頭でも可）")
+    measure.set_defaults(handler=_measure)
     probe = steps.add_parser(
         "probe-devices",
         help="エフェクトを専用トラックに1つずつ入れ、つまみの名前を読んで保存します",
@@ -195,6 +201,27 @@ def _ableton_master(args: argparse.Namespace) -> int:
     for item in receipt.get("mismatches") or []:
         print(f"  ! {item.get('operation_id')} {item.get('field_name')}: 計画 {item.get('expected')} / Live {item.get('observed')}")
     return 0 if result.get("ok") else 1
+
+
+def _measure(args: argparse.Namespace) -> int:
+    runtime = _runtime()
+    candidate_id = _resolve(runtime, args.project) if args.project else ""
+    report = runtime.measure_mix(args.file, candidate_id)
+    if not report.get("ok"):
+        print(report.get("error"), file=sys.stderr)
+        return 1
+    print(f"{report['file']}（{report['seconds']} 秒, {report['sample_rate']} Hz）")
+    print(f"  Integrated     {report['integrated_lufs']} LUFS")
+    print(f"  Short-term max {report['short_term_max_lufs']} LUFS")
+    print(f"  Loudness range {report['loudness_range_lu']} LU")
+    print(f"  True Peak      {report['true_peak_dbtp']} dBTP（sample peak {report['sample_peak_dbfs']} dBFS）")
+    print(f"  PLR            {report['plr_db']} dB")
+    print(f"  120Hz以下の比率 {report['low_end_share_db']} dB")
+    for row in report.get("sections") or []:
+        print(f"  {row['bars']:>9}  {row['name']:<12} {row['lufs']} LUFS")
+    for line in report["verdict"]:
+        print(f"  - {line}")
+    return 0
 
 
 def _probe_devices(args: argparse.Namespace) -> int:

@@ -15,6 +15,7 @@ from kihachi_mcp.knowledge.part_sounds import PART_EFFECTS
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import MidiCandidate
+from kihachi_mcp.services import loudness
 from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
 from kihachi_mcp.services.ai_provider import provider_from_settings, split_ollama_url
 from kihachi_mcp.services.candidate_live_planner import (
@@ -1133,6 +1134,22 @@ class StudioRuntime:
             }
         finally:
             self._apply_lock.release()
+
+    def measure_mix(self, path: str, candidate_id: str = "") -> dict[str, Any]:
+        """Loudness and true peak of an exported file; per section with a candidate."""
+        file = Path(path).expanduser()
+        if not file.is_file():
+            return {"ok": False, "error": f"ファイルがありません: {file}"}
+        candidate = self._lookup(candidate_id) if candidate_id else None
+        try:
+            report = loudness.measure(
+                file,
+                sections=loudness.sections_of(candidate) if candidate else None,
+                tempo=float(candidate.brief.tempo.value) if candidate else 0.0,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return {"ok": False, "error": f"測定できません: {exc}"}
+        return {"ok": True, **report}
 
     def apply_master(self, confirmed: bool = False, retune: bool = False) -> dict[str, Any]:
         """Append the club mastering chain to the Set's master track.

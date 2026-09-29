@@ -9,6 +9,7 @@ import pytest
 
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
+from kihachi_mcp.services.sample_catalog import SampleCatalog
 from kihachi_mcp.studio.app import StudioApp, _handler_for
 
 
@@ -21,12 +22,15 @@ def server(tmp_path):
     library = ReferenceLibrary(
         tmp_path / "library", lambda _: {"metrics": {}, "warnings": []}
     )
+    sample_catalog = SampleCatalog(tmp_path / "sample-catalog")
     app = StudioApp(
         runtime=NoLive(),
         reference_library=library,
         reference_sources=ReferenceSources({}),
+        sample_catalog=sample_catalog,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    server.sample_catalog = sample_catalog
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -238,4 +242,43 @@ def test_audio_preview_streams_only_managed_copy_and_supports_range(server, tmp_
     status, _ = request(http, "GET", path, headers={"Range": "bytes=999-"})
     assert status == 416
     status, _ = request(http, "GET", "/api/references/audio/../status")
+    assert status == 404
+
+
+def test_sample_preview_streams_only_an_indexed_file(server, tmp_path):
+    http, _library = server
+    source = tmp_path / "samples"
+    source.mkdir()
+    sample = source / "Deep Kick.wav"
+    sample.write_bytes(b"RIFFsample preview")
+    http.sample_catalog.index(str(source))
+    result = http.sample_catalog.search("kick")["results"][0]
+    path = "/api/references/sample-catalog/audio/" + result["sample_id"]
+
+    status, body = request(http, "GET", path)
+    assert status == 200 and body == b"RIFFsample preview"
+    status, body = request(http, "GET", path, headers={"Range": "bytes=4-9"})
+    assert status == 206 and body == b"sample"
+    status, _ = request(http, "GET", path, headers={"Sec-Fetch-Site": "cross-site"})
+    assert status == 403
+    status, _ = request(http, "GET", path + "?path=/etc/passwd")
+    assert status == 403
+
+
+def test_sample_preview_rejects_a_file_replaced_by_symlink(server, tmp_path):
+    http, _library = server
+    source = tmp_path / "samples"
+    source.mkdir()
+    sample = source / "Kick.wav"
+    sample.write_bytes(b"RIFForiginal")
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"RIFFoutside")
+    http.sample_catalog.index(str(source))
+    sample_id = http.sample_catalog.search("kick")["results"][0]["sample_id"]
+    sample.unlink()
+    sample.symlink_to(outside)
+
+    status, _ = request(
+        http, "GET", "/api/references/sample-catalog/audio/" + sample_id
+    )
     assert status == 404

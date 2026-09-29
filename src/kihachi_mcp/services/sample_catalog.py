@@ -143,6 +143,34 @@ class SampleCatalog:
             "audio_copied": False,
         }
 
+    def audio_path(self, sample_id: str) -> Path:
+        """Resolve only a currently indexed sample; never accept a caller path."""
+        if not re.fullmatch(r"[a-f0-9]{24}", sample_id):
+            raise ReferenceError("サンプルが見つかりません")
+        status = self.status()
+        if not status["root"]:
+            raise ReferenceError("サンプルが見つかりません")
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT relative_path FROM files WHERE sample_id=?", (sample_id,)
+            ).fetchone()
+        if not row:
+            raise ReferenceError("サンプルが見つかりません")
+        root = Path(status["root"]).resolve()
+        unresolved = root / row["relative_path"]
+        if unresolved.is_symlink():
+            raise ReferenceError("サンプルが見つかりません")
+        path = unresolved.resolve()
+        if not path.is_relative_to(root) or path.suffix.lower() not in EXTENSIONS:
+            raise ReferenceError("サンプルが見つかりません")
+        try:
+            size = path.stat().st_size
+        except OSError:
+            raise ReferenceError("サンプルが見つかりません") from None
+        if not path.is_file() or not 0 < size <= MAX_BYTES:
+            raise ReferenceError("サンプルが見つかりません")
+        return path
+
     def index(self, directory: str) -> dict:
         if not isinstance(directory, str) or len(directory) > 1000:
             raise ReferenceError("サンプル集の絶対パスを指定してください")

@@ -69,6 +69,7 @@ from kihachi_mcp.services.ollama_status import probe_ollama
 from kihachi_mcp.services.production_review import review_candidate
 from kihachi_mcp.services.production_revision import revise_candidate
 from kihachi_mcp.services.production_workspace import local_ableton_plan, project_view
+from kihachi_mcp.services.sample_replacement import create_sample_replacement_plan
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 from kihachi_mcp.services.sound_coverage import coverage_from_snapshot
 from kihachi_mcp.services.studio_interpreter import (
@@ -194,6 +195,7 @@ class StudioRuntime:
         self._ignored_issues: dict[str, set[str]] = {}
         self._pending_revisions: dict[str, dict[str, Any]] = {}
         self._pending_children: dict[str, MidiCandidate] = {}
+        self._pending_sample_replacements: dict[str, Any] = {}
         self._revision_history: list[dict[str, Any]] = []
         self._expected: dict[str, dict[str, Any]] = {}
         self._verifications: dict[str, dict[str, Any]] = {}
@@ -1302,6 +1304,82 @@ class StudioRuntime:
                 "candidate_id": candidate.candidate_id,
                 "receipt": receipt.to_dict(),
                 "sound_coverage": coverage,
+                "partial": receipt.status == "partially_applied",
+                "musical_quality_claimed": False,
+            }
+        finally:
+            self._apply_lock.release()
+
+    def sample_replacement_preview(
+        self, candidate_id: str, replacement_sample_path: str
+    ) -> dict[str, Any]:
+        """Read the current managed Kick and return an inert replacement plan."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        snapshot, failure = self._coverage_snapshot()
+        if snapshot is None:
+            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        expected_name = managed_track_name(
+            f"KIHACHI Kick {candidate.candidate_id[:8]}"
+        )
+        track = next((item for item in snapshot.tracks if item.name == expected_name), None)
+        if track is None:
+            return {"ok": False, "error": "この候補のKIHACHI Kickトラックがありません"}
+        try:
+            summary = self._coverage_inspector.drum_rack_summary(track.index)
+        except (LiveTransportError, LiveVersionUnsupportedError) as exc:
+            return {"ok": False, "error": f"Kickの現在状態を取得できません: {exc}"}
+        pads = [
+            pad
+            for device in summary.get("devices") or []
+            for pad in device.get("occupied_pads") or []
+            if int(pad.get("note") or 0) == 36
+        ]
+        current_path = str(pads[0].get("sample_path") or "") if len(pads) == 1 else ""
+        plan = create_sample_replacement_plan(
+            snapshot,
+            track_index=track.index,
+            note=36,
+            current_sample_path=current_path,
+            replacement_sample_path=replacement_sample_path,
+        )
+        if plan.status == "blocked":
+            return {
+                "ok": False,
+                "error": plan.conflicts[0].detail if plan.conflicts else "差し替えできません",
+                "plan": plan.to_dict(),
+            }
+        self._pending_sample_replacements[plan.plan_hash] = plan
+        return {
+            "ok": True,
+            "replacement_id": plan.plan_hash,
+            "current_sample_path": current_path,
+            "replacement_sample_path": replacement_sample_path,
+            "plan": plan.to_dict(),
+            "applied_to_live": False,
+        }
+
+    def apply_sample_replacement(
+        self, replacement_id: str, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Execute exactly one previously previewed sample replacement."""
+        if not confirmed:
+            return {"ok": False, "error": "差し替え内容を確認してから実行してください"}
+        plan = self._pending_sample_replacements.pop(replacement_id, None)
+        if plan is None:
+            return {"ok": False, "error": "差し替え計画がありません。もう一度確認してください"}
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message}
+            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            return {
+                "ok": receipt.status == "verified",
+                "receipt": receipt.to_dict(),
                 "partial": receipt.status == "partially_applied",
                 "musical_quality_claimed": False,
             }

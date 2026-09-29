@@ -60,6 +60,54 @@ def test_candidate_audio_preview_is_read_only(studio) -> None:
     assert missing == 404 and body["ok"] is False
 
 
+def test_sample_replacement_http_requires_preview_and_confirmation(tmp_path: Path) -> None:
+    runtime, live = _studio(tmp_path)
+    catalog = SampleCatalog(tmp_path / "sample-catalog")
+    source = tmp_path / "samples"
+    source.mkdir()
+    replacement = source / "Heavy Kick.wav"
+    replacement.write_bytes(b"RIFFheavy")
+    catalog.index(str(source))
+    sample_id = catalog.search("kick")["results"][0]["sample_id"]
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    assert runtime.apply(candidate_id, confirmed=True)["ok"] is True
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=catalog,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        _status, preview = _call(
+            port, "POST", "/api/samples/replace-preview", {"sample_id": sample_id}
+        )
+        assert preview["ok"] is True and preview["applied_to_live"] is False
+        kick = next(track for track in live.tracks if "Kick" in track["name"])
+        assert kick["occupied_pads"][0]["sample_path"] != str(replacement)
+        _status, refused = _call(
+            port,
+            "POST",
+            "/api/samples/replace",
+            {"replacement_id": preview["replacement_id"], "confirmed": False},
+        )
+        assert refused["ok"] is False
+        _status, applied = _call(
+            port,
+            "POST",
+            "/api/samples/replace",
+            {"replacement_id": preview["replacement_id"], "confirmed": True},
+        )
+        assert applied["ok"] is True
+        assert kick["occupied_pads"][0]["sample_path"] == str(replacement)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
 def test_full_studio_flow_over_http(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]

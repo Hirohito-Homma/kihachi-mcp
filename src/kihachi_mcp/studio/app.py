@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
 from kihachi_mcp.services.live_paths import candidate_store_dir
+from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
 from kihachi_mcp.services.sample_catalog import SampleCatalog
@@ -273,6 +274,29 @@ def _handler_for(app: StudioApp):
             ):
                 return
             body = self._read_json()
+            if parsed.path == "/api/samples/replace-preview":
+                try:
+                    sample_path = app.sample_catalog.audio_path(
+                        str(body.get("sample_id") or "")
+                    )
+                except ReferenceError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                self._send_json(
+                    runtime.sample_replacement_preview(
+                        str(body.get("candidate_id") or runtime.selected_id()),
+                        str(sample_path),
+                    )
+                )
+                return
+            if parsed.path == "/api/samples/replace":
+                self._send_json(
+                    runtime.apply_sample_replacement(
+                        str(body.get("replacement_id") or ""),
+                        confirmed=body.get("confirmed") is True,
+                    )
+                )
+                return
             if _workflow_post(self, runtime, parsed, body):
                 return
             if parsed.path == "/api/materialize":

@@ -275,12 +275,12 @@ def _digest(candidate, parts) -> str:
 
 
 def test_new_parts_leave_the_original_four_note_for_note() -> None:
-    """Digests retaken when the song gained its Break and second Drop."""
+    """Stable notes under the current genre harmony and mode rules."""
     candidate = build_candidate(_brief(), seed=5)
-    assert _digest(candidate, ["Kick"]) == "736ae1d6d4ad9349"
-    assert _digest(candidate, ["Hats", "Snare", "OpenHat"]) == "3a18de034441f1e5"
-    assert _digest(candidate, ["Bass"]) == "85eb376ee4a0b14e"
-    assert _digest(candidate, ["Stab"]) == "4b37f36f71950fc8"
+    assert _digest(candidate, ["Kick"]) == "85804191d10c43be"
+    assert _digest(candidate, ["Hats", "Snare", "OpenHat"]) == "3017d663247297e2"
+    assert _digest(candidate, ["Bass"]) == "5f0b1594a7d05274"
+    assert _digest(candidate, ["Stab"]) == "4f19da2cd56f39aa"
     snare = {pitch for _beat, pitch, _velocity in _part_notes(candidate, "Snare")}
     assert snare <= SNARE_PITCHES
 
@@ -405,3 +405,27 @@ def test_sections_for_a_64_bar_song_with_or_without_a_drop_bar() -> None:
         assert sections[0].start_bar == 1 and sections[-1].end_bar == bars
         for before, after in pairwise(sections):
             assert after.start_bar == before.end_bar + 1
+
+
+def test_pop_and_liquid_arrangements_have_distinct_sections_and_honor_drop() -> None:
+    from kihachi_mcp.services.studio_interpreter import build_sections
+
+    def shape(genre):
+        return [(s.name, s.start_bar, s.length_bars) for s in build_sections(64, 0, genre)]
+
+    assert shape("j_pop") == [
+        ("Intro", 1, 4), ("VerseA", 5, 12), ("ChorusA", 17, 16),
+        ("VerseB", 33, 8), ("Break", 41, 4),
+        ("ChorusB", 45, 16), ("Outro", 61, 4),
+    ]
+    assert shape("liquid_drum_bass") == [
+        ("Intro", 1, 8), ("VerseA", 9, 8), ("Build", 17, 8),
+        ("Drop", 25, 16), ("Break", 41, 8),
+        ("Drop", 49, 8), ("Outro", 57, 8),
+    ]
+    for genre in ("j_pop", "liquid_drum_bass"):
+        assert build_sections(64, 33, genre) == build_sections(64, 33)
+        for bars in (32, 48, 96):
+            sections = build_sections(bars, 0, genre)
+            assert sections[0].start_bar == 1 and sections[-1].end_bar == bars
+            assert all(b.start_bar == a.end_bar + 1 for a, b in pairwise(sections))

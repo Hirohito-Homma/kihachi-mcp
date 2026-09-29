@@ -1,7 +1,10 @@
-"""Local AI providers. Music services talk to this interface, not to Ollama URLs."""
+"""AI providers. Music services talk to this interface, not vendor URLs."""
 
 from __future__ import annotations
 
+import json
+import os
+from http.client import HTTPSConnection
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -162,11 +165,128 @@ class DeterministicProvider:
         return interpret_brief_offline(brief)
 
 
-def provider_from_settings(settings: dict[str, Any]) -> OllamaProvider | DeterministicProvider:
-    """Build the configured provider. Cloud providers are not enabled."""
+class OpenAIProvider:
+    """Explicitly selected paid provider. The API key stays in the environment."""
+
+    ALLOWED_MODELS = ("gpt-6.1-sol", "gpt-6-astra")
+
+    def __init__(self, model: str = "gpt-6.1-sol", timeout: float = 180.0) -> None:
+        if model not in self.ALLOWED_MODELS:
+            raise ValueError("OpenAIモデルは Sol または Astra を選んでください")
+        self.model = model
+        self._timeout = timeout
+        self.last_usage: dict[str, int] = {}
+
+    def health(self) -> dict[str, Any]:
+        configured = bool(os.environ.get("OPENAI_API_KEY"))
+        return {
+            "ok": configured,
+            "state": "ready" if configured else "api_key_missing",
+            "provider": "openai",
+            "model": self.model,
+            "installed_models": list(self.ALLOWED_MODELS),
+            "message": "OpenAI APIを利用できます" if configured else "OPENAI_API_KEYが設定されていません",
+        }
+
+    def list_models(self) -> list[str]:
+        return list(self.ALLOWED_MODELS)
+
+    def generate(self, prompt: str) -> str:
+        data = self._request({
+            "model": self.model,
+            "input": prompt,
+            "max_output_tokens": 1_000,
+            "store": False,
+        })
+        return _response_text(data)
+
+    def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        data = self._request({
+            "model": self.model,
+            "input": prompt,
+            "max_output_tokens": 1_000,
+            "store": False,
+            "text": {"format": {"type": "json_schema", "name": "kihachi_result", "strict": True, "schema": schema}},
+        })
+        parsed = parse_model_json(_response_text(data))
+        if not isinstance(parsed, dict):
+            raise InterpretationError("AI応答のJSONがオブジェクトではありません")
+        return parsed
+
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "provider": "openai",
+            "structured_output": True,
+            "downloads_models": False,
+            "paid_api": True,
+            "explicit_selection_required": True,
+        }
+
+    def interpret(self, brief: str) -> ProductionBrief:
+        from kihachi_mcp.services.studio_interpreter import (
+            assemble_brief,
+            extract_explicit,
+        )
+
+        prompt = (
+            "Translate this Japanese music brief into the supplied schema. Preserve explicit tempo, key, bars and drop bar. "
+            "Defaults: tech_house, 125, Dm, 96. Do not invent Ableton operations.\n\n"
+            + brief
+        )
+        intent = self.generate_structured(prompt, STUDIO_SCHEMA)
+        return assemble_brief(extract_explicit(brief), intent, model=self.model)
+
+    def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise InterpretationError("OPENAI_API_KEYが設定されていません")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        connection = HTTPSConnection("api.openai.com", timeout=self._timeout)
+        try:
+            connection.request("POST", "/v1/responses", body, {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            })
+            response = connection.getresponse()
+            raw = response.read()
+        except OSError as exc:
+            raise InterpretationError("OpenAI APIに接続できません") from exc
+        finally:
+            connection.close()
+        if response.status >= 400:
+            raise InterpretationError(f"OpenAI APIが応答を拒否しました (HTTP {response.status})")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise InterpretationError("OpenAI APIの応答を読めません") from exc
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(usage, dict):
+            self.last_usage = {
+                "input_tokens": int(usage.get("input_tokens") or 0),
+                "output_tokens": int(usage.get("output_tokens") or 0),
+            }
+        return data
+
+
+def _response_text(data: dict[str, Any]) -> str:
+    direct = data.get("output_text")
+    if isinstance(direct, str):
+        return direct
+    for item in data.get("output") or []:
+        for content in item.get("content") or []:
+            text = content.get("text")
+            if isinstance(text, str):
+                return text
+    raise InterpretationError("OpenAI APIの応答にテキストがありません")
+
+
+def provider_from_settings(settings: dict[str, Any]) -> OllamaProvider | DeterministicProvider | OpenAIProvider:
+    """Build only the provider explicitly selected in Studio settings."""
     name = str(settings.get("ai_provider") or "ollama")
     if name == "deterministic":
         return DeterministicProvider()
+    if name == "openai":
+        return OpenAIProvider(model=str(settings.get("openai_model") or "gpt-6.1-sol"))
     return OllamaProvider(
         url=str(settings.get("ollama_url") or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"),
         model=str(settings.get("ollama_model") or DEFAULT_MODEL),

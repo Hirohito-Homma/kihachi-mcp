@@ -30,6 +30,7 @@ from kihachi_mcp.models.live_receipt import LiveExecutionReceipt
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.services.arrangement_expander import ArrangementExpander
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
+from kihachi_mcp.services.live_capabilities import discover_capabilities
 from kihachi_mcp.services.live_device_catalog import catalogue
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_mutation_planner import LiveMutationPlanner
@@ -86,6 +87,11 @@ def live_device_catalogue() -> dict[str, Any]:
             "check is the device list read back from the running Live instance."
         ),
     }
+
+
+def discover_live_capabilities() -> dict[str, Any]:
+    """Return the read-only Live capability matrix exposed to AI clients."""
+    return discover_capabilities(_session.inspector.health())
 
 
 def inspect_live_state() -> dict[str, Any]:

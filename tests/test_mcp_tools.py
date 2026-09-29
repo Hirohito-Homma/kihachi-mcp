@@ -2,6 +2,7 @@ from kihachi_mcp.tools import (
     create_ableton_plan,
     create_live_mutation_plan,
     create_project_from_songspec,
+    discover_live_capabilities,
     execute_live_request,
     generate_songspec,
     hello,
@@ -126,6 +127,13 @@ def test_inspect_live_state_reports_unconfigured_transport() -> None:
 
     assert result["health"]["connected"] is False
     assert result["snapshot"] is None
+
+
+def test_live_capabilities_hide_unavailable_actions() -> None:
+    result = discover_live_capabilities()
+    assert result["connected"] is False
+    assert result["executable_capability_ids"] == []
+    assert any(row["id"] == "warp" and row["status"] == "unsupported" for row in result["capabilities"])
 
 
 def test_live_device_catalogue_excludes_external_plugins() -> None:

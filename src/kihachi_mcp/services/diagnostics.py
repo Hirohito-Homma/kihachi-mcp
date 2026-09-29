@@ -35,6 +35,8 @@ def default_settings() -> dict[str, Any]:
         "ai_provider": os.environ.get("KIHACHI_AI_PROVIDER", "ollama"),
         "ollama_url": os.environ.get("KIHACHI_OLLAMA_URL", "http://127.0.0.1:11434"),
         "ollama_model": os.environ.get("KIHACHI_OLLAMA_MODEL", DEFAULT_MODEL),
+        "openai_model": os.environ.get("KIHACHI_OPENAI_MODEL", "gpt-6.1-sol"),
+        "monthly_ai_limit_jpy": int(os.environ.get("KIHACHI_MONTHLY_AI_LIMIT_JPY", "500")),
         "ableton_host": "127.0.0.1",
         "ableton_port": int(os.environ.get("KIHACHI_LIVE_BRIDGE_PORT", DEFAULT_DEVICE_PORT)),
         "abletongpt_port": int(os.environ.get("KIHACHI_ABLETONGPT_PORT", "9877")),

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import replace
 from random import Random
@@ -173,7 +174,9 @@ def build_candidate(
     # Generation order fixes each part's random draws: new parts come last so
     # the original four keep the notes they always had.
     parts = (
-        (*STUDIO_PARTS, "Lead") if str(brief.genre.value) == "mutation_funk" else STUDIO_PARTS
+        (*STUDIO_PARTS, "Lead")
+        if str(brief.genre.value) == "mutation_funk" or _lead_requested(brief.original_text)
+        else STUDIO_PARTS
     )
     song: dict[str, list[MidiNote]] = {}
     for part in (*parts, *_GENERATED_EXTRAS):
@@ -220,15 +223,31 @@ def seed_from_brief(text: str) -> int:
 
 
 def _is_minor_brief(brief: ProductionBrief) -> bool:
-    mode = _mode_of(brief)
-    if mode is not None:
-        return mode in MINOR_MODES
+    stated = mode_from_text(brief.original_text)
+    if stated:
+        return stated in MINOR_MODES
     return is_minor(str(brief.key.value)) or str(brief.mood.value) in {"暗い", "ダーク"}
 
 
+#: Genre modes that colour a key of either quality, as hijaz does.
+_ANY_KEY_MODES = frozenset({"phrygian_dominant"})
+
+
 def _mode_of(brief: ProductionBrief) -> str | None:
-    """The mode the brief names, else the genre's own, else none stated."""
-    return mode_from_text(brief.original_text) or profile_for(str(brief.genre.value)).mode
+    """The mode the brief names, else the genre's own, else none.
+
+    A genre's mode only replaces a key of its own quality: funk's dorian
+    colours a minor key and leaves a major one major.
+    """
+    stated = mode_from_text(brief.original_text)
+    if stated:
+        return stated
+    mode = profile_for(str(brief.genre.value)).mode
+    if not mode:
+        return None
+    if mode in _ANY_KEY_MODES or (mode in MINOR_MODES) == _is_minor_brief(brief):
+        return mode
+    return None
 
 
 def _genre_plays(part: str, brief: ProductionBrief) -> bool:
@@ -241,6 +260,13 @@ def _genre_plays(part: str, brief: ProductionBrief) -> bool:
         return True
     text = brief.original_text.lower()
     return any(word in text for word in _PART_WORDS[part])
+
+
+def _lead_requested(text: str) -> bool:
+    lowered = text.lower()
+    return "リード" in lowered or "メロディ" in lowered or bool(
+        re.search(r"\b(?:lead|melody)\b", lowered)
+    )
 
 
 def _resolve_seed(text: str, seed: int | None) -> int:
@@ -995,7 +1021,14 @@ def _stab_notes(plan: _SongPlan) -> list[MidiNote]:
 def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
     """A chord-tone hook with short scale passing notes in the upper register."""
     tonic = root_pitch(str(plan.brief.key.value), octave_offset=3)
-    motifs = ((0, 2, 4, 2), (2, 4, 2, 0), (4, 2, 0, 2))
+    style = plan.profile.harmony
+    motifs = (
+        ((0, 2, 4, 5, 4), (2, 4, 5, 4, 2), (4, 2, 0, 2, 4))
+        if style == "j_pop"
+        else ((4, 2, 0, 2), (2, 0, 4, 2), (0, 4, 2, 0))
+        if style == "dnb"
+        else ((0, 2, 4, 2), (2, 4, 2, 0), (4, 2, 0, 2))
+    )
     phrase_motifs: dict[tuple[str, int], tuple[int, ...]] = {}
     notes: list[MidiNote] = []
     for number in range(1, plan.bars + 1):
@@ -1020,6 +1053,16 @@ def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
             offsets = (1.5, 3.0)
         else:
             offsets = (0.5, 2.0, 3.5)
+        if style == "j_pop":
+            if bar.section in {"ChorusA", "ChorusB", "Drop"}:
+                offsets = (0.0, 0.75, 1.5, 2.5, 3.25)
+            elif bar.section in {"VerseA", "VerseB"} and offsets:
+                offsets = (0.0, 2.0) if bar.in_section % 2 == 0 else (1.5, 3.0)
+        elif style == "dnb":
+            if bar.section in {"ChorusA", "ChorusB", "Drop"}:
+                offsets = (0.5, 1.25, 2.5, 3.25)
+            elif bar.section in {"VerseA", "VerseB"} and offsets:
+                offsets = (0.5, 2.5) if bar.in_section % 2 == 0 else (1.25, 3.25)
         key = (bar.section, bar.phrase)
         if key not in phrase_motifs:
             phrase_motifs[key] = plan.rng.choice(motifs)
@@ -1034,6 +1077,9 @@ def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
             passing = index == len(offsets) - 1 and bar.in_section % 2 == 1
             if passing:
                 steps += 1
+            if style in {"j_pop", "dnb"} and bar.phrase_end and index == len(offsets) - 1:
+                steps = 0  # end each eight-bar answer on the current chord root
+                passing = False
             pitch = plan.melody_pitch(tonic, chord, steps)
             if pitch > 96:
                 pitch -= 12
@@ -1041,7 +1087,7 @@ def _lead_notes(plan: _SongPlan) -> list[MidiNote]:
                 MidiNote(
                     pitch,
                     plan.at(bar, offset),
-                    0.18 if passing else 0.32,
+                    0.18 if passing else 0.55 if style == "j_pop" else 0.32,
                     plan.velocity(69 if passing else 88, 4),
                 )
             )
@@ -1140,6 +1186,17 @@ def _pad_chord(tonic: int, chord: Chord) -> tuple[int, ...]:
         seventh += 12
     if seventh - triad[0] > 18:
         seventh -= 12
+    if seventh in triad:
+        candidates = (
+            tonic + chord.root + tone + octave
+            for tone in (*voices, 12)
+            for octave in (-12, 0, 12)
+        )
+        seventh = min(
+            (pitch for pitch in candidates if pitch not in triad and
+             triad[0] <= pitch <= triad[0] + 18),
+            key=lambda pitch: (abs(pitch - triad[-1]), pitch),
+        )
     return tuple(sorted({*triad, seventh}))
 
 
@@ -1152,6 +1209,7 @@ def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
     tonic = root_pitch(str(plan.brief.key.value), octave_offset=2)
     notes: list[MidiNote] = []
     orders: dict[tuple[str, int], tuple[int, ...]] = {}
+    harmony = plan.profile.harmony
     for number in range(1, plan.bars + 1):
         bar = plan.bar(number)
         rising = 0.0
@@ -1161,7 +1219,7 @@ def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
                 continue
             step, rising = 0.25, position_in / max(1, len(plan.breakdown) - 1)
         elif bar.section in _PEAK_SECTIONS or bar.section == "Build":
-            step = 0.25
+            step = 0.5 if harmony in {"j_pop", "dnb"} else 0.25
         elif bar.section == "VerseB" or (bar.section == "Break" and bar.left_in_section < 2):
             step = 0.5
         else:
@@ -1175,6 +1233,8 @@ def _arp_notes(plan: _SongPlan) -> list[MidiNote]:
         tones = [tonic + lift + chord.root + tone for tone in (*chord.triad(), 12)]
         count = int(plan.beats / step)
         for index in range(count):
+            if harmony == "dnb" and index % 4 == 0:
+                continue  # room for the two-step kick; keep the offbeat reply
             base = 84 if index % 4 == 0 else 60
             if rising:
                 base = round(base * (0.6 + 0.4 * rising))

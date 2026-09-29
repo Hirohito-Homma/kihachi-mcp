@@ -212,8 +212,9 @@ HARMONY_STYLES: dict[str, dict[str, tuple[tuple[str, ...], ...]]] = {
         "minor": (("i", "bVI", "i", "v"), ("i", "bII", "i", "bVI"), ("i", "i", "bVI", "bVII")),
         "major": (("vi", "IV", "vi", "V"),),
     },
+    # Diatonic to the natural minor: techno's colour is the loop, not the chord.
     "techno": {
-        "minor": (("i", "i", "bVI", "bVII"), ("i", "bII", "i", "i"), ("i", "iv", "i", "bVI")),
+        "minor": (("i", "i", "bVI", "bVII"), ("i", "iv", "i", "bVI"), ("i", "bVII", "bVI", "bVII")),
         "major": (("I", "I", "IV", "I"),),
     },
     "edm": {
@@ -224,6 +225,11 @@ HARMONY_STYLES: dict[str, dict[str, tuple[tuple[str, ...], ...]]] = {
     "latin": {
         "minor": (("i", "bVII", "bVI", "V7"), ("i", "iv", "V7", "i")),
         "major": (("I", "IV", "V7", "I"),),
+    },
+    # The twelve-bar blues, four bars at a time.
+    "blues": {
+        "minor": (("i7", "iv7", "i7", "v7"), ("i7", "i7", "iv7", "i7")),
+        "major": (("I7", "IV7", "I7", "V7"), ("I7", "I7", "IV7", "I7")),
     },
     "reggae": {
         "minor": (("i", "bVII"), ("i", "iv")),

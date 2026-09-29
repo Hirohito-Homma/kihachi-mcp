@@ -1,0 +1,6 @@
+"""Entrypoint for the self-contained macOS Studio bundle."""
+
+from kihachi_mcp.studio.__main__ import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

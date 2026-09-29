@@ -4,10 +4,12 @@ from kihachi_mcp.tools.ableton import (
     prepare_ableton_handoff,
 )
 from kihachi_mcp.tools.brain import generate_songspec
+from kihachi_mcp.tools.composer import compose_midi_part
 from kihachi_mcp.tools.hello import hello
 from kihachi_mcp.tools.live import (
     configure_live_transport,
     create_live_mutation_plan,
+    discover_live_capabilities,
     execute_live_request,
     expand_session_to_arrangement,
     inspect_live_state,
@@ -21,11 +23,13 @@ from kihachi_mcp.tools.project_builder import create_project_from_songspec
 from kihachi_mcp.tools.review import review_songspec
 
 __all__ = [
+    "compose_midi_part",
     "configure_live_transport",
     "create_ableton_plan",
     "create_live_mutation_plan",
     "create_midi_plan",
     "create_project_from_songspec",
+    "discover_live_capabilities",
     "execute_live_request",
     "expand_session_to_arrangement",
     "generate_songspec",

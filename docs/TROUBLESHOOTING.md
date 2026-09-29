@@ -4,11 +4,13 @@
 
 | 症状 | 原因 | 対処 |
 | --- | --- | --- |
+| 画面は開くが「Studioのサーバーに接続できません」 | アドレスが `file:///.../index.html` でHTMLだけを直接開いている | `http://127.0.0.1:8765/` を開く。起動していなければ `scripts/kihachi-studio.command` を実行する |
 | `Ollama: OFFLINE` | Ollama が起動していない / URL が違う | `ollama serve`。URL は「システム → AI」か `KIHACHI_OLLAMA_URL`。既定解釈でも制作は続けられます |
 | `Model OFFLINE` / 保存できない | モデルが未導入 | `ollama list` にあるモデルだけ選べます。KIHACHI はダウンロードしません（[OLLAMA_SETUP.md](OLLAMA_SETUP.md)） |
 | 生成に1分近くかかる | ローカルモデルの推論時間 | 正常です（Intel i9 で約50〜60秒）。「キャンセル」で止められます |
 | 「AIの応答が2回とも使えなかった」 | モデルの JSON が崩れた | 明示値と既定値で作られています。別モデルを試すか、そのまま使えます |
 | `Live: OFFLINE` | デバイス未配置 / 返信ポート 17772 を別プロセスが使用 | Live にデバイスを置く。Cursor の MCP サーバーが 17772 を掴んでいれば止める |
+| `Live: OFFLINE — session token rejected` | 複数のStudioを起動した後などに、稼働中のStudioとMaxデバイスが異なる認証トークンを参照している | 生成ジョブが終わっていることを確認し、Studioを1つだけ再起動する。画面を再読み込みし、LiveがREADYになったことを確認する。LiveのSetは変更しない |
 | デバイス版が一致しない | Max 側の JS が古い | `maxforlive/kihachi.device.js` を更新し、Max で `reload` |
 | `AbletonGPT: WARNING`（応答しません） | Remote Script はつながるが Live のメインスレッドが応答しない | Live のダイアログ（保存確認・環境設定など）を閉じる。キット読み込み以外の制作には影響しません |
 | 「まだ承認されていません」 | 承認前に送信しようとした | 「この候補を承認」→「適用内容を確認」 |

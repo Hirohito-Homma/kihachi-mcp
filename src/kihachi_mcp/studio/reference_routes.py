@@ -30,8 +30,12 @@ def handle_get(handler, library, parsed, sources, sample_catalog=None) -> bool:
         elif parsed.path == "/api/references/sample-catalog/status" and sample_catalog:
             result = sample_catalog.status()
         elif parsed.path == "/api/references/sample-catalog/search" and sample_catalog:
+            tempo_text = query.get("tempo", [""])[0]
             result = sample_catalog.search(
-                query.get("role", ["all"])[0], query.get("query", [""])[0]
+                query.get("role", ["all"])[0],
+                query.get("query", [""])[0],
+                tempo=float(tempo_text) if tempo_text else None,
+                key=query.get("key", [""])[0],
             )
         elif parsed.path == "/api/references/genres":
             result = {

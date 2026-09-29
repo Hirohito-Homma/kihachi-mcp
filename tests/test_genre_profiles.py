@@ -216,6 +216,39 @@ def test_mutation_funk_has_two_verses_break_two_choruses_and_lead() -> None:
     )
 
 
+def test_explicit_lead_request_is_honored_outside_mutation_funk() -> None:
+    plain = _candidate("J-Pop、64小節", seed=3)
+    requested = _candidate("J-Pop、64小節、歌うようなリード", seed=3)
+    assert "Lead" not in plain.parts
+    assert requested.clips_for_part("Lead")
+    assert len(requested.clips_for_part("Arp")) == len(plain.clips_for_part("Arp"))
+
+
+def test_genre_arp_density_varies_without_changing_the_requested_lead() -> None:
+    house = _candidate("テックハウス、64小節、リード", seed=3)
+    liquid = _candidate("Liquid Drum & Bass、64小節、リード", seed=3)
+    pop = _candidate("J-Pop、64小節、リード", seed=3)
+    counts = {
+        name: sum(len(clip.notes) for clip in candidate.clips_for_part("Arp"))
+        for name, candidate in (("house", house), ("liquid", liquid), ("pop", pop))
+    }
+    assert counts["liquid"] < counts["pop"] < counts["house"]
+    assert all(candidate.clips_for_part("Lead") for candidate in (house, liquid, pop))
+
+
+def test_requested_lead_uses_distinct_pop_and_dnb_phrase_rhythms() -> None:
+    pop = _candidate("J-Pop、64小節、歌うようなリード", seed=3)
+    liquid = _candidate("Liquid Drum & Bass、64小節、歌うようなリード", seed=3)
+    pop_notes = _notes_in(pop, "Lead", _drop_bars(pop))
+    liquid_notes = _notes_in(liquid, "Lead", _drop_bars(liquid))
+    assert {offset for _bar, offset, *_ in pop_notes} != {
+        offset for _bar, offset, *_ in liquid_notes
+    }
+    assert len(pop_notes) > len(liquid_notes)
+    assert any(offset == 0.0 for _bar, offset, *_ in pop_notes)
+    assert all(offset != 0.0 for _bar, offset, *_ in liquid_notes)
+
+
 def test_mutation_funk_uses_a_longer_kick_without_replacing_the_legacy_one() -> None:
     original = sample_path_for_note(36)
     deep = sample_path_for_note(36, genre="mutation_funk")

@@ -473,6 +473,24 @@ def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[Sec
             cursor += length
         return tuple(sections)
 
+    if genre == "j_pop" and bars >= 32:
+        # Verse/chorus form, with the second chorus providing the late peak.
+        unit, remainder = divmod(bars, 16)
+        return _contiguous([
+            ("Intro", unit), ("VerseA", unit * 3), ("ChorusA", unit * 4),
+            ("VerseB", unit * 2), ("Break", unit),
+            ("ChorusB", unit * 4 + remainder), ("Outro", unit),
+        ])
+
+    if genre == "liquid_drum_bass" and bars >= 32:
+        # A restrained verse delays the first drop; the reprise is shorter.
+        eighth, remainder = divmod(bars, 8)
+        return _contiguous([
+            ("Intro", eighth), ("VerseA", eighth), ("Build", eighth),
+            ("Drop", eighth * 2), ("Break", eighth),
+            ("Drop", eighth + remainder), ("Outro", eighth),
+        ])
+
     if bars >= 32:
         # Eighths: Intro, Build, Drop x2, Break, Drop x2, Outro.
         eighth = bars // 8

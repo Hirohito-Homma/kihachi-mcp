@@ -89,9 +89,29 @@ def test_indexes_extended_categories_without_inventing_values(tmp_path: Path) ->
     assert catalog.search("loop")["results"][0]["sample_kind"] == "loop"
 
 
+def test_drum_search_excludes_loops_and_requires_query_match(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _silent_wav(source / "Kick Loop Heavy 124 BPM.wav")
+    _silent_wav(source / "Heavy Kick one-shot.wav")
+    _silent_wav(source / "Bright Kick 124 BPM.wav")
+    catalog = SampleCatalog(tmp_path / "catalog")
+    catalog.index(str(source))
+
+    result = catalog.search("kick", "重い", tempo=124)
+
+    assert [item["name"] for item in result["results"]] == [
+        "Heavy Kick one-shot.wav"
+    ]
+
+
 def test_existing_filename_catalog_is_migrated_in_place(tmp_path: Path) -> None:
     directory = tmp_path / "catalog"
     directory.mkdir()
+    source = tmp_path / "source"
+    source.mkdir()
+    sample = source / "Dark Kick 124 BPM D# minor one-shot.wav"
+    _silent_wav(sample)
     database = directory / "sample_catalog.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.executescript("""
@@ -101,6 +121,11 @@ def test_existing_filename_catalog_is_migrated_in_place(tmp_path: Path) -> None:
                 role TEXT NOT NULL, bytes INTEGER NOT NULL
             );
         """)
+        connection.execute("INSERT INTO settings VALUES ('root', ?)", (str(source),))
+        connection.execute(
+            "INSERT INTO files VALUES (?, ?, 'kick', ?)",
+            (sample.name, sample.name, sample.stat().st_size),
+        )
     catalog = SampleCatalog(directory)
 
     status = catalog.status()
@@ -109,3 +134,10 @@ def test_existing_filename_catalog_is_migrated_in_place(tmp_path: Path) -> None:
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(files)")}
     assert {"sample_id", "bpm", "musical_key", "duration", "tags"} <= columns
+    result = catalog.search("kick", tempo=124, key="D# minor")["results"][0]
+    assert result["sample_id"]
+    assert result["bpm"] == 124
+    assert result["key"] == "D# minor"
+    assert result["sample_kind"] == "one_shot"
+    assert result["duration"] is None
+    assert catalog.audio_path(result["sample_id"]) == sample

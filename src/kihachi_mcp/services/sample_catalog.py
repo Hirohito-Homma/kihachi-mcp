@@ -127,7 +127,43 @@ class SampleCatalog:
             if name not in columns:
                 db.execute(f"ALTER TABLE files ADD COLUMN {name} {sql_type}")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS files_sample_id ON files(sample_id)")
+        self._backfill_filename_metadata(db)
         return db
+
+    @staticmethod
+    def _backfill_filename_metadata(db: sqlite3.Connection) -> None:
+        """Upgrade old filename-only indexes without reading or copying audio."""
+        root_row = db.execute(
+            "SELECT value FROM settings WHERE key='root'"
+        ).fetchone()
+        if not root_row:
+            return
+        root = Path(root_row[0])
+        rows = db.execute(
+            """SELECT relative_path, bpm, musical_key, sample_kind, tags
+               FROM files WHERE sample_id IS NULL"""
+        ).fetchall()
+        if not rows:
+            return
+        updates = []
+        for row in rows:
+            bpm, musical_key, tags = _filename_metadata(row["relative_path"])
+            updates.append(
+                (
+                    _sample_id(root, row["relative_path"]),
+                    row["bpm"] if row["bpm"] is not None else bpm,
+                    row["musical_key"] or musical_key,
+                    row["sample_kind"] or _kind(row["relative_path"]),
+                    row["tags"] or " ".join(tags),
+                    row["relative_path"],
+                )
+            )
+        with db:
+            db.executemany(
+                """UPDATE files SET sample_id=?, bpm=?, musical_key=?,
+                   sample_kind=?, tags=? WHERE relative_path=?""",
+                updates,
+            )
 
     def status(self) -> dict:
         with closing(self._connect()) as db:
@@ -267,6 +303,8 @@ class SampleCatalog:
         if role != "all":
             conditions.append("role=?")
             params.append(role)
+        if role in {"kick", "hat", "snare", "clap", "percussion"}:
+            conditions.append("(sample_kind IS NULL OR sample_kind != 'loop')")
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with closing(self._connect()) as db:
             rows = db.execute(
@@ -282,9 +320,12 @@ class SampleCatalog:
                 terms.update(synonyms)
         requested_key = key.strip().lower()
 
-        def score(row) -> tuple[float, str]:
+        def lexical_score(row) -> float:
             haystack = f"{row['relative_path']} {row['tags']}".lower()
-            value = sum(2.0 for term in terms if term in haystack)
+            return sum(2.0 for term in terms if term in haystack)
+
+        def score(row) -> tuple[float, str]:
+            value = lexical_score(row)
             if tempo is not None and row["bpm"] is not None:
                 value += max(0.0, 4.0 - abs(float(row["bpm"]) - float(tempo)) / 2)
             if requested_key and row["musical_key"]:
@@ -295,7 +336,7 @@ class SampleCatalog:
         if query_lower and not terms:
             ranked = []
         elif terms:
-            ranked = [row for row in ranked if score(row)[0] > 0]
+            ranked = [row for row in ranked if lexical_score(row) > 0]
         count = len(ranked)
         ranked = ranked[:limit]
         return {

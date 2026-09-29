@@ -511,6 +511,14 @@ function checkPreconditions(operation) {
                 );
             }
         }
+        if (kind === "drum_pad_sample_path") {
+            var expectedRack = findDrumRack(args.track_index);
+            var expectedPad = expectedRack ? findDrumPad(expectedRack.path, args.note) : null;
+            var observedPath = expectedPad ? drumPadSamplePath(expectedRack.path, expectedPad.index) : "";
+            if (observedPath !== String(args.sample_path || "")) {
+                refuse("drum pad " + args.note + " sample changed after preview");
+            }
+        }
     }
 }
 
@@ -579,6 +587,9 @@ function applyOperation(operation) {
     }
     if (op === "load_drum_pad_sample") {
         return loadDrumPadSample(target, args);
+    }
+    if (op === "replace_drum_pad_sample") {
+        return replaceDrumPadSample(target, args);
     }
     if (op === "set_device_parameter") {
         return setDeviceParameter(target, args);
@@ -856,6 +867,40 @@ function loadDrumPadSample(target, args) {
     );
     simpler.call("replace_sample", samplePath);
     return drumPadReadback(target.track_index, rack.index, note, false);
+}
+
+function replaceDrumPadSample(target, args) {
+    if (!supportsReplaceSample()) {
+        refuse("automatic sample replacement requires Ableton Live 12.4 or newer");
+    }
+    var note = Number(args.note);
+    var samplePath = String(args.sample_path || "");
+    var rack = findDrumRack(target.track_index);
+    var pad = rack ? findDrumPad(rack.path, note) : null;
+    if (!rack || !pad || countChildren(pad.api, "chains") !== 1) {
+        refuse("target Drum Rack pad must contain exactly one chain");
+    }
+    var chainPath = rack.path + " drum_pads " + pad.index + " chains 0";
+    var chain = liveApi(chainPath);
+    if (countChildren(chain, "devices") !== 1) {
+        refuse("target Drum Rack pad must contain exactly one device");
+    }
+    var simpler = liveApi(chainPath + " devices 0");
+    if (String(getProperty(simpler, "class_name") || "") !== "Simpler") {
+        refuse("target Drum Rack pad device is not Simpler");
+    }
+    simpler.call("replace_sample", samplePath);
+    return drumPadReadback(target.track_index, rack.index, note, false);
+}
+
+function drumPadSamplePath(rackPath, padIndex) {
+    var chainPath = rackPath + " drum_pads " + padIndex + " chains 0";
+    var chain = liveApi(chainPath);
+    if (countChildren(chain, "devices") !== 1) {
+        return "";
+    }
+    var sample = liveApi(chainPath + " devices 0 sample");
+    return String(getProperty(sample, "file_path") || "");
 }
 
 function findDrumRack(trackIndex) {

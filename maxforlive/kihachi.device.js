@@ -900,6 +900,15 @@ function drumPadSamplePath(rackPath, padIndex) {
     if (countChildren(chain, "devices") !== 1) {
         return "";
     }
+    var simpler = liveApi(chainPath + " devices 0");
+    var direct = String(
+        getProperty(simpler, "sample_file_path") ||
+        getProperty(simpler, "file_path") ||
+        ""
+    );
+    if (direct) {
+        return direct;
+    }
     var sample = liveApi(chainPath + " devices 0 sample");
     return String(getProperty(sample, "file_path") || "");
 }
@@ -942,11 +951,22 @@ function drumPadReadback(trackIndex, deviceIndex, note, alreadyOccupied) {
             " drum_pads " + pad.index + " chains 0"
         );
         if (countChildren(chain, "devices") > 0) {
-            var sample = liveApi(
+            var simpler = liveApi(
                 "live_set tracks " + trackIndex + " devices " + deviceIndex +
-                " drum_pads " + pad.index + " chains 0 devices 0 sample"
+                " drum_pads " + pad.index + " chains 0 devices 0"
             );
-            samplePath = String(getProperty(sample, "file_path") || "");
+            samplePath = String(
+                getProperty(simpler, "sample_file_path") ||
+                getProperty(simpler, "file_path") ||
+                ""
+            );
+            if (!samplePath) {
+                var sample = liveApi(
+                    "live_set tracks " + trackIndex + " devices " + deviceIndex +
+                    " drum_pads " + pad.index + " chains 0 devices 0 sample"
+                );
+                samplePath = String(getProperty(sample, "file_path") || "");
+            }
         }
     }
     return {

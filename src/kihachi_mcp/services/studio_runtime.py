@@ -1336,6 +1336,14 @@ class StudioRuntime:
             for pad in device.get("occupied_pads") or []
             if int(pad.get("note") or 0) == 36
         ]
+        observed_pads = [
+            {
+                "note": pad.get("note"),
+                "sample_path": pad.get("sample_path") or "",
+            }
+            for device in summary.get("devices") or []
+            for pad in device.get("occupied_pads") or []
+        ]
         current_path = str(pads[0].get("sample_path") or "") if len(pads) == 1 else ""
         plan = create_sample_replacement_plan(
             snapshot,
@@ -1349,6 +1357,7 @@ class StudioRuntime:
                 "ok": False,
                 "error": plan.conflicts[0].detail if plan.conflicts else "差し替えできません",
                 "plan": plan.to_dict(),
+                "observed_pads": observed_pads,
             }
         self._pending_sample_replacements[plan.plan_hash] = plan
         return {
@@ -1357,6 +1366,7 @@ class StudioRuntime:
             "current_sample_path": current_path,
             "replacement_sample_path": replacement_sample_path,
             "plan": plan.to_dict(),
+            "observed_pads": observed_pads,
             "applied_to_live": False,
         }
 

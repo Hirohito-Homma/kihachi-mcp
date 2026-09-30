@@ -38,7 +38,7 @@ STUDIO_SCHEMA = {
     "properties": {
         "genre": {"type": "string", "enum": list(SUPPORTED_GENRES)},
         "tempo": {"type": "integer", "minimum": 60, "maximum": 180},
-        "bars": {"type": "integer", "minimum": 16, "maximum": 256},
+        "bars": {"type": "integer", "minimum": 4, "maximum": 256},
         "key": {"type": "string", "enum": list(KEY_ENUM)},
         "mood": {"type": "string"},
         "hats_first_half": {"type": "string", "enum": list(DENSITY_VALUES)},

@@ -154,7 +154,7 @@ class ProductionBrief:
         if self.meter_numerator < 1 or self.meter_denominator < 1:
             raise ValueError("meter must be positive")
         _require_int(self.tempo, 60, 180, "tempo")
-        _require_int(self.bars, 16, 256, "bars")
+        _require_int(self.bars, 4, 256, "bars")
         if int(self.bars.value) % 4:
             raise ValueError("bars must be a multiple of four")
         if self.key.value not in KEY_ENUM:

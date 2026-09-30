@@ -102,3 +102,7 @@ def test_full_width_and_music_sign_sharps_are_read() -> None:
     assert extract_explicit("Ｄ＃マイナー")["fields"]["key"] == "D#m"
     assert extract_explicit("D♯マイナー")["fields"]["key"] == "D#m"
     assert extract_explicit("E♭マイナー")["fields"]["key"] == "D#m"
+
+
+def test_short_vertical_slice_bars_are_preserved() -> None:
+    assert extract_explicit("124 BPM、D# minor、8小節")["fields"]["bars"] == 8

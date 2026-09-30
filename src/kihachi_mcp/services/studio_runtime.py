@@ -1890,7 +1890,11 @@ class StudioRuntime:
 
     def _coverage_snapshot(self):
         try:
-            return self._coverage_inspector.snapshot(), None
+            # Use the same snapshot shape as LiveExecutionService. The
+            # coverage inspector is intentionally lighter and produced a
+            # different fingerprint, which made every guarded sample load
+            # look stale immediately before execution.
+            return self._inspector.snapshot(), None
         except LiveTransportError as exc:
             return None, {
                 "ok": False,

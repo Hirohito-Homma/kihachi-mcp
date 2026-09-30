@@ -849,13 +849,14 @@ function loadDrumPadSample(target, args) {
     if (countChildren(pad.api, "chains") > 0) {
         return drumPadReadback(target.track_index, rack.index, note, true);
     }
-    var before = countChildren(rack.api, "chains");
-    rack.api.call("insert_chain");
-    var after = countChildren(rack.api, "chains");
+    var before = countChildren(pad.api, "chains");
+    pad.api.call("insert_chain");
+    var after = countChildren(pad.api, "chains");
     if (after <= before) {
         refuse("Drum Rack chain was not inserted");
     }
-    var chain = liveApi(rack.path + " chains " + (after - 1));
+    var chainPath = rack.path + " drum_pads " + pad.index + " chains " + (after - 1);
+    var chain = liveApi(chainPath);
     chain.set("in_note", note);
     chain.call("insert_device", "Simpler");
     var deviceCount = countChildren(chain, "devices");
@@ -863,7 +864,7 @@ function loadDrumPadSample(target, args) {
         refuse("Simpler was not inserted into the Drum Rack chain");
     }
     var simpler = liveApi(
-        rack.path + " chains " + (after - 1) + " devices " + (deviceCount - 1)
+        chainPath + " devices " + (deviceCount - 1)
     );
     simpler.call("replace_sample", samplePath);
     return drumPadReadback(target.track_index, rack.index, note, false);

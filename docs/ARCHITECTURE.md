@@ -191,8 +191,15 @@ Responsible for
 
 - filesystem
 - localhost-only Ableton Live bridge (`127.0.0.1`, session token, size and time caps)
+- AbletonGPT Remote Script socket (`127.0.0.1:9877` only)
 - Max for Live device transport
 - database
+
+The MCP HTTP gateway (`kihachi serve --transport streamable-http`) is another
+presentation entry on the same FastMCP server. It binds to `127.0.0.1` and
+requires a bearer token. It does not open the Ableton socket to the network.
+Public clients reach it through a tunnel that terminates TLS in front of that
+loopback port. See [MCP_GATEWAY.md](MCP_GATEWAY.md).
 
 There are no external API boundaries. Google Lyria is removed; KIHACHI generates
 no audio.

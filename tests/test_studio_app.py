@@ -50,6 +50,64 @@ def test_health_no_longer_crashes(studio) -> None:
     assert {item["name"] for item in health["statuses"]} >= {"Ollama", "Ableton Live"}
 
 
+def test_candidate_audio_preview_is_read_only(studio) -> None:
+    port, runtime, live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    status, wav = _call(port, "GET", f"/api/candidate/{candidate_id}/preview.wav")
+    assert status == 200 and wav.startswith(b"RIFF") and len(wav) > 1000
+    assert live.tracks == []
+    missing, body = _call(port, "GET", "/api/candidate/missing/preview.wav")
+    assert missing == 404 and body["ok"] is False
+
+
+def test_sample_replacement_http_requires_preview_and_confirmation(tmp_path: Path) -> None:
+    runtime, live = _studio(tmp_path)
+    catalog = SampleCatalog(tmp_path / "sample-catalog")
+    source = tmp_path / "samples"
+    source.mkdir()
+    replacement = source / "Heavy Kick.wav"
+    replacement.write_bytes(b"RIFFheavy")
+    catalog.index(str(source))
+    sample_id = catalog.search("kick")["results"][0]["sample_id"]
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    assert runtime.apply(candidate_id, confirmed=True)["ok"] is True
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=catalog,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        _status, preview = _call(
+            port, "POST", "/api/samples/replace-preview", {"sample_id": sample_id}
+        )
+        assert preview["ok"] is True and preview["applied_to_live"] is False
+        kick = next(track for track in live.tracks if "Kick" in track["name"])
+        assert kick["occupied_pads"][0]["sample_path"] != str(replacement)
+        _status, refused = _call(
+            port,
+            "POST",
+            "/api/samples/replace",
+            {"replacement_id": preview["replacement_id"], "confirmed": False},
+        )
+        assert refused["ok"] is False
+        _status, applied = _call(
+            port,
+            "POST",
+            "/api/samples/replace",
+            {"replacement_id": preview["replacement_id"], "confirmed": True},
+        )
+        assert applied["ok"] is True
+        assert kick["occupied_pads"][0]["sample_path"] == str(replacement)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
 def test_full_studio_flow_over_http(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
@@ -128,6 +186,43 @@ def test_settings_diagnostics_and_ollama_routes(studio) -> None:
     assert live["status"] == "PASS"
     _status, ollama = _call(port, "GET", "/api/ollama")
     assert "installed_models" in ollama
+    _status, capabilities = _call(port, "GET", "/api/ableton/capabilities")
+    assert capabilities["bridge_ready"] is True
+    assert "warp" not in capabilities["executable_capability_ids"]
+
+
+def test_midi_composer_previews_then_generates_without_touching_live(studio) -> None:
+    port, _runtime, live = studio
+    constraints = {"key": "D#m", "tempo": 124, "bars": 2, "role": "bass", "syncopation": 0.7}
+    _status, preview = _call(port, "POST", "/api/midi/preview", {"constraints": constraints})
+    _status, generated = _call(port, "POST", "/api/midi/compose", {"constraints": constraints})
+    assert preview["ok"] is True and preview["paid_api"] is False
+    assert generated["ok"] is True and generated["note_count"] > 0
+    assert generated["applied_to_live"] is False
+    assert live.tracks == []
+
+
+def test_composer_adoption_uses_existing_revision_approval_flow(studio) -> None:
+    port, runtime, live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    constraints = {"key": "Dm", "tempo": 120, "bars": 2, "role": "bass", "syncopation": 0.8}
+    _status, generated = _call(port, "POST", "/api/midi/compose", {"constraints": constraints})
+    _status, proposal = _call(
+        port,
+        "POST",
+        "/api/midi/adopt-preview",
+        {"candidate_id": candidate_id, "role": "bass", "pattern_bars": 2, "notes": generated["notes"]},
+    )
+    assert proposal["ok"] is True and proposal["other_parts_unchanged"] is True
+    assert runtime.selected_id() == candidate_id
+    _status, accepted = _call(
+        port,
+        "POST",
+        "/api/revision/decide",
+        {"revision_id": proposal["revision"]["revision_id"], "accept": True},
+    )
+    assert accepted["selected_candidate_id"] != candidate_id
+    assert live.tracks == []
 
 
 def test_measure_route_reads_audio_files_only(studio, tmp_path: Path) -> None:
@@ -182,5 +277,19 @@ def test_page_calls_only_routes_the_server_has() -> None:
     for route in routes:
         base = route.rstrip("/")
         assert base in source or base.startswith(("/api/candidate", "/api/references")), route
-    for element in ("review-view", "revision-view", "arrangement-bar", "diagnostics-rows", "verify-result", "setting-model", "retune-parts", "master-retune", "measure-path"):
+    for element in (
+        "review-view",
+        "revision-view",
+        "arrangement-bar",
+        "diagnostics-rows",
+        "verify-result",
+        "setting-model",
+        "retune-parts",
+        "master-retune",
+        "measure-path",
+        "midi-composer-view",
+        "composer-preview",
+        "composer-run",
+        "composer-adopt",
+    ):
         assert f'id="{element}"' in page

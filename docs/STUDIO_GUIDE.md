@@ -26,6 +26,8 @@
 
 ## プロジェクト
 
+「MIDI候補」の再生ボタンは、選択中の候補から最初のDropまたはChorusの最大8小節を簡易音色で再生します。保存済み候補を開いたときも同じノートから作り直し、Liveへ送信しません。音色・MIXの完成評価には使わず、フレーズと展開の確認に使います。
+
 - 保存済みの候補の一覧（承認済・送信済の印つき）と「この候補を開く」。
 - 状態行: `承認` / `Live送信` / `アレンジメント` / `検証` と、修正版なら元の候補ID。
 - SongSpec: Tempo、Key、Scale、拍子、Genre、Style、Bars、長さ、Swing、AI。
@@ -73,6 +75,10 @@ BEFORE / AFTER、変更範囲、ノート数の変化、修正後の指摘数を
 ## システム（状態・設定・診断）
 
 - 診断: Python、依存関係、設定、保存先、Ollama、モデル、MCP、AbletonGPT、Remote Script、Live、Studio を一覧し、各行に対処を出します（`uv run kihachi doctor` と同じ内容）。
-- AI: プロバイダ、Ollama URL、モデル（導入済みのみ）、接続テスト、保存。
+- AI: 通常はOllama。OpenAIはSol/Astraを明示選択した場合だけ使い、次回推定額・月間累計・月間上限（初期値500円）を表示します。APIキーは`OPENAI_API_KEY`環境変数だけから読み、設定ファイルには保存しません。
 - Ableton / Project: ポートと保存先。保存先は `KIHACHI_PROJECT_DIR` で変えられます。
+- Abletonの「利用可能な操作」は、現在のBridge契約を`SUPPORTED / CONDITIONAL / UNSUPPORTED`で表示します。`OFFLINE`の機能と`UNSUPPORTED`の操作はAIへ実行可能として渡しません。
+- MIDI Composerは構造化されたキー、テンポ、小節、役割、グリッド、シンコペーション、velocity、ノート長、Kick回避条件を受け取ります。現在のStudio全曲生成は既存の決定論builderを維持し、明示選択されていない有料Composerへ自動移行しません。
+- 「パート単位MIDI Composer」は、最初のボタンで制約・provider・モデル・推定料金を確認し、次のボタンでノート候補だけを生成します。入力を変更すると確認は失効します。生成しただけでは保存候補にもAbletonにも反映されません。
+- 生成後の「選択中の候補へ採用案を作る」は、Bass / Stab / Lead / Arp / Percの対応パートだけを置換した子候補を作ります。BEFORE / AFTERとCritic結果を確認して採用するまで元候補は変わりません。Drumsは複数トラックへ分かれるため一括採用を拒否します。
 - 開発者モード: エラーの技術的な詳細を表示します。通常は分かりやすい説明だけです。

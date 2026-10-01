@@ -291,7 +291,13 @@ def test_settings_accept_only_installed_models(tmp_path: Path, monkeypatch) -> N
     saved = runtime.update_settings({"ollama_model": "qwen3:4b"})
     assert saved["ok"] is True
     stored = json.loads(Path(__import__("os").environ["KIHACHI_SETTINGS_FILE"]).read_text())
-    assert stored == {"ai_provider": "ollama", "ollama_url": "http://127.0.0.1:11434", "ollama_model": "qwen3:4b"}
+    assert stored == {
+        "ai_provider": "ollama",
+        "ollama_url": "http://127.0.0.1:11434",
+        "ollama_model": "qwen3:4b",
+        "openai_model": "gpt-6.1-sol",
+        "monthly_ai_limit_jpy": 500,
+    }
     assert StudioRuntime().settings()["ollama_model"] == "qwen3:4b"
 
 

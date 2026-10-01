@@ -4,23 +4,27 @@
 
 ## 1. セットアップ（初回のみ）
 
+Finder で `scripts/インストール.command` をダブルクリックします。ターミナルからなら次と同じです。
+
 ```bash
 ./scripts/setup.sh
 ```
 
-uv が必要です。Ollama は任意です（なくても「AIなし（既定解釈）」で制作できます）。KIHACHI はモデルを自動でダウンロードしません。→ [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
+uv は初回セットアップに必要です。`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` も探します。Ollama は任意です（なくても「AIなし（既定解釈）」で制作できます）。KIHACHI はモデルを自動でダウンロードしません。→ [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
 
-## 2. Ableton Live の準備
-
-Live を起動し、KIHACHI Live Device（Max for Live）を任意のトラックに置きます。→ [ABLETON_SETUP.md](ABLETON_SETUP.md)
-
-## 3. 制作画面を開く
+## 2. 制作画面を開く
 
 ```bash
-uv run kihachi start
+./scripts/kihachi-studio.command
 ```
 
-ブラウザで http://127.0.0.1:8765/ が開きます。上部の表示が `Ollama: READY` / `Live: READY` になっていれば準備完了です。
+または Finder で `scripts/kihachi-studio.command` をダブルクリックします。起動時はセットアップ済みの `.venv` を使うため、uv の再実行は不要です。ブラウザで http://127.0.0.1:8765/ が開きます。上部の表示が `Ollama: READY` / `Live: READY` になっていれば準備完了です。
+
+Live が OFFLINE でも候補の生成と8小節の試聴はできます。
+
+## 3. Ableton Live の準備（送信するときだけ）
+
+Live に送るときは、Live を起動し、KIHACHI Live Device（Max for Live）を任意のトラックに置きます。→ [ABLETON_SETUP.md](ABLETON_SETUP.md)
 
 ## 4. 曲を作る
 
@@ -34,7 +38,7 @@ Dub chord。Mutation synth。Swing 54%。約5分。
 
 ## 5. 確認 → 承認 → 送信 → 検証
 
-1. 「プロジェクト」で構成（セクション）とトラックを確認します。
+1. 「MIDI候補」の再生ボタンで最初のDropまたはChorusの8小節を聴き、「プロジェクト」で構成（セクション）とトラックを確認します。試聴は簡易音色で、Liveには触れません。
 2. 「AIレビュー」の指摘を見て、必要なら「選んだ指摘を修正」→ 修正案の BEFORE / AFTER を見て「採用」。
 3. 「この候補を承認」。
 4. 「適用内容を確認」（ドライラン。Live は変わりません）。

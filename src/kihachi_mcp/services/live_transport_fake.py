@@ -24,6 +24,7 @@ from kihachi_mcp.models.live_contract import (
     OP_LOAD_LIVE_DEVICE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
+    OP_REPLACE_DRUM_PAD_SAMPLE,
     OP_SET_DEVICE_PARAMETER,
     OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TEMPO,
@@ -414,6 +415,23 @@ class FakeLiveTransport:
                 expected = str(arguments.get("name") or "")
                 if position >= len(names) or names[position] != expected:
                     raise FakeLiveOperationRefused(f"device {position} is not '{expected}'")
+            if kind == "drum_pad_sample_path":
+                track = self._track(int(arguments.get("track_index") or 0))
+                note = int(arguments.get("note") or 0)
+                pad = next(
+                    (
+                        item
+                        for item in (track or {}).get("occupied_pads", [])
+                        if int(item.get("note") or 0) == note
+                    ),
+                    None,
+                )
+                if not pad or str(pad.get("sample_path") or "") != str(
+                    arguments.get("sample_path") or ""
+                ):
+                    raise FakeLiveOperationRefused(
+                        f"drum pad {note} sample changed after preview"
+                    )
 
     def _require_free_range(self, arguments: dict[str, Any]) -> None:
         track_index = int(arguments.get("track_index") or 0)
@@ -508,7 +526,38 @@ class FakeLiveTransport:
             path = str(arguments.get("sample_path") or "")
             pads = track.setdefault("occupied_pads", [])
             if not any(int(pad.get("note") or 0) == note for pad in pads):
-                pads.append({"note": note, "name": Path(path).stem, "chain_count": 1})
+                pads.append(
+                    {
+                        "note": note,
+                        "name": Path(path).stem,
+                        "chain_count": 1,
+                        "sample_path": path,
+                    }
+                )
+            return {
+                "track_index": track["index"],
+                "note": note,
+                "occupied": True,
+                "already_occupied": False,
+                "sample_path": path,
+            }
+
+        if op == OP_REPLACE_DRUM_PAD_SAMPLE:
+            track = self._require_track(int(target.get("track_index") or 0))
+            note = int(arguments.get("note") or 0)
+            path = str(arguments.get("sample_path") or "")
+            pad = next(
+                (
+                    item
+                    for item in track.setdefault("occupied_pads", [])
+                    if int(item.get("note") or 0) == note
+                ),
+                None,
+            )
+            if pad is None:
+                raise FakeLiveOperationRefused(f"drum pad {note} is empty")
+            pad["name"] = Path(path).stem
+            pad["sample_path"] = path
             return {
                 "track_index": track["index"],
                 "note": note,

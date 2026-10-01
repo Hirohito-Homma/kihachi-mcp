@@ -54,7 +54,7 @@ _TEMPO_RES = (
     re.compile(r"テンポ\s*(\d{2,3})"),
 )
 # 「57小節目」 is a position, not a length.
-_BARS_RE = re.compile(r"(?<!\d)(\d{2,3})\s*小節(?!目)")
+_BARS_RE = re.compile(r"(?<!\d)(\d{1,3})\s*小節(?!目)")
 _DROP_RES = (
     re.compile(r"(?<!\d)(\d{1,3})\s*小節目?から\s*(?:ドロップ|Drop|DROP|サビ)"),
     re.compile(r"(?:ドロップ|Drop|DROP)\s*(?:は|を|に)?\s*(\d{1,3})\s*小節"),
@@ -75,7 +75,7 @@ _MOOD_WORDS = ("暗い", "ダーク", "明るい", "優しい", "激しい", "�
 #: A delay or echo request. KIHACHI writes MIDI, so it answers with quieter
 #: repeats of the chord stabs rather than an effect device.
 _ECHO_RE = re.compile(r"ディレイ|delay|エコー|echo", re.IGNORECASE)
-_BARS_EN_RE = re.compile(r"(?<!\d)(\d{2,3})\s*-?\s*bars?\b", re.IGNORECASE)
+_BARS_EN_RE = re.compile(r"(?<!\d)(\d{1,3})\s*-?\s*bars?\b", re.IGNORECASE)
 _DURATION_RE = re.compile(r"約?\s*(\d+(?:\.\d+)?)\s*分")
 _SWING_RES = (
     re.compile(r"(?:スイング|swing)\s*(\d{2,3})\s*%?", re.IGNORECASE),
@@ -201,12 +201,12 @@ def explicit_swing(text: str) -> float | None:
 def _find_bars(text: str) -> tuple[int, int, int] | None:
     for match in _BARS_RE.finditer(text):
         bars = int(match.group(1))
-        if 16 <= bars <= 256 and bars % 4 == 0:
+        if 4 <= bars <= 256 and bars % 4 == 0:
             return bars, match.start(), match.end()
     match = _BARS_EN_RE.search(text)
     if match:
         bars = int(match.group(1))
-        if 16 <= bars <= 256 and bars % 4 == 0:
+        if 4 <= bars <= 256 and bars % 4 == 0:
             return bars, match.start(), match.end()
     return None
 

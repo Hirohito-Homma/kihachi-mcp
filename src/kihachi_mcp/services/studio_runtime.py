@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -18,10 +19,20 @@ from kihachi_mcp.knowledge.part_sounds import (
 )
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import managed_track_name
-from kihachi_mcp.models.midi_candidate import MidiCandidate
+from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
+from kihachi_mcp.models.midi_composer import (
+    ComposedMidiNote,
+    MidiCompositionRequest,
+    MusicalConstraints,
+)
 from kihachi_mcp.services import loudness
 from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
-from kihachi_mcp.services.ai_provider import provider_from_settings, split_ollama_url
+from kihachi_mcp.services.ai_cost_control import MonthlyCostGuard, estimate_cost
+from kihachi_mcp.services.ai_provider import (
+    OpenAIProvider,
+    provider_from_settings,
+    split_ollama_url,
+)
 from kihachi_mcp.services.candidate_live_planner import (
     AppliedTracks,
     CandidateLivePlanner,
@@ -40,6 +51,7 @@ from kihachi_mcp.services.diagnostics import (
 )
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
 from kihachi_mcp.services.live_bridge import LiveBridgeSession, LocalhostBridgeTransport
+from kihachi_mcp.services.live_capabilities import discover_capabilities
 from kihachi_mcp.services.live_device_catalog import STOCK_DEVICE_NAMES
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import (
@@ -48,11 +60,17 @@ from kihachi_mcp.services.live_state_inspector import (
 )
 from kihachi_mcp.services.live_transport import LiveTransport, LiveTransportError
 from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_from_brief
+from kihachi_mcp.services.midi_composer import (
+    DeterministicMIDIComposer,
+    ProviderMIDIComposer,
+)
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
 from kihachi_mcp.services.ollama_status import probe_ollama
 from kihachi_mcp.services.production_review import review_candidate
 from kihachi_mcp.services.production_revision import revise_candidate
 from kihachi_mcp.services.production_workspace import local_ableton_plan, project_view
+from kihachi_mcp.services.sample_replacement import create_sample_replacement_plan
+from kihachi_mcp.services.session_pattern_builder import MidiNote
 from kihachi_mcp.services.sound_coverage import coverage_from_snapshot
 from kihachi_mcp.services.studio_interpreter import (
     DEFAULT_MODEL,
@@ -104,6 +122,7 @@ class StudioRuntime:
         candidate_dir: Path | None = None,
         kit_loader: AbletonGPTKitLoader | None = None,
         parameter_file: Path = PARAMETER_FILE,
+        cost_guard: MonthlyCostGuard | None = None,
     ) -> None:
         self._parameter_file = parameter_file
         self._lock = threading.Lock()
@@ -170,11 +189,13 @@ class StudioRuntime:
             else _VerifyInspector(self._transport, request_id_factory=_unique_request_ids())
         )
         self._settings = default_settings()
+        self._cost_guard = cost_guard or MonthlyCostGuard()
         self._abletongpt_cache: tuple[float, str] | None = None
         self._approved_ids: set[str] = set()
         self._ignored_issues: dict[str, set[str]] = {}
         self._pending_revisions: dict[str, dict[str, Any]] = {}
         self._pending_children: dict[str, MidiCandidate] = {}
+        self._pending_sample_replacements: dict[str, Any] = {}
         self._revision_history: list[dict[str, Any]] = []
         self._expected: dict[str, dict[str, Any]] = {}
         self._verifications: dict[str, dict[str, Any]] = {}
@@ -209,6 +230,8 @@ class StudioRuntime:
             }
         live = self._live_health()
         abletongpt = self._abletongpt_state()
+        selected_provider = provider_from_settings(self._settings)
+        provider_capabilities = selected_provider.capabilities()
         return {
             "ollama": ollama,
             "live": live,
@@ -216,8 +239,9 @@ class StudioRuntime:
             "inference": self.job_status(),
             "selected_candidate_id": self._selected_id,
             "candidate_ids": list(self._candidates),
-            "paid_api": False,
+            "paid_api": bool(provider_capabilities.get("paid_api")),
             "model_download": False,
+            "ai_cost": self.ai_cost_status(),
             "statuses": system_statuses(ollama, live, abletongpt, self._selected_id),
             "settings": self.settings(),
         }
@@ -244,6 +268,8 @@ class StudioRuntime:
                 "ai_provider",
                 "ollama_url",
                 "ollama_model",
+                "openai_model",
+                "monthly_ai_limit_jpy",
                 "ableton_host",
                 "ableton_port",
                 "abletongpt_port",
@@ -274,10 +300,205 @@ class StudioRuntime:
             save_settings(self._settings)
         return {"ok": True, "settings": self.settings()}
 
+    def ai_cost_status(self, brief: str = "") -> dict[str, Any]:
+        """Estimate the next paid request and show this month's local ledger."""
+        model = str(self._settings.get("openai_model") or "gpt-6.1-sol")
+        # Includes the schema/system instructions and a conservative reply allowance.
+        input_tokens = max(5_000, len(brief) * 2 + 3_000)
+        estimate = estimate_cost(model, input_tokens, 1_000)
+        limit = int(self._settings.get("monthly_ai_limit_jpy") or 500)
+        return {"ok": True, "selected": self._settings.get("ai_provider") == "openai", "estimate": estimate, **self._cost_guard.authorize(estimate["estimated_jpy"], limit)}
+
+    def midi_composer_preview(
+        self,
+        constraints: dict[str, Any],
+        operation: str = "generate",
+        source_notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Validate one part request and estimate cost without running a model."""
+        try:
+            request = _midi_composition_request(constraints, operation, source_notes)
+            provider = provider_from_settings(self._settings)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        provider_name = str(provider.capabilities().get("provider") or "deterministic")
+        payload = json.dumps(request.to_dict(), ensure_ascii=False, sort_keys=True)
+        cost = self.ai_cost_status(payload) if provider_name == "openai" else None
+        return {
+            "ok": True,
+            "preview": True,
+            "provider": provider_name,
+            "model": getattr(provider, "model", "deterministic"),
+            "paid_api": bool(provider.capabilities().get("paid_api")),
+            "requires_paid_confirmation": provider_name == "openai",
+            "cost": cost,
+            "request": request.to_dict(),
+            "applied_to_live": False,
+        }
+
+    def compose_midi_part(
+        self,
+        constraints: dict[str, Any],
+        operation: str = "generate",
+        source_notes: list[dict[str, Any]] | None = None,
+        confirmed_paid: bool = False,
+        seed: int = 0,
+    ) -> dict[str, Any]:
+        """Compose a reviewable part. Paid providers require this request's confirmation."""
+        preview = self.midi_composer_preview(constraints, operation, source_notes)
+        if not preview.get("ok"):
+            return preview
+        request = _midi_composition_request(constraints, operation, source_notes)
+        provider = provider_from_settings(self._settings)
+        paid = bool(provider.capabilities().get("paid_api"))
+        if paid and not confirmed_paid:
+            return {
+                **preview,
+                "ok": False,
+                "error": "推定料金を確認してから、有料MIDI Composerの実行を明示してください",
+            }
+        cost = preview.get("cost") or {}
+        if paid and not cost.get("allowed"):
+            return {**preview, "ok": False, "error": "月間AI利用上限を超えるため、OpenAI APIを実行しません"}
+        if paid and not provider.health().get("ok"):
+            return {**preview, "ok": False, "error": "OPENAI_API_KEYが設定されていません"}
+        try:
+            if provider.capabilities().get("structured_output"):
+                composer = ProviderMIDIComposer(provider)
+            else:
+                composer = DeterministicMIDIComposer(seed=seed)
+            notes = composer.compose(request)
+        except (InterpretationError, OSError, TypeError, ValueError) as exc:
+            return {**preview, "ok": False, "error": str(exc)}
+        finally:
+            if isinstance(provider, OpenAIProvider) and provider.last_usage:
+                self._cost_guard.record(provider.last_usage, cost["estimate"])
+        payload = [note.to_dict() for note in notes]
+        return {
+            "ok": True,
+            "preview": False,
+            "provider": preview["provider"],
+            "model": preview["model"],
+            "paid_api": paid,
+            "notes": payload,
+            "note_count": len(payload),
+            "cost": self.ai_cost_status() if paid else None,
+            "applied_to_live": False,
+            "next_action": "ノートを確認し、候補クリップへ採用してからAbleton適用を別途承認してください",
+        }
+
+    def propose_composer_adoption(
+        self,
+        candidate_id: str,
+        role: str,
+        pattern_bars: int,
+        notes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Propose replacing only one candidate part with reviewed Composer notes."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        part = {
+            "bass": "Bass",
+            "chords": "Stab",
+            "melody": "Lead",
+            "arp": "Arp",
+            "percussion": "Perc",
+        }.get(str(role))
+        if part is None:
+            return {
+                "ok": False,
+                "error": "DrumsはKick/Hats/Snareに分かれるため、現在は一括採用できません",
+            }
+        targets = candidate.clips_for_part(part)
+        if not targets:
+            return {"ok": False, "error": f"この候補に{part}クリップがありません"}
+        if candidate.brief.beats_per_bar != 4:
+            return {"ok": False, "error": "Composer候補の採用は現在4/4だけに対応しています"}
+        try:
+            parsed = tuple(ComposedMidiNote.from_dict(note) for note in notes)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        if not parsed or len(parsed) > 4096:
+            return {"ok": False, "error": "採用するMIDIノートは1〜4096件にしてください"}
+        if pattern_bars < 1 or pattern_bars > int(candidate.brief.bars.value):
+            return {"ok": False, "error": "Composerの小節数が候補の範囲外です"}
+        pattern_beats = pattern_bars * candidate.brief.beats_per_bar
+        if any(note.start + note.duration > pattern_beats + 1e-6 for note in parsed):
+            return {"ok": False, "error": "Composerノートが指定パターン小節を超えています"}
+        replaced: list[CandidateClip] = []
+        changed_clips = 0
+        for clip in candidate.clips:
+            if clip.part != part:
+                replaced.append(clip)
+                continue
+            clip_beats = clip.length_bars * candidate.brief.beats_per_bar
+            tiled = []
+            for repeat in range(math.ceil(clip_beats / pattern_beats)):
+                offset = repeat * pattern_beats
+                for note in parsed:
+                    start = round(note.start + offset, 6)
+                    if start >= clip_beats:
+                        continue
+                    duration = round(min(note.duration, clip_beats - start), 6)
+                    tiled.append(MidiNote(note.pitch, start, duration, note.velocity))
+            new_clip = CandidateClip(
+                part=clip.part,
+                section_name=clip.section_name,
+                start_bar=clip.start_bar,
+                length_bars=clip.length_bars,
+                notes=tuple(sorted(tiled, key=lambda item: (item.start_beats, item.pitch))),
+            )
+            replaced.append(new_clip)
+            changed_clips += int(new_clip.notes != clip.notes)
+        if not changed_clips:
+            return {"ok": False, "error": "元の候補と同じノートのため採用案はありません"}
+        child = MidiCandidate(
+            candidate_id=uuid.uuid4().hex,
+            seed=candidate.seed,
+            brief=candidate.brief,
+            clips=tuple(replaced),
+            parent_candidate_id=candidate.candidate_id,
+        )
+        result = {
+            "parent_candidate_id": candidate.candidate_id,
+            "candidate": child,
+            "scopes": [f"composer:{part}"],
+            "before": [
+                f"{part}: {len(targets)}クリップ / {candidate.note_count(part)}ノート",
+                f"全体fingerprint: {candidate.note_fingerprint[:12]}",
+            ],
+            "after": [
+                f"{part}だけを{pattern_bars}小節パターンで置換",
+                f"{changed_clips}クリップ / {child.note_count(part)}ノート",
+                f"全体fingerprint: {child.note_fingerprint[:12]}",
+            ],
+            "review": review_candidate(child),
+        }
+        record = revision_record(result)
+        self._pending_revisions[record["revision_id"]] = record
+        self._pending_children[record["child_candidate_id"]] = child
+        return {
+            "ok": True,
+            "revision": _public_revision(record),
+            "note_count_before": candidate.note_count(),
+            "note_count_after": child.note_count(),
+            "target_part": part,
+            "changed_clips": changed_clips,
+            "other_parts_unchanged": all(
+                old == new
+                for old, new in zip(candidate.clips, child.clips, strict=True)
+                if old.part != part
+            ),
+            "requires_approval": True,
+            "applied_to_live": False,
+            "musical_quality_claimed": False,
+        }
+
     def ollama_status(self) -> dict[str, Any]:
         """Provider health, installed models and the selected one."""
         try:
-            provider = provider_from_settings(self._settings)
+            provider = provider_from_settings({**self._settings, "ai_provider": "ollama"})
         except ValueError as exc:
             return {"ok": False, "state": "invalid_url", "message": str(exc), "installed_models": []}
         report = provider.health()
@@ -293,6 +514,10 @@ class StudioRuntime:
         return DiagnosticsService(
             self._settings, live_probe=self._live_health, remote_script_probe=probe
         ).run()
+
+    def live_capabilities(self) -> dict[str, Any]:
+        """Read the bridge health and return only contract-backed capabilities."""
+        return discover_capabilities(self._inspector.health(), self._abletongpt_state())
 
     def queue_generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
         """Start one background generate. Refuses a second concurrent job."""
@@ -363,24 +588,39 @@ class StudioRuntime:
                 "candidate_id": "",
             }
         try:
-            host, port = split_ollama_url(str(self._settings["ollama_url"]))
-            model = str(self._settings.get("ollama_model") or DEFAULT_MODEL)
-            ollama = probe_ollama(host, port, model)
-            if ollama["ok"] and self._settings.get("ai_provider") != "deterministic":
+            provider = provider_from_settings(self._settings)
+            if isinstance(provider, OpenAIProvider):
+                cost = self.ai_cost_status(brief)
+                if not cost["allowed"]:
+                    raise InterpretationError("月間AI利用上限を超えるため、OpenAI APIを実行しません")
+                if not provider.health()["ok"]:
+                    raise InterpretationError("OPENAI_API_KEYが設定されていません")
+                try:
+                    production = provider.interpret(brief)
+                finally:
+                    if provider.last_usage:
+                        self._cost_guard.record(provider.last_usage, cost["estimate"])
+            elif self._settings.get("ai_provider") == "ollama":
+                host, port = split_ollama_url(str(self._settings["ollama_url"]))
+                model = str(self._settings.get("ollama_model") or DEFAULT_MODEL)
+                ollama = probe_ollama(host, port, model)
+                if not ollama["ok"]:
+                    production = interpret_brief_offline(brief)
+                else:
 
-                def new_client() -> Any:
-                    client = (
-                        OllamaClient(host, port)
-                        if self._ollama_factory is OllamaClient
-                        else self._ollama_factory()
+                    def new_client() -> Any:
+                        client = (
+                            OllamaClient(host, port)
+                            if self._ollama_factory is OllamaClient
+                            else self._ollama_factory()
+                        )
+                        with self._lock:
+                            self._client = client
+                        return client
+
+                    production = interpret_with_fallback(
+                        brief, new_client, model=model, attempts=AI_ATTEMPTS
                     )
-                    with self._lock:
-                        self._client = client
-                    return client
-
-                production = interpret_with_fallback(
-                    brief, new_client, model=model, attempts=AI_ATTEMPTS
-                )
             else:
                 production = interpret_brief_offline(brief)
             candidate = build_candidate(production, seed=seed)
@@ -1070,6 +1310,92 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
+    def sample_replacement_preview(
+        self, candidate_id: str, replacement_sample_path: str
+    ) -> dict[str, Any]:
+        """Read the current managed Kick and return an inert replacement plan."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        snapshot, failure = self._coverage_snapshot()
+        if snapshot is None:
+            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        expected_name = managed_track_name(
+            f"KIHACHI Kick {candidate.candidate_id[:8]}"
+        )
+        track = next((item for item in snapshot.tracks if item.name == expected_name), None)
+        if track is None:
+            return {"ok": False, "error": "この候補のKIHACHI Kickトラックがありません"}
+        try:
+            summary = self._coverage_inspector.drum_rack_summary(track.index)
+        except (LiveTransportError, LiveVersionUnsupportedError) as exc:
+            return {"ok": False, "error": f"Kickの現在状態を取得できません: {exc}"}
+        pads = [
+            pad
+            for device in summary.get("devices") or []
+            for pad in device.get("occupied_pads") or []
+            if int(pad.get("note") or 0) == 36
+        ]
+        observed_pads = [
+            {
+                "note": pad.get("note"),
+                "sample_path": pad.get("sample_path") or "",
+            }
+            for device in summary.get("devices") or []
+            for pad in device.get("occupied_pads") or []
+        ]
+        current_path = str(pads[0].get("sample_path") or "") if len(pads) == 1 else ""
+        plan = create_sample_replacement_plan(
+            snapshot,
+            track_index=track.index,
+            note=36,
+            current_sample_path=current_path,
+            replacement_sample_path=replacement_sample_path,
+        )
+        if plan.status == "blocked":
+            return {
+                "ok": False,
+                "error": plan.conflicts[0].detail if plan.conflicts else "差し替えできません",
+                "plan": plan.to_dict(),
+                "observed_pads": observed_pads,
+            }
+        self._pending_sample_replacements[plan.plan_hash] = plan
+        return {
+            "ok": True,
+            "replacement_id": plan.plan_hash,
+            "current_sample_path": current_path,
+            "replacement_sample_path": replacement_sample_path,
+            "plan": plan.to_dict(),
+            "observed_pads": observed_pads,
+            "applied_to_live": False,
+        }
+
+    def apply_sample_replacement(
+        self, replacement_id: str, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Execute exactly one previously previewed sample replacement."""
+        if not confirmed:
+            return {"ok": False, "error": "差し替え内容を確認してから実行してください"}
+        plan = self._pending_sample_replacements.pop(replacement_id, None)
+        if plan is None:
+            return {"ok": False, "error": "差し替え計画がありません。もう一度確認してください"}
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message}
+            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            return {
+                "ok": receipt.status == "verified",
+                "receipt": receipt.to_dict(),
+                "partial": receipt.status == "partially_applied",
+                "musical_quality_claimed": False,
+            }
+        finally:
+            self._apply_lock.release()
+
     def apply_effects(self, candidate_id: str, confirmed: bool = False) -> dict[str, Any]:
         """Append each part's effect chain to the tracks an apply created.
 
@@ -1574,7 +1900,11 @@ class StudioRuntime:
 
     def _coverage_snapshot(self):
         try:
-            return self._coverage_inspector.snapshot(), None
+            # Use the same snapshot shape as LiveExecutionService. The
+            # coverage inspector is intentionally lighter and produced a
+            # different fingerprint, which made every guarded sample load
+            # look stale immediately before execution.
+            return self._inspector.snapshot(), None
         except LiveTransportError as exc:
             return None, {
                 "ok": False,
@@ -1751,6 +2081,26 @@ def _idle_job() -> dict[str, Any]:
         "error": "",
         "candidate_id": "",
     }
+
+
+def _midi_composition_request(
+    constraints: dict[str, Any],
+    operation: str,
+    source_notes: list[dict[str, Any]] | None,
+) -> MidiCompositionRequest:
+    if not isinstance(constraints, dict):
+        raise TypeError("musical constraintsが必要です")
+    if source_notes is not None and not isinstance(source_notes, list):
+        raise TypeError("source_notesはノート配列で指定してください")
+    return MidiCompositionRequest(
+        constraints=MusicalConstraints.from_dict(constraints),
+        operation=operation,
+        source_notes=tuple(
+            ComposedMidiNote.from_dict(note)
+            for note in source_notes or []
+            if isinstance(note, dict)
+        ),
+    )
 
 
 def _notes_from_candidate(candidate: MidiCandidate) -> list[list[dict[str, Any]]]:

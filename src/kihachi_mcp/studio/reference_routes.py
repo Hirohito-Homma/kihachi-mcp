@@ -19,6 +19,9 @@ def handle_get(handler, library, parsed, sources, sample_catalog=None) -> bool:
     if not _local_host(handler):
         handler._send_json({"ok": False, "error": "localhostから開いてください"}, 403)
         return True
+    if parsed.path.startswith("/api/references/sample-catalog/audio/"):
+        _serve_sample_audio(handler, sample_catalog, parsed)
+        return True
     if parsed.path.startswith("/api/references/audio/"):
         _serve_audio(handler, library, parsed)
         return True
@@ -30,8 +33,12 @@ def handle_get(handler, library, parsed, sources, sample_catalog=None) -> bool:
         elif parsed.path == "/api/references/sample-catalog/status" and sample_catalog:
             result = sample_catalog.status()
         elif parsed.path == "/api/references/sample-catalog/search" and sample_catalog:
+            tempo_text = query.get("tempo", [""])[0]
             result = sample_catalog.search(
-                query.get("role", ["all"])[0], query.get("query", [""])[0]
+                query.get("role", ["all"])[0],
+                query.get("query", [""])[0],
+                tempo=float(tempo_text) if tempo_text else None,
+                key=query.get("key", [""])[0],
             )
         elif parsed.path == "/api/references/genres":
             result = {
@@ -93,47 +100,74 @@ def _serve_audio(handler, library, parsed) -> None:
         handler._send_json({"ok": False, "error": "音源が見つかりません"}, 404)
         return
     try:
-        path = library.audio_path(entry_id)
-        size = path.stat().st_size
-        if not 0 < size <= MAX_BYTES:
-            raise ReferenceError("音源ファイルのサイズが不正です")
-        raw_range = handler.headers.get("Range", "")
-        start, end = 0, size - 1
-        if raw_range:
-            match = re.fullmatch(r"bytes=(\d+)-(\d*)", raw_range)
-            if not match:
-                handler._send_json({"ok": False, "error": "再生範囲が不正です"}, 416)
-                return
-            start = int(match.group(1))
-            end = int(match.group(2)) if match.group(2) else size - 1
-            if start >= size or end < start or end >= size:
-                handler._send_json({"ok": False, "error": "再生範囲が不正です"}, 416)
-                return
-        length = end - start + 1
-        with path.open("rb") as audio:
-            audio.seek(start)
-            handler.send_response(206 if raw_range else 200)
-            handler.send_header("Content-Type", _AUDIO_TYPES[path.suffix.lower()])
-            handler.send_header("Content-Length", str(length))
-            handler.send_header("Accept-Ranges", "bytes")
-            handler.send_header("Cache-Control", "no-store")
-            handler.send_header("X-Content-Type-Options", "nosniff")
-            if raw_range:
-                handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            handler.end_headers()
-            while length:
-                block = audio.read(min(length, 1024 * 1024))
-                if not block:
-                    break
-                try:
-                    handler.wfile.write(block)
-                except (BrokenPipeError, ConnectionResetError):
-                    return  # Browser stopped playback; do not treat this as a retry.
-                length -= len(block)
+        _serve_audio_path(handler, library.audio_path(entry_id))
     except ReferenceError:
         handler._send_json({"ok": False, "error": "音源が見つかりません"}, 404)
     except (OSError, sqlite3.Error):
         handler._send_json({"ok": False, "error": "音源を読み取れません"}, 500)
+
+
+def _serve_sample_audio(handler, sample_catalog, parsed) -> None:
+    if not sample_catalog or not _same_origin_audio_request(handler, parsed):
+        handler._send_json(
+            {"ok": False, "error": "Studioの画面から再生してください"}, 403
+        )
+        return
+    sample_id = parsed.path.removeprefix("/api/references/sample-catalog/audio/")
+    try:
+        _serve_audio_path(handler, sample_catalog.audio_path(sample_id))
+    except ReferenceError:
+        handler._send_json({"ok": False, "error": "サンプルが見つかりません"}, 404)
+    except (OSError, sqlite3.Error):
+        handler._send_json({"ok": False, "error": "サンプルを読み取れません"}, 500)
+
+
+def _same_origin_audio_request(handler, parsed) -> bool:
+    return not parsed.query and handler.headers.get(
+        "Sec-Fetch-Site", "same-origin"
+    ) in {"same-origin", "none"} and (
+        not handler.headers.get("Origin")
+        or handler.headers["Origin"] == "http://" + handler.headers.get("Host", "")
+    )
+
+
+def _serve_audio_path(handler, path: Path) -> None:
+    size = path.stat().st_size
+    if not 0 < size <= MAX_BYTES:
+        raise ReferenceError("音源ファイルのサイズが不正です")
+    raw_range = handler.headers.get("Range", "")
+    start, end = 0, size - 1
+    if raw_range:
+        match = re.fullmatch(r"bytes=(\d+)-(\d*)", raw_range)
+        if not match:
+            handler._send_json({"ok": False, "error": "再生範囲が不正です"}, 416)
+            return
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else size - 1
+        if start >= size or end < start or end >= size:
+            handler._send_json({"ok": False, "error": "再生範囲が不正です"}, 416)
+            return
+    length = end - start + 1
+    with path.open("rb") as audio:
+        audio.seek(start)
+        handler.send_response(206 if raw_range else 200)
+        handler.send_header("Content-Type", _AUDIO_TYPES[path.suffix.lower()])
+        handler.send_header("Content-Length", str(length))
+        handler.send_header("Accept-Ranges", "bytes")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        if raw_range:
+            handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        handler.end_headers()
+        while length:
+            block = audio.read(min(length, 1024 * 1024))
+            if not block:
+                break
+            try:
+                handler.wfile.write(block)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # Browser stopped playback; do not treat this as a retry.
+            length -= len(block)
 
 
 def _local_host(handler) -> bool:

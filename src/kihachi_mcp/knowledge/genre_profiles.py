@@ -112,6 +112,40 @@ DRUM_PATTERNS: dict[str, DrumPattern] = {
         (0.0, 2.0, 1.0, 3.0), (2, 4), backbeat_pitch=SNARE, hat_offset=0.0,
         hat_step=0.25, hat_sparse_step=0.5,
     ),
+    # KIHACHI Studio additions, not from music-ai.
+    # Trap: half time, the clap on beat 3, sixteenth hats over a sliding 808.
+    "trap": DrumPattern(
+        (0.0, 1.75, 2.5, 3.25), (2, 4), backbeat_positions=(2.0,),
+        hat_offset=0.0, hat_step=0.25, hat_sparse_step=0.5,
+    ),
+    # Dembow: the reggaeton kick on every beat under a 3+3+2 snare.
+    "dembow": DrumPattern(
+        (0.0, 1.0, 2.0, 3.0), (4, 4), backbeat_positions=(0.75, 1.5, 2.75, 3.5),
+        backbeat_pitch=SNARE, hat_offset=0.0,
+    ),
+    # Drum & bass two-step: kick on 1 and the and of 3, snare on 2 and 4.
+    "dnb_two_step": DrumPattern(
+        (0.0, 2.5, 2.75), (2, 3), backbeat_pitch=SNARE, hat_offset=0.0,
+    ),
+    # Dubstep and halftime: one snare, on beat 3.
+    "halftime": DrumPattern(
+        (0.0, 2.75, 1.5), (1, 3), backbeat_positions=(2.0,), backbeat_pitch=SNARE,
+        hat_offset=0.0,
+    ),
+    # 808 electro: the syncopated kick of Planet Rock under a clap on 2 and 4.
+    "electro": DrumPattern(
+        (0.0, 2.5, 1.75, 3.25), (2, 4), hat_offset=0.0, hat_step=0.25,
+        hat_sparse_step=0.5,
+    ),
+    "afrobeat": DrumPattern(
+        (0.0, 2.0, 2.75, 1.5), (2, 4), backbeat_positions=(1.0, 3.0),
+        backbeat_pitch=SIDE_STICK, hat_offset=0.0, hat_step=0.25, hat_sparse_step=0.5,
+    ),
+    # Maqsum, D T - T D - T -: dum on the kick, tek on the side stick.
+    "maqsum": DrumPattern(
+        (0.0, 2.0), (2, 2), backbeat_positions=(0.5, 1.5, 3.0),
+        backbeat_pitch=SIDE_STICK, hat_offset=0.0,
+    ),
 }
 DEFAULT_PATTERN = "four_on_floor"
 
@@ -182,6 +216,10 @@ class Profile:
     harmonic_rhythm_bars: int | None = None
     #: Where an offbeat eighth lands inside its beat: 0.5 straight, 2/3 triplet.
     swing: float | None = None
+    #: A key of music_theory.HARMONY_STYLES: the progressions the genre plays.
+    harmony: str | None = None
+    #: A key of music_theory.MODES, when the genre leans on one.
+    mode: str | None = None
 
     def overlaid_with(self, other: Profile) -> Profile:
         stated = {
@@ -193,44 +231,93 @@ class Profile:
 
 
 FAMILY_PROFILES: dict[str, Profile] = {
-    "R&B / Soul / Funk": Profile(None, "short_offbeat_stabs", "dominant", None, 1),
-    "House": Profile("four_on_floor", "short_offbeat_stabs", "present", 0.85, 1),
-    "Disco": Profile("four_on_floor", "muted_upstrokes", "dominant", 0.8, 1),
-    "Techno": Profile("four_on_floor", "hypnotic_stabs", "supporting", 0.92, 2),
-    "Trance": Profile("four_on_floor", "sustained_chords", "supporting", 0.9, 2),
-    "EDM / Future Bass": Profile("four_on_floor", "sustained_chords", "supporting", 0.85, 2),
-    "Hardcore Electronic": Profile("four_on_floor", "stab_hits", "supporting", 0.95, 2),
-    "Reggae / Dub / Ska": Profile("one_drop", "offbeat_skank", "dominant", 0.45, 2),
-    "Jungle / Drum & Bass": Profile("breakbeat", "sparse_stabs", "dominant", 0.9, 4),
-    "Breakbeat / Breaks": Profile("breakbeat", "chopped_stabs", "dominant", 0.85, 2),
-    "UK Garage / Bass": Profile("two_step", "clipped_stabs", "dominant", 0.8, 1),
-    "Hip-Hop / Rap": Profile("boom_bap", "laid_back_stabs", "dominant", 0.6, 2),
-    "Ambient / Downtempo": Profile("sparse_pulse", "sustained_pads", "supporting", 0.15, 4),
+    "R&B / Soul / Funk": Profile(
+        None, "short_offbeat_stabs", "dominant", None, 1, harmony="funk", mode="dorian"
+    ),
+    "House": Profile("four_on_floor", "short_offbeat_stabs", "present", 0.85, 1, harmony="deep_house"),
+    "Disco": Profile("four_on_floor", "muted_upstrokes", "dominant", 0.8, 1, harmony="funk"),
+    "Techno": Profile("four_on_floor", "hypnotic_stabs", "supporting", 0.92, 2, harmony="techno"),
+    "Trance": Profile("four_on_floor", "sustained_chords", "supporting", 0.9, 2, harmony="edm"),
+    "EDM / Future Bass": Profile(
+        "four_on_floor", "sustained_chords", "supporting", 0.85, 2, harmony="edm"
+    ),
+    "Hardcore Electronic": Profile("four_on_floor", "stab_hits", "supporting", 0.95, 2, harmony="edm"),
+    "Reggae / Dub / Ska": Profile("one_drop", "offbeat_skank", "dominant", 0.45, 2, harmony="reggae"),
+    "Jungle / Drum & Bass": Profile("breakbeat", "sparse_stabs", "dominant", 0.9, 4, harmony="dnb"),
+    "Breakbeat / Breaks": Profile("breakbeat", "chopped_stabs", "dominant", 0.85, 2, harmony="dnb"),
+    "UK Garage / Bass": Profile("two_step", "clipped_stabs", "dominant", 0.8, 1, harmony="deep_house"),
+    "Hip-Hop / Rap": Profile("boom_bap", "laid_back_stabs", "dominant", 0.6, 2, harmony="jazz"),
+    "Ambient / Downtempo": Profile(
+        "sparse_pulse", "sustained_pads", "supporting", 0.15, 4, harmony="ambient"
+    ),
     "IDM / Experimental Electronic": Profile("broken_grid", "fragmented_stabs", "present", 0.7, 2),
-    "Jazz": Profile("swung_ride", "comped_chords", "present", 0.85, 1),
-    "Blues": Profile("shuffle", "comped_chords", "present", 0.6, 1),
-    "Brazilian": Profile("samba", "syncopated_comping", "present", 0.9, 1),
-    "Latin": Profile("clave", "montuno", "present", 0.8, 1),
-    "Rock": Profile("backbeat", "sustained_power_chords", "supporting", 0.55, 2),
-    "Punk / Hardcore": Profile("backbeat", "driving_downstrokes", "supporting", 0.7, 2),
-    "Metal": Profile("double_kick", "palm_muted_chugs", "supporting", 0.8, 2),
-    "Country / Americana": Profile("train_beat", "strummed_chords", "present", 0.65, 2),
-    "Folk": Profile("sparse_pulse", "strummed_chords", "present", 0.3, 2),
+    "Jazz": Profile("swung_ride", "comped_chords", "present", 0.85, 1, harmony="jazz", mode="dorian"),
+    "Blues": Profile("shuffle", "comped_chords", "present", 0.6, 1, harmony="blues"),
+    "Brazilian": Profile("samba", "syncopated_comping", "present", 0.9, 1, harmony="jazz"),
+    "Latin": Profile("clave", "montuno", "present", 0.8, 1, harmony="latin"),
+    "Rock": Profile("backbeat", "sustained_power_chords", "supporting", 0.55, 2, harmony="rock"),
+    "Punk / Hardcore": Profile(
+        "backbeat", "driving_downstrokes", "supporting", 0.7, 2, harmony="rock"
+    ),
+    "Metal": Profile("double_kick", "palm_muted_chugs", "supporting", 0.8, 2, harmony="rock"),
+    "Country / Americana": Profile("train_beat", "strummed_chords", "present", 0.65, 2, harmony="pop"),
+    "Folk": Profile("sparse_pulse", "strummed_chords", "present", 0.3, 2, harmony="pop"),
+    # KIHACHI Studio additions: families music-ai had no opinion about, which
+    # fell back to four on the floor with house stabs.
+    "Pop": Profile("backbeat", "sustained_chords", "present", 0.7, 1, harmony="pop"),
+    "East Asian": Profile("backbeat", "sustained_chords", "present", 0.7, 1, harmony="j_pop"),
+    "Electro / Synth / Industrial": Profile(
+        "electro", "stab_hits", "supporting", 0.85, 2, harmony="techno"
+    ),
+    "African": Profile("afrobeat", "syncopated_comping", "present", 0.9, 1, harmony="afro"),
+    "Global Bass / Club": Profile("dembow", "chopped_stabs", "dominant", 0.8, 2, harmony="trap"),
+    "Vaporwave / Internet": Profile(
+        "backbeat", "sustained_chords", "supporting", 0.5, 2, harmony="city_pop"
+    ),
+    "Middle East / North Africa": Profile(
+        "maqsum", "sparse_stabs", "present", 0.6, 2,
+        harmony="phrygian_dominant", mode="phrygian_dominant",
+    ),
+    "Soundtrack / Stage / Vocal": Profile(
+        "sparse_pulse", "sustained_pads", "supporting", 0.3, 4, harmony="ambient"
+    ),
+    "Classical / Art Music": Profile("sparse_pulse", "sustained_chords", "supporting", 0.2, 2),
+    "Experimental / Noise / Drone": Profile(
+        "broken_grid", "fragmented_stabs", "present", 0.5, 4
+    ),
 }
 
 #: Opinions about one genre that its family does not share. Keep this short:
 #: a row here claims the other genres of the family play differently.
 GENRE_PROFILES: dict[str, Profile] = {
     "tech_house": Profile(drum_pattern="syncopated_tech_house"),
+    # Its own progressions and plain minor, not the family's funk vamp.
     "mutation_funk": Profile(
         drum_pattern="mutation_funk", articulation="syncopated_comping",
         bass_role="dominant", hat_density=0.65, harmonic_rhythm_bars=2,
-        swing=0.56,
+        swing=0.56, harmony="", mode="",
     ),
     # KIHACHI Studio addition: dub techno keeps Techno's kick but not its
     # hypnotic stab -- the chord is the echoing dub stab -- and it breathes:
     # fewer hats, and the harmony moves slowly.
     "dub_techno": Profile(articulation="dub_chords", hat_density=0.7, harmonic_rhythm_bars=4),
+    "trap": Profile(drum_pattern="trap", bass_role="dominant", harmony="trap", hat_density=0.9),
+    "dubstep": Profile(drum_pattern="halftime", harmony="trap"),
+    "drum_bass": Profile(drum_pattern="dnb_two_step"),
+    "liquid_drum_bass": Profile(drum_pattern="dnb_two_step", articulation="sustained_chords"),
+    "liquid_funk": Profile(drum_pattern="dnb_two_step", articulation="sustained_chords"),
+    "neurofunk": Profile(drum_pattern="dnb_two_step"),
+    "techstep": Profile(drum_pattern="dnb_two_step"),
+    "reggaeton": Profile(drum_pattern="dembow", harmony="pop"),
+    "dance_pop": Profile(drum_pattern="four_on_floor"),
+    "electropop": Profile(drum_pattern="four_on_floor", harmony="edm"),
+    "synthpop": Profile(drum_pattern="four_on_floor", harmony="edm"),
+    "europop": Profile(drum_pattern="four_on_floor"),
+    "j_pop": Profile(harmony="j_pop"),
+    "city_pop": Profile(harmony="city_pop", swing=0.54),
+    "lo_fi_hip_hop": Profile(swing=0.58, articulation="sustained_chords", hat_density=0.5),
+    "boom_bap": Profile(swing=0.56),
+    "afro_house": Profile(harmony="afro"),
 }
 
 #: Swing the database states in its own words. Jazz's 0.58 is a lean, chosen by

@@ -4,7 +4,7 @@ Current milestone
 
 KIHACHI MUSIC AI Studio 統合 ／ 実機スモークテスト済み（Live 12.4.5、2026-09-28、[CURRENT_SYSTEM_STATUS](docs/CURRENT_SYSTEM_STATUS.md)）
 
-最短手順は [docs/QUICKSTART.md](docs/QUICKSTART.md)。
+最短手順は [docs/QUICKSTART.md](docs/QUICKSTART.md)。初回インストールは `scripts/インストール.command`、詳しい操作は [docs/MANUAL.md](docs/MANUAL.md)、macOSアプリのビルドと署名は [docs/MAC_APP.md](docs/MAC_APP.md) を参照してください。
 
 # KIHACHI Brain
 
@@ -30,7 +30,7 @@ Review improves every iteration.
 
 ```bash
 ./scripts/setup.sh      # 初回のみ
-uv run kihachi start    # http://127.0.0.1:8765/
+./scripts/kihachi-studio.command  # http://127.0.0.1:8765/
 ```
 
 または `scripts/kihachi-studio.command` をダブルクリックします。画面の説明は [docs/STUDIO_GUIDE.md](docs/STUDIO_GUIDE.md)、手順と復旧は [docs/STUDIO.md](docs/STUDIO.md)、困ったときは [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。Ollama は [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md)、Live は [docs/ABLETON_SETUP.md](docs/ABLETON_SETUP.md)。

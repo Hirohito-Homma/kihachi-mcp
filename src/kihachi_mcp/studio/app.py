@@ -10,7 +10,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
+from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
 from kihachi_mcp.services.live_paths import candidate_store_dir
+from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
 from kihachi_mcp.services.sample_catalog import SampleCatalog
@@ -141,6 +143,16 @@ def _handler_for(app: StudioApp):
                     self._send_json({"ok": False, "error": "候補がありません"}, 404)
                     return
                 candidate_id = parts[2]
+                if len(parts) >= 4 and parts[3] in {"preview.wav", "preview"}:
+                    candidate = runtime.get_candidate(candidate_id)
+                    if candidate is None:
+                        self._send_json({"ok": False, "error": "候補がありません"}, 404)
+                        return
+                    self._send_bytes(
+                        candidate_preview_wav(candidate), "audio/wav",
+                        f'inline; filename="kihachi-{candidate_id[:8]}-preview.wav"',
+                    )
+                    return
                 if len(parts) >= 4 and parts[3] in {"midi", "midi.mid"}:
                     exported = runtime.export_midi(candidate_id)
                     if not exported.get("ok"):
@@ -262,6 +274,29 @@ def _handler_for(app: StudioApp):
             ):
                 return
             body = self._read_json()
+            if parsed.path == "/api/samples/replace-preview":
+                try:
+                    sample_path = app.sample_catalog.audio_path(
+                        str(body.get("sample_id") or "")
+                    )
+                except ReferenceError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                self._send_json(
+                    runtime.sample_replacement_preview(
+                        str(body.get("candidate_id") or runtime.selected_id()),
+                        str(sample_path),
+                    )
+                )
+                return
+            if parsed.path == "/api/samples/replace":
+                self._send_json(
+                    runtime.apply_sample_replacement(
+                        str(body.get("replacement_id") or ""),
+                        confirmed=body.get("confirmed") is True,
+                    )
+                )
+                return
             if _workflow_post(self, runtime, parsed, body):
                 return
             if parsed.path == "/api/materialize":
@@ -395,10 +430,14 @@ def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
         handler._send_json(result, 200 if result.get("ok") else 404)
     elif parsed.path == "/api/settings":
         handler._send_json({"ok": True, "settings": runtime.settings()})
+    elif parsed.path == "/api/ai/cost":
+        handler._send_json(runtime.ai_cost_status((query.get("brief") or [""])[0]))
     elif parsed.path == "/api/ollama":
         handler._send_json(runtime.ollama_status())
     elif parsed.path == "/api/diagnostics":
         handler._send_json(runtime.diagnostics())
+    elif parsed.path == "/api/ableton/capabilities":
+        handler._send_json(runtime.live_capabilities())
     elif parsed.path == "/api/ableton/plan":
         handler._send_json(runtime.ableton_plan(candidate_id or runtime.selected_id()))
     else:
@@ -489,6 +528,33 @@ def _workflow_post(
         changes = body.get("settings")
         handler._send_json(
             runtime.update_settings(changes if isinstance(changes, dict) else {})
+        )
+    elif path == "/api/midi/preview":
+        handler._send_json(
+            runtime.midi_composer_preview(
+                body.get("constraints") if isinstance(body.get("constraints"), dict) else {},
+                str(body.get("operation") or "generate"),
+                body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
+            )
+        )
+    elif path == "/api/midi/compose":
+        handler._send_json(
+            runtime.compose_midi_part(
+                body.get("constraints") if isinstance(body.get("constraints"), dict) else {},
+                str(body.get("operation") or "generate"),
+                body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
+                confirmed_paid=bool(body.get("confirmed_paid")),
+                seed=int(body.get("seed") or 0),
+            )
+        )
+    elif path == "/api/midi/adopt-preview":
+        handler._send_json(
+            runtime.propose_composer_adoption(
+                str(body.get("candidate_id") or ""),
+                str(body.get("role") or ""),
+                int(body.get("pattern_bars") or 0),
+                body.get("notes") if isinstance(body.get("notes"), list) else [],
+            )
         )
     else:
         return False

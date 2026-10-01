@@ -1,10 +1,12 @@
 from fastmcp import FastMCP
 
 from kihachi_mcp.tools import (
+    compose_midi_part,
     create_ableton_plan,
     create_live_mutation_plan,
     create_midi_plan,
     create_project_from_songspec,
+    discover_live_capabilities,
     execute_live_request,
     expand_session_to_arrangement,
     generate_songspec,
@@ -62,6 +64,7 @@ for _tool in (
 ):
     mcp.add_tool(_tool)
 mcp.add_tool(preview_local_ai_song)
+mcp.add_tool(compose_midi_part)
 mcp.add_tool(hello)
 mcp.add_tool(generate_songspec)
 mcp.add_tool(create_project_from_songspec)
@@ -70,6 +73,7 @@ mcp.add_tool(create_midi_plan)
 mcp.add_tool(prepare_ableton_handoff)
 mcp.add_tool(inspect_live_state)
 mcp.add_tool(live_device_catalogue)
+mcp.add_tool(discover_live_capabilities)
 mcp.add_tool(create_live_mutation_plan)
 mcp.add_tool(request_live_execution)
 mcp.add_tool(execute_live_request)

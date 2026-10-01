@@ -115,7 +115,7 @@
   <header>
     <h1>KIHACHI 制作画面</h1>
     <p><a href="/references" style="color: var(--accent)">参考音源ライブラリを開く →</a></p>
-    <p class="sub">日本語の指示からMIDI候補を作り、確認してから Ableton Live の専用トラックへ適用します。有料APIは使いません。</p>
+    <p class="sub">日本語の指示からMIDI候補を作り、確認してから Ableton Live の専用トラックへ適用します。有料AIは設定で明示選択し、推定額を確認した操作だけ実行します。</p>
     <div class="status-row">
       <div id="ollama-pill" class="pill">Ollama: 確認中</div>
       <div id="live-pill" class="pill">Live: 確認中</div>
@@ -127,6 +127,7 @@
       <p id="error-message"></p>
       <pre id="error-detail" class="hidden"></pre>
       <div class="actions">
+        <a id="error-open-studio" class="secondary hidden" href="http://127.0.0.1:8765/">制作画面を開く</a>
         <button id="error-retry" class="secondary" type="button">再試行</button>
         <button id="error-settings" class="secondary" type="button">設定</button>
         <button id="error-diagnostics" class="secondary" type="button">診断</button>
@@ -169,6 +170,28 @@
       <p id="job-line" class="progress"></p>
     </section>
 
+    <section id="midi-composer-view">
+      <h2>パート単位MIDI Composer</h2>
+      <p class="sub">制約を先に確認し、MIDIノート候補だけを生成します。Abletonや現在の曲は変更しません。</p>
+      <div class="grid">
+        <label>役割<select id="composer-role"><option value="bass">Bass</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="arp">Arp</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
+        <label>Key<input id="composer-key" value="D#m"></label>
+        <label>Tempo<input id="composer-tempo" type="number" min="40" max="240" value="124"></label>
+        <label>Bars<input id="composer-bars" type="number" min="1" max="256" value="8"></label>
+        <label>Grid<select id="composer-grid"><option>1/16</option><option>1/8</option><option>1/4</option><option>1/32</option></select></label>
+        <label>Syncopation 0–1<input id="composer-syncopation" type="number" min="0" max="1" step="0.1" value="0.7"></label>
+        <label>Octave jump 0–1<input id="composer-octave" type="number" min="0" max="1" step="0.1" value="0.2"></label>
+        <label>Velocity min<input id="composer-velocity-min" type="number" min="1" max="127" value="65"></label>
+        <label>Velocity max<input id="composer-velocity-max" type="number" min="1" max="127" value="118"></label>
+        <label>Kick onsets（拍、カンマ区切り）<input id="composer-kicks" placeholder="0, 1, 2, 3"></label>
+      </div>
+      <label class="inline"><input id="composer-ghost" type="checkbox" checked> Ghost notes</label>
+      <label class="inline"><input id="composer-avoid-kick" type="checkbox" checked> Kickとの同時発音を避ける</label>
+      <div class="actions"><button id="composer-preview" class="secondary" type="button">制約と料金を確認</button><button id="composer-run" type="button" disabled>MIDI候補を生成</button><button id="composer-adopt" class="secondary" type="button" disabled>選択中の候補へ採用案を作る</button></div>
+      <p id="composer-status" role="status" class="sub"></p>
+      <div id="composer-result"></div>
+    </section>
+
     <section id="brief-view" class="hidden">
       <h2>AIが解釈した内容</h2>
       <div id="spec-grid" class="grid"></div>
@@ -194,6 +217,9 @@
       <div class="actions">
         <a id="midi-link" href="#"><button type="button">MIDIを書き出す</button></a>
       </div>
+      <p id="candidate-audio-label" class="sub"></p>
+      <audio id="candidate-audio" controls preload="none" aria-label="候補の8小節試聴"></audio>
+      <p class="sub">試聴は簡易音色です。Liveへの送信や承認は行いません。</p>
       <p class="sub">これは技術的に指示を反映した候補です。音楽的に気に入るかは別です。</p>
     </section>
 
@@ -239,6 +265,7 @@
           <label class="inline">対象
             <select id="request-scope">
               <option value="bass">ベースだけ</option>
+              <option value="syncopation">ベースをシンコペーション</option>
               <option value="drums">ドラムだけ</option>
               <option value="velocity">ベロシティだけ</option>
               <option value="section">セクション末尾</option>
@@ -374,19 +401,33 @@
           <label class="inline">プロバイダ
             <select id="setting-provider">
               <option value="ollama">Ollama（ローカル）</option>
+              <option value="openai">OpenAI（明示選択・有料）</option>
               <option value="deterministic">AIなし（既定解釈）</option>
             </select>
           </label>
           <label class="inline">Ollama URL <input type="text" id="setting-url" style="width:24ch"></label>
           <label class="inline">モデル <select id="setting-model"></select></label>
+          <label class="inline">OpenAIモデル
+            <select id="setting-openai-model">
+              <option value="gpt-6.1-sol">Sol（通常）</option>
+              <option value="gpt-6-astra">Astra（重要な作曲）</option>
+            </select>
+          </label>
+          <label class="inline">月間上限（円） <input type="number" id="setting-ai-limit" min="100" step="100" style="width:9ch"></label>
         </div>
         <div class="actions">
           <button id="ollama-test" class="secondary" type="button">接続テスト</button>
           <button id="settings-save" class="secondary" type="button">保存</button>
         </div>
         <p id="settings-line" role="status" class="sub">導入済みのモデルだけを選べます。KIHACHIはモデルをダウンロードしません。</p>
+        <p id="ai-cost-line" role="status" class="sub">有料APIの見積りを確認中…</p>
         <h2 style="margin-top:16px">Ableton</h2>
         <div id="ableton-settings" class="grid"></div>
+        <h3>利用可能な操作</h3>
+        <table>
+          <thead><tr><th>機能</th><th>対応</th><th>現在</th><th>範囲</th></tr></thead>
+          <tbody id="ableton-capabilities"></tbody>
+        </table>
         <h2 style="margin-top:16px">Project</h2>
         <div id="project-settings" class="grid"></div>
         <p class="sub">既定値は指示に書かれていない項目にだけ使います。保存先は環境変数 KIHACHI_PROJECT_DIR で変えられます（Studio の再起動が必要）。</p>
@@ -655,6 +696,77 @@
       $("reference-reason").textContent = "BPMを追記しました。制作指示を確認して「候補を生成」を押してください";
     };
 
+    let composerPreview = null;
+    let composerGenerated = null;
+    function composerConstraints() {
+      const kickOnsets = $("composer-kicks").value.split(",").map((value) => Number(value.trim())).filter(Number.isFinite);
+      return {
+        role: $("composer-role").value,
+        key: $("composer-key").value.trim(),
+        tempo: Number($("composer-tempo").value),
+        bars: Number($("composer-bars").value),
+        grid: $("composer-grid").value,
+        syncopation: Number($("composer-syncopation").value),
+        octave_jump: Number($("composer-octave").value),
+        ghost_notes: $("composer-ghost").checked,
+        velocity_min: Number($("composer-velocity-min").value),
+        velocity_max: Number($("composer-velocity-max").value),
+        avoid_kick_collision: $("composer-avoid-kick").checked,
+        kick_onsets: kickOnsets
+      };
+    }
+    function invalidateComposerPreview() {
+      composerPreview = null;
+      composerGenerated = null;
+      $("composer-run").disabled = true;
+      $("composer-adopt").disabled = true;
+      $("composer-status").textContent = "入力が変わりました。制約と料金をもう一度確認してください。";
+    }
+    for (const element of document.querySelectorAll("#midi-composer-view input, #midi-composer-view select")) {
+      element.addEventListener("input", invalidateComposerPreview);
+    }
+    $("composer-preview").onclick = async () => {
+      const constraints = composerConstraints();
+      $("composer-preview").disabled = true;
+      $("composer-run").disabled = true;
+      $("composer-result").innerHTML = "";
+      try {
+        const data = await post("/api/midi/preview", {operation: "generate", constraints});
+        if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
+        composerPreview = {constraints: JSON.stringify(constraints), paid: data.paid_api};
+        const estimate = data.cost?.estimate?.estimated_jpy;
+        const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
+        $("composer-status").textContent = `${data.provider} / ${data.model}${money}。Abletonには送りません。`;
+        $("composer-run").disabled = Boolean(data.cost && !data.cost.allowed);
+      } finally { $("composer-preview").disabled = false; }
+    };
+    $("composer-run").onclick = async () => {
+      const constraints = composerConstraints();
+      if (!composerPreview || composerPreview.constraints !== JSON.stringify(constraints)) { invalidateComposerPreview(); return; }
+      $("composer-run").disabled = true;
+      $("composer-status").textContent = "MIDI候補を生成中…";
+      const data = await post("/api/midi/compose", {operation: "generate", constraints, confirmed_paid: composerPreview.paid});
+      if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
+      composerPreview = null;
+      composerGenerated = {candidate_id: state.candidate?.candidate_id || "", role: constraints.role, pattern_bars: constraints.bars, notes: data.notes || []};
+      $("composer-status").textContent = `${data.provider} / ${data.model}: ${data.note_count}ノートを生成しました。Abletonには未適用です。`;
+      $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
+      $("composer-adopt").disabled = !state.candidate || constraints.role === "drums";
+    };
+    $("composer-adopt").onclick = async () => {
+      if (!composerGenerated || !state.candidate) return;
+      if (composerGenerated.candidate_id !== state.candidate.candidate_id) {
+        $("composer-status").textContent = "選択中の候補が変わりました。MIDI候補を生成し直してください。";
+        $("composer-adopt").disabled = true;
+        return;
+      }
+      $("composer-adopt").disabled = true;
+      const data = await post("/api/midi/adopt-preview", composerGenerated);
+      if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
+      renderRevisionProposal(data);
+      $("composer-status").textContent = `${data.target_part}だけを変更する採用案を作りました。下のBEFORE / AFTERを確認してください。`;
+    };
+
     function setPill(id, ok, text) {
       const el = $(id);
       el.textContent = text;
@@ -734,6 +846,13 @@
       $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
       $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${clip.part}</td><td>${clip.section_name}</td><td>${clip.start_bar}–${clip.start_bar + clip.length_bars - 1}</td><td>${clip.note_count}</td></tr>`).join("");
       $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
+      const peak = brief.sections.find((section) => ["Drop", "ChorusA"].includes(section.name)) || brief.sections[0];
+      const listenBars = Math.min(8, peak.length_bars);
+      $("candidate-audio-label").textContent = `${peak.name} ${peak.start_bar}–${peak.start_bar + listenBars - 1}小節を試聴`;
+      const candidateAudio = $("candidate-audio");
+      candidateAudio.pause();
+      candidateAudio.src = `/api/candidate/${candidate.candidate_id}/preview.wav`;
+      candidateAudio.load();
       $("dry-run").innerHTML = "";
       $("apply-summary").innerHTML = "";
       $("verify-result").innerHTML = "";
@@ -1234,10 +1353,7 @@
     }
 
     const picked = () => [...document.querySelectorAll(".issue-pick:checked")].map((x) => x.value);
-    async function requestRevision(body) {
-      if (!state.candidate) return;
-      const data = await post("/api/revision", { candidate_id: state.candidate.candidate_id, ...body });
-      if (!data.ok) { $("approve-line").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
+    function renderRevisionProposal(data) {
       pendingRevision = data.revision;
       $("revision-view").classList.remove("hidden");
       $("revision-before").innerHTML = pendingRevision.before.map((x) => `<li>${esc(x)}</li>`).join("");
@@ -1246,6 +1362,12 @@
       $("revision-accept").disabled = false;
       $("revision-reject").disabled = false;
       $("revision-view").scrollIntoView({ behavior: "smooth" });
+    }
+    async function requestRevision(body) {
+      if (!state.candidate) return;
+      const data = await post("/api/revision", { candidate_id: state.candidate.candidate_id, ...body });
+      if (!data.ok) { $("approve-line").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
+      renderRevisionProposal(data);
     }
     $("revise-selected").onclick = () => {
       const ids = picked();
@@ -1312,7 +1434,7 @@
     $("diagnostics-run").onclick = runDiagnostics;
 
     async function loadSettings() {
-      const [settings, ollama] = await Promise.all([getJson("/api/settings"), getJson("/api/ollama")]);
+      const [settings, ollama, capabilities] = await Promise.all([getJson("/api/settings"), getJson("/api/ollama"), getJson("/api/ableton/capabilities")]);
       const s = settings.settings || {};
       $("setting-provider").value = s.ai_provider;
       $("setting-url").value = s.ollama_url;
@@ -1320,8 +1442,13 @@
       const options = models.includes(s.ollama_model) ? models : [s.ollama_model, ...models];
       $("setting-model").innerHTML = options.map((m) => `<option value="${esc(m)}">${esc(m)}${models.includes(m) ? "" : "（未導入）"}</option>`).join("");
       $("setting-model").value = s.ollama_model;
+      $("setting-openai-model").value = s.openai_model;
+      $("setting-ai-limit").value = s.monthly_ai_limit_jpy;
+      const cost = await getJson("/api/ai/cost?brief=" + encodeURIComponent($("brief").value));
+      $("ai-cost-line").textContent = `次回推定 約${Number(cost.estimate?.estimated_jpy || 0).toFixed(2)}円 / 今月 ${Number(cost.spent_jpy || 0).toFixed(2)}円 / 上限 ${cost.limit_jpy || 500}円`;
       $("settings-line").textContent = `${ollama.ok ? "READY" : "OFFLINE"}: ${ollama.message || ""}`;
       $("ableton-settings").innerHTML = [["Host", s.ableton_host], ["KIHACHI Device Port (UDP)", s.ableton_port], ["AbletonGPT Remote Script Port (TCP)", s.abletongpt_port]].map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+      $("ableton-capabilities").innerHTML = (capabilities.capabilities || []).map((row) => `<tr><td>${esc(row.id)}</td><td class="${row.status === "unsupported" ? "bad" : "warn"}">${esc(row.status.toUpperCase())}</td><td class="${row.runtime_ready ? "ok" : "warn"}">${row.runtime_ready ? "READY" : "OFFLINE"}</td><td>${esc(row.detail)}</td></tr>`).join("");
       $("project-settings").innerHTML = [["Default BPM", s.default_bpm], ["Default Bars", s.default_bars], ["Default Style", s.default_style], ["Project Directory", s.project_dir]].map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
     }
     $("ollama-test").onclick = async () => {
@@ -1330,7 +1457,7 @@
       $("settings-line").textContent = `${o.ok ? "READY" : "OFFLINE"}: ${o.message || ""}（導入済み: ${(o.installed_models || []).join(", ") || "なし"}）`;
     };
     $("settings-save").onclick = async () => {
-      const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value } });
+      const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value, openai_model: $("setting-openai-model").value, monthly_ai_limit_jpy: Number($("setting-ai-limit").value) } });
       $("settings-line").innerHTML = data.ok ? '<span class="ok">保存しました。次の生成から使います。</span>' : `<span class="bad">${esc(data.error)}</span>`;
       refreshHealth();
     };
@@ -1342,9 +1469,15 @@
     $("error-retry").onclick = async () => { const retry = lastFailed; hideError(); if (retry) await retry(); };
     $("developer-mode").onchange = () => { $("error-detail").classList.toggle("hidden", !$("developer-mode").checked || !$("error-detail").textContent); };
 
-    loadProjects();
-    loadSelected();
-    setInterval(refreshHealth, 4000);
+    if (window.location.protocol === "file:") {
+      showError("HTMLファイルを直接開いています。StudioのURLから開いてください。", "", null);
+      $("error-open-studio").classList.remove("hidden");
+      $("error-retry").classList.add("hidden");
+    } else {
+      loadProjects();
+      loadSelected();
+      setInterval(refreshHealth, 4000);
+    }
   </script>
 </body>
 </html>

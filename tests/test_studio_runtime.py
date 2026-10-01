@@ -110,6 +110,28 @@ def test_fill_drum_samples_occupies_empty_pads(tmp_path: Path) -> None:
     assert {int(pad["note"]) for pad in kick["occupied_pads"]} == {36}
 
 
+def test_kick_replacement_requires_preview_then_changes_only_kick(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    replacement = tmp_path / "heavy-kick.wav"
+    replacement.write_bytes(b"heavy")
+    kick = next(track for track in transport.live_set.tracks if "Kick" in track["name"])
+    hats = next(track for track in transport.live_set.tracks if "Hats" in track["name"])
+    hats_before = [dict(pad) for pad in hats["occupied_pads"]]
+
+    preview = runtime.sample_replacement_preview(candidate.candidate_id, str(replacement))
+
+    assert preview["ok"] is True
+    assert preview["applied_to_live"] is False
+    assert kick["occupied_pads"][0]["sample_path"] != str(replacement)
+    refused = runtime.apply_sample_replacement(preview["replacement_id"], confirmed=False)
+    assert refused["ok"] is False
+    result = runtime.apply_sample_replacement(preview["replacement_id"], confirmed=True)
+    assert result["ok"] is True
+    assert kick["occupied_pads"][0]["sample_path"] == str(replacement)
+    assert hats["occupied_pads"] == hats_before
+
+
 def test_inspect_coverage_lists_leftover_kihachi_tracks(tmp_path: Path) -> None:
     live = FakeLiveSet(live_version="12.4.3", tempo=125)
     live.add_track("KIHACHI Kick ca90283e [KIHACHI]")

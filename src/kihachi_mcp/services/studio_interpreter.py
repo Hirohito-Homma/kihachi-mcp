@@ -38,7 +38,7 @@ STUDIO_SCHEMA = {
     "properties": {
         "genre": {"type": "string", "enum": list(SUPPORTED_GENRES)},
         "tempo": {"type": "integer", "minimum": 60, "maximum": 180},
-        "bars": {"type": "integer", "minimum": 16, "maximum": 256},
+        "bars": {"type": "integer", "minimum": 4, "maximum": 256},
         "key": {"type": "string", "enum": list(KEY_ENUM)},
         "mood": {"type": "string"},
         "hats_first_half": {"type": "string", "enum": list(DENSITY_VALUES)},
@@ -442,26 +442,17 @@ def _tone_notes(merged: dict[str, SourcedValue]) -> list[str]:
 
 
 def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[SectionIntent, ...]:
-    """Build contiguous sections, honoring an explicit drop start bar."""
+    """Build contiguous sections, honoring an explicit drop start bar.
+
+    Shaped for listening to one song rather than for a DJ's mix: a short Intro
+    and Outro, and a Break between two Drops so the song goes somewhere.
+    """
     if drop_start_bar:
-        intro_end = min(32, drop_start_bar - 1)
-        if intro_end < 1:
-            intro_end = drop_start_bar - 1
-        parts: list[tuple[str, int, int]] = []
-        cursor = 1
-        if intro_end >= 1:
-            parts.append(("Intro", 1, intro_end))
-            cursor = intro_end + 1
-        if cursor < drop_start_bar:
-            parts.append(("Build", cursor, drop_start_bar - cursor))
-        remaining = bars - drop_start_bar + 1
-        outro = 16 if remaining > 32 else 0
-        if outro and remaining - outro >= 8:
-            parts.append(("Drop", drop_start_bar, remaining - outro))
-            parts.append(("Outro", bars - outro + 1, outro))
-        else:
-            parts.append(("Drop", drop_start_bar, remaining))
-        return tuple(SectionIntent(name, start, length) for name, start, length in parts)
+        lengths = [
+            *_before_drop(drop_start_bar - 1),
+            *_from_drop(bars - drop_start_bar + 1),
+        ]
+        return _contiguous(lengths)
 
     if genre == "mutation_funk" and bars >= 32:
         if bars >= 96:
@@ -482,6 +473,38 @@ def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[Sec
             cursor += length
         return tuple(sections)
 
+    if genre == "j_pop" and bars >= 32:
+        # Verse/chorus form, with the second chorus providing the late peak.
+        unit, remainder = divmod(bars, 16)
+        return _contiguous([
+            ("Intro", unit), ("VerseA", unit * 3), ("ChorusA", unit * 4),
+            ("VerseB", unit * 2), ("Break", unit),
+            ("ChorusB", unit * 4 + remainder), ("Outro", unit),
+        ])
+
+    if genre == "liquid_drum_bass" and bars >= 32:
+        # A restrained verse delays the first drop; the reprise is shorter.
+        eighth, remainder = divmod(bars, 8)
+        return _contiguous([
+            ("Intro", eighth), ("VerseA", eighth), ("Build", eighth),
+            ("Drop", eighth * 2), ("Break", eighth),
+            ("Drop", eighth + remainder), ("Outro", eighth),
+        ])
+
+    if bars >= 32:
+        # Eighths: Intro, Build, Drop x2, Break, Drop x2, Outro.
+        eighth = bars // 8
+        return _contiguous(
+            [
+                ("Intro", eighth),
+                ("Build", eighth),
+                ("Drop", eighth * 2),
+                ("Break", eighth),
+                ("Drop", eighth * 2),
+                ("Outro", bars - eighth * 7),
+            ]
+        )
+
     quarter = bars // 4
     return (
         SectionIntent("Intro", 1, quarter),
@@ -489,6 +512,42 @@ def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[Sec
         SectionIntent("Drop", 1 + quarter * 2, quarter),
         SectionIntent("Outro", 1 + quarter * 3, bars - quarter * 3),
     )
+
+
+def _before_drop(bars: int) -> list[tuple[str, int]]:
+    """Intro and Build before the drop; a long run-up gets a groove between."""
+    if bars <= 0:
+        return []
+    if bars < 12:
+        return [("Intro", bars)]
+    if bars < 32:
+        return [("Intro", bars - 8), ("Build", 8)]
+    if bars == 32:
+        return [("Intro", 16), ("Build", 16)]
+    return [("Intro", 16), ("VerseA", bars - 32), ("Build", 16)]
+
+
+def _from_drop(bars: int) -> list[tuple[str, int]]:
+    """Drop, Break, a second Drop and a short Outro, as the bars allow."""
+    if bars >= 48:
+        return [("Drop", 16), ("Break", 8), ("Drop", bars - 32), ("Outro", 8)]
+    if bars >= 32:
+        return [("Drop", 16), ("Break", 4), ("Drop", bars - 24), ("Outro", 4)]
+    if bars >= 24:
+        return [("Drop", bars - 8), ("Outro", 8)]
+    if bars >= 12:
+        return [("Drop", bars - 4), ("Outro", 4)]
+    return [("Drop", bars)]
+
+
+def _contiguous(lengths: list[tuple[str, int]]) -> tuple[SectionIntent, ...]:
+    sections = []
+    cursor = 1
+    for name, length in lengths:
+        if length > 0:
+            sections.append(SectionIntent(name, cursor, length))
+            cursor += length
+    return tuple(sections)
 
 
 def build_interpretations(

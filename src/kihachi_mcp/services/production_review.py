@@ -145,8 +145,8 @@ def _drop_contrast(candidate: MidiCandidate) -> dict[str, Any] | None:
     if index == 0:
         return None
     previous = sections[index - 1]
-    drop_density = _notes_per_bar(candidate, drop.name)
-    previous_density = _notes_per_bar(candidate, previous.name)
+    drop_density = _notes_per_bar(candidate, drop)
+    previous_density = _notes_per_bar(candidate, previous)
     if previous_density <= 0 or drop_density >= previous_density * 1.05:
         return None
     return _issue(
@@ -160,13 +160,17 @@ def _drop_contrast(candidate: MidiCandidate) -> dict[str, Any] | None:
     )
 
 
-def _notes_per_bar(candidate: MidiCandidate, section_name: str) -> float:
-    clips = [clip for clip in candidate.clips if clip.section_name == section_name]
+def _notes_per_bar(candidate: MidiCandidate, section: Any) -> float:
+    """By bars rather than name: a song for listening has a second Drop."""
+    clips = [
+        clip
+        for clip in candidate.clips
+        if section.start_bar <= clip.start_bar <= section.end_bar
+    ]
     if not clips:
         return 0.0
     notes = sum(len(clip.notes) for clip in clips)
-    bars = max(clip.length_bars for clip in clips)
-    return notes / max(1, bars)
+    return notes / max(1, section.length_bars)
 
 
 #: Bass at or below this pitch fights the kick for the same low end.

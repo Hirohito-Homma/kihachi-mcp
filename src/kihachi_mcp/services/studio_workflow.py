@@ -32,8 +32,8 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 
 #: Keys the Studio may change. Anything else in a request is ignored.
-EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model")
-AI_PROVIDERS = ("ollama", "deterministic")
+EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model", "openai_model", "monthly_ai_limit_jpy")
+AI_PROVIDERS = ("ollama", "openai", "deterministic")
 
 
 def system_statuses(
@@ -299,7 +299,13 @@ def validate_settings(changes: dict[str, Any], installed_models: list[str]) -> s
     """Return an error message, or "" when the change is acceptable."""
     provider = changes.get("ai_provider")
     if provider is not None and provider not in AI_PROVIDERS:
-        return "AIプロバイダは ollama か deterministic を選んでください"
+        return "AIプロバイダは ollama、openai、deterministic から選んでください"
+    openai_model = changes.get("openai_model")
+    if openai_model is not None and openai_model not in {"gpt-6.1-sol", "gpt-6-astra"}:
+        return "OpenAIモデルは Sol または Astra を選んでください"
+    limit = changes.get("monthly_ai_limit_jpy")
+    if limit is not None and (not isinstance(limit, int) or not 100 <= limit <= 100_000):
+        return "月間上限は100〜100000円の整数で指定してください"
     model = changes.get("ollama_model")
     if model is not None:
         if not isinstance(model, str) or not model.strip():

@@ -16,11 +16,12 @@ from kihachi_mcp.services.production_review import (
 )
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
-_SCOPES = {"bass", "drums", "section", "velocity", "arrangement"}
+_SCOPES = {"bass", "syncopation", "drums", "section", "velocity", "arrangement"}
 #: The drums a revision thins or softens; the kick carries the groove and stays.
 _TOP_DRUMS = frozenset({"Hats", "Snare", "OpenHat", "Perc"})
 _SCOPE_LABELS = {
     "bass": "ベース",
+    "syncopation": "ベースのシンコペーション",
     "drums": "ドラム",
     "section": "セクション末尾",
     "velocity": "ベロシティ",
@@ -134,6 +135,16 @@ def _rewrite_clip(
             and on_kick(kicks or {}, absolute_bar, note.start_beats % beats)
         ):
             velocity = min(velocity, DUCKED_BASS_VELOCITY)
+        start_beats = note.start_beats
+        if (
+            "syncopation" in scopes
+            and clip.part == "Bass"
+            and index % 2 == 1
+            and abs(start_beats - round(start_beats)) < 1e-6
+        ):
+            shifted = start_beats + 0.5
+            if _can_shift_bass_note(clip, index, shifted, beats, kicks or {}):
+                start_beats = shifted
         if (
             "section" in scopes
             and clip.section_name in {"Build", "Break"}
@@ -144,9 +155,9 @@ def _rewrite_clip(
         if "arrangement" in scopes and clip.part == "Lead" and clip.section_name == "Intro":
             continue
         notes.append(
-            replace(note, pitch=pitch, velocity=velocity)
+            replace(note, pitch=pitch, velocity=velocity, start_beats=start_beats)
             if isinstance(note, MidiNote)
-            else MidiNote(pitch, note.start_beats, note.duration_beats, velocity)
+            else MidiNote(pitch, start_beats, note.duration_beats, velocity)
         )
     if notes == list(clip.notes):
         return clip
@@ -159,6 +170,30 @@ def _rewrite_clip(
     )
 
 
+def _can_shift_bass_note(
+    clip: CandidateClip,
+    note_index: int,
+    shifted_start: float,
+    beats_per_bar: float,
+    kicks: dict[int, set[float]],
+) -> bool:
+    """Move a note only when it stays in the clip and avoids kick/onset clashes."""
+    if shifted_start >= clip.length_bars * beats_per_bar:
+        return False
+    bar = clip.start_bar + int(shifted_start // beats_per_bar)
+    local_beat = shifted_start % beats_per_bar
+    if on_kick(kicks, bar, local_beat):
+        return False
+    for index, other in enumerate(clip.notes):
+        if index == note_index:
+            continue
+        if abs(other.start_beats - shifted_start) <= 0.02:
+            return False
+        if other.start_beats < shifted_start < other.start_beats + other.duration_beats:
+            return False
+    return True
+
+
 def _after_lines(issues: list[dict[str, Any]], bars: tuple[int, int] | None = None) -> list[str]:
     where = f"{bars[0]}–{bars[1]} 小節の" if bars else ""
     lines = []
@@ -166,6 +201,8 @@ def _after_lines(issues: list[dict[str, Any]], bars: tuple[int, int] | None = No
         if issue["scope"] == "bass":
             target = where or f"{issue['bars']} の後半"
             lines.append(f"{target}ベースにオクターブの変化を入れました。")
+        elif issue["scope"] == "syncopation":
+            lines.append(f"{where}ベースの一部を8分裏へ移し、キックと重なる位置は避けました。")
         elif issue["scope"] == "drums":
             lines.append(f"{where}ハットの一部のベロシティを下げ、同じ繰り返しを緩めました。")
         elif issue["scope"] == "velocity":

@@ -1,5 +1,7 @@
 from fastmcp import FastMCP
 
+from kihachi_mcp.gateway.http import register_health_route
+from kihachi_mcp.gateway.tools import register_gateway_tools
 from kihachi_mcp.tools import (
     compose_midi_part,
     create_ableton_plan,
@@ -83,11 +85,19 @@ mcp.add_tool(review_songspec)
 mcp.add_tool(remember_song)
 mcp.add_tool(search_memory)
 mcp.add_tool(orchestrate_song)
+register_gateway_tools(mcp)
+register_health_route(mcp)
 
 
 def main() -> None:
-    """Start the KIHACHI MUSIC AI MCP server."""
-    mcp.run()
+    """Start the KIHACHI MUSIC AI MCP server on stdio.
+
+    HTTP is ``kihachi serve --transport streamable-http``. This entry stays
+    on stdio so an existing local MCP client keeps working.
+    """
+    from kihachi_mcp.gateway.serve import serve_stdio
+
+    serve_stdio()
 
 
 if __name__ == "__main__":

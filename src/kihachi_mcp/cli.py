@@ -145,6 +145,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--yes", action="store_true", help="確認の質問を省略する")
     probe.set_defaults(handler=_probe_devices)
+
+    serve = commands.add_parser(
+        "serve",
+        help="MCP サーバーを起動します（stdio または streamable-http）",
+    )
+    serve.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default=None,
+        help="未指定時は KIHACHI_MCP_TRANSPORT、それも無ければ stdio",
+    )
+    serve.add_argument("--host", default=None, help="HTTP の待受。127.0.0.1 のみ")
+    serve.add_argument("--port", type=int, default=None)
+    serve.add_argument("--path", default=None, help="MCP のパス。既定 /mcp")
+    serve.set_defaults(handler=_serve)
     return parser
 
 
@@ -307,6 +322,12 @@ def _resolve(runtime: StudioRuntime, text: str) -> str:
     if not matches:
         raise SystemExit(f"候補 '{text}' が見つかりません。kihachi projects で確認してください。")
     raise SystemExit(f"'{text}' に当てはまる候補が複数あります。もう少し長く指定してください。")
+
+
+def _serve(args: argparse.Namespace) -> int:
+    from kihachi_mcp.gateway.serve import serve_from_args
+
+    return serve_from_args(args)
 
 
 def _start(args: argparse.Namespace) -> int:

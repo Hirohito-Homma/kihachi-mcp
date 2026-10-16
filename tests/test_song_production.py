@@ -403,7 +403,182 @@ def test_registry_keeps_studio_create_song() -> None:
     names = {tool.name for tool in asyncio.run(mcp.list_tools())}
     assert "create_song" in names
     assert "produce_ableton_song" in names
+    assert "get_midi_clip_notes" in names
+    exposed = {row["name"] for row in ableton_tool_catalogue()["exposed"]}
+    assert "get_midi_clip_notes" in exposed
     missing = {row["name"] for row in ableton_tool_catalogue()["not_implemented"]}
     assert "rename_track" in missing
     assert "delete_track" in missing
     assert "add_notes" not in missing
+
+
+def test_get_midi_clip_notes_validates_target_completeness_and_note_shape() -> None:
+    from kihachi_mcp.gateway.live_tools import get_midi_clip_notes
+
+    fake = FakeLive(tracks=[_track(0, "BASS"), _track(1, "BASS"), _track(2, "SOLO")])
+    configure_ableton_client(fake)
+
+    assert get_midi_clip_notes(track_index=2, clip_index=-1)["complete"] is False
+    assert get_midi_clip_notes(track_index=2, track_name="SOLO", clip_index=0)["complete"] is False
+    assert get_midi_clip_notes(clip_index=0)["complete"] is False
+    assert get_midi_clip_notes(track_name="   ", clip_index=0)["complete"] is False
+    assert fake.calls == []
+
+    dup = get_midi_clip_notes(track_name="BASS", clip_index=0)
+    assert dup["ok"] is False and dup["complete"] is False
+    assert "一意" in dup["error"]
+
+    empty_slot = get_midi_clip_notes(track_index=2, clip_index=0)
+    assert empty_slot["ok"] is False and empty_slot["complete"] is False
+
+    fake.session[(2, 0)] = {
+        "name": "Bass Loop",
+        "length": 8.0,
+        "notes": [
+            {"pitch": 39, "start_time": 0.0, "duration": 0.5, "velocity": 100},
+            {"pitch": 51, "start_time": 4.0, "duration": 0.25, "velocity": 90},
+        ],
+    }
+    read = get_midi_clip_notes(track_name="SOLO", clip_index=0)
+    assert read["ok"] is True
+    assert read["complete"] is True
+    assert read["status"] == "SUCCESS"
+    assert read["live_changed"] is False
+    assert read["track_index"] == 2
+    assert read["clip_index"] == 0
+    assert read["note_count"] == 2
+    assert len(read["notes"]) == 2
+
+    class CustomRemote:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def call(self, command: str, timeout: float | None = None, **params: Any) -> Any:
+            assert command == "get_midi_clip_notes"
+            return dict(self.payload)
+
+    truncated_notes = [
+        {"pitch": 36, "start_time": float(i % 16) * 0.25, "duration": 0.1, "velocity": 100}
+        for i in range(4096)
+    ]
+    configure_ableton_client(
+        CustomRemote(
+            {
+                "track_index": 0,
+                "clip_index": 0,
+                "clip": "Big Clip",
+                "length_beats": 16.0,
+                "notes": truncated_notes,
+                "note_count": 5000,
+                "truncated": True,
+            }
+        )
+    )
+    partial = get_midi_clip_notes(track_index=0, clip_index=0)
+    assert partial["ok"] is False
+    assert partial["complete"] is False
+    assert partial["status"] == "PARTIAL"
+    assert partial["live_changed"] is False
+
+    for bad_note in (
+        {"pitch": 128, "start_time": 0.0, "duration": 0.5, "velocity": 100},
+        {"pitch": 60, "start_time": 8.0, "duration": 0.5, "velocity": 100},
+        {"pitch": 60, "start_time": 0.0, "duration": 0.0, "velocity": 100},
+        {"pitch": 60, "start_time": 0.0, "duration": 0.5, "velocity": 0},
+        {"pitch": 60, "start_time": 0.0, "duration": 0.5, "velocity": 100, "probability": 1.5},
+    ):
+        configure_ableton_client(
+            CustomRemote(
+                {
+                    "track_index": 0,
+                    "clip_index": 0,
+                    "clip": "Broken",
+                    "length_beats": 8.0,
+                    "notes": [bad_note],
+                    "note_count": 1,
+                    "truncated": False,
+                }
+            )
+        )
+        broken = get_midi_clip_notes(track_index=0, clip_index=0)
+        assert broken["ok"] is False
+        assert broken["complete"] is False
+        assert broken["status"] == "FAILED"
+
+
+def test_get_midi_clip_notes_rejects_mismatched_or_missing_identity() -> None:
+    from kihachi_mcp.gateway.live_tools import get_midi_clip_notes
+
+    base = {
+        "track_index": 0,
+        "clip_index": 0,
+        "clip": "Loop",
+        "length_beats": 4.0,
+        "notes": [{"pitch": 36, "start_time": 0.0, "duration": 0.5, "velocity": 100}],
+        "note_count": 1,
+        "truncated": False,
+    }
+
+    class CustomRemote:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def call(self, command: str, timeout: float | None = None, **params: Any) -> Any:
+            if command == "get_state":
+                return {"tracks": [{"index": 0, "name": "BASS"}, {"index": 1, "name": "KEYS"}]}
+            assert command == "get_midi_clip_notes"
+            return dict(self.payload)
+
+    # 1. track_index 欠落 (辞書キーなし、None)
+    # 2. clip_index 欠落 (辞書キーなし、None)
+    # 3. それぞれの値の不一致
+    # 4. bool や文字列など不正な型
+    # 既存の clip 識別情報欠落
+    bad_payloads = [
+        # track_index 欠落
+        {key: value for key, value in base.items() if key != "track_index"},
+        {**base, "track_index": None},
+        # clip_index 欠落
+        {key: value for key, value in base.items() if key != "clip_index"},
+        {**base, "clip_index": None},
+        # 不一致
+        {**base, "track_index": 1},
+        {**base, "clip_index": 3},
+        # bool 型
+        {**base, "track_index": True},
+        {**base, "track_index": False},
+        {**base, "clip_index": True},
+        {**base, "clip_index": False},
+        # 文字列型
+        {**base, "track_index": "0"},
+        {**base, "clip_index": "0"},
+        # float 型
+        {**base, "track_index": 0.0},
+        {**base, "clip_index": 0.0},
+        # clip 識別情報欠落
+        {key: value for key, value in base.items() if key != "clip"},
+    ]
+    for payload in bad_payloads:
+        configure_ableton_client(CustomRemote(payload))
+        result = get_midi_clip_notes(track_index=0, clip_index=0)
+        assert result["ok"] is False, payload
+        assert result["complete"] is False, payload
+        assert result["status"] == "FAILED", payload
+        assert result["live_changed"] is False
+
+    configure_ableton_client(CustomRemote({**base, "track": "KEYS"}))
+    wrong_name = get_midi_clip_notes(track_name="BASS", clip_index=0)
+    assert wrong_name["ok"] is False and wrong_name["complete"] is False
+    assert wrong_name["status"] == "FAILED"
+
+    # 5. 両方が一致する正常応答 (track_index 指定および track_name 指定)
+    configure_ableton_client(CustomRemote(base))
+    good_by_index = get_midi_clip_notes(track_index=0, clip_index=0)
+    assert good_by_index["ok"] is True and good_by_index["complete"] is True
+    assert good_by_index["status"] == "SUCCESS"
+    assert good_by_index["track_index"] == 0 and good_by_index["clip_index"] == 0
+
+    good_by_name = get_midi_clip_notes(track_name="BASS", clip_index=0)
+    assert good_by_name["ok"] is True and good_by_name["complete"] is True
+    assert good_by_name["status"] == "SUCCESS"
+    assert good_by_name["track_index"] == 0 and good_by_name["clip_index"] == 0 and good_by_name["track"] == "BASS"

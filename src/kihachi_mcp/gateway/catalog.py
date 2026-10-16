@@ -88,6 +88,13 @@ EXPOSED: tuple[dict[str, Any], ...] = (
         "remote_command": "get_arrangement_clips",
     },
     {
+        "name": "get_midi_clip_notes",
+        "status": "SUPPORTED",
+        "risk": RISK_SAFE,
+        "remote_command": "get_midi_clip_notes",
+        "note": "Session MIDI クリップを読み取り、4096 ノート超の切り詰めを明示する。書き込みなし",
+    },
+    {
         "name": "produce_ableton_song",
         "status": "SUPPORTED",
         "risk": RISK_CONFIRM,

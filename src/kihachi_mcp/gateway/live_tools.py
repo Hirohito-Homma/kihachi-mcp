@@ -6,6 +6,7 @@ returns the plan and does not call Live. Track creation only appends.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from kihachi_mcp.gateway.calls import invoke
@@ -303,6 +304,120 @@ def ableton_get_arrangement(track_index: int | None = None, track_name: str | No
     return {"ok": True, "error": None, **payload}
 
 
+def get_midi_clip_notes(
+    track_index: int | None = None,
+    track_name: str | None = None,
+    clip_index: int = 0,
+) -> dict[str, Any]:
+    """Read one Session MIDI clip and report whether its full note set was returned."""
+    if isinstance(clip_index, bool) or not isinstance(clip_index, int) or clip_index < 0:
+        return {**_rejected("clip_index は 0 以上の整数です"), "complete": False}
+    resolved, error = _track_index(track_index, track_name)
+    if error or resolved is None:
+        return {**_failed(error or "rejected"), "complete": False}
+    result, read_error = invoke(
+        "get_midi_clip_notes",
+        timeout=_READ_TIMEOUT,
+        track_index=resolved,
+        clip_index=clip_index,
+    )
+    if read_error or result is None:
+        return {**_failed(read_error or "ableton_error"), "complete": False}
+    raw_track_index = result.get("track_index")
+    if (
+        raw_track_index is None
+        or isinstance(raw_track_index, bool)
+        or not isinstance(raw_track_index, int)
+        or raw_track_index != resolved
+    ):
+        return {**_failed("MIDI clip の track_index が要求と一致しません"), "complete": False}
+    raw_clip_index = result.get("clip_index")
+    if (
+        raw_clip_index is None
+        or isinstance(raw_clip_index, bool)
+        or not isinstance(raw_clip_index, int)
+        or raw_clip_index != clip_index
+    ):
+        return {**_failed("MIDI clip の clip_index が要求と一致しません"), "complete": False}
+    raw_track_name = result.get("track") if "track" in result else result.get("track_name")
+    if raw_track_name is not None:
+        if not isinstance(raw_track_name, str) or not raw_track_name.strip():
+            return {**_failed("MIDI clip のトラック識別情報が不正です"), "complete": False}
+        if track_name is not None and raw_track_name != track_name:
+            return {**_failed("MIDI clip のトラック名が要求と一致しません"), "complete": False}
+    if "clip" not in result or not isinstance(result.get("clip"), str):
+        return {**_failed("MIDI clip の識別情報が欠落しています"), "complete": False}
+    notes = result.get("notes")
+    note_count = result.get("note_count")
+    length_beats = result.get("length_beats")
+    truncated = result.get("truncated")
+    if (
+        not isinstance(notes, list)
+        or len(notes) > MAX_NOTES_PER_CLIP
+        or isinstance(note_count, bool)
+        or not isinstance(note_count, int)
+        or note_count < 0
+        or isinstance(length_beats, bool)
+        or not isinstance(length_beats, (int, float))
+        or not math.isfinite(length_beats)
+        or length_beats <= 0
+        or not isinstance(truncated, bool)
+        or note_count < len(notes)
+        or truncated != (note_count > len(notes))
+        or (note_count > MAX_NOTES_PER_CLIP and not truncated)
+    ):
+        return {**_failed("MIDI clip の読み取り結果が不完全です"), "complete": False}
+    clip_length = float(length_beats)
+    for note in notes:
+        if not isinstance(note, dict):
+            return {**_failed("MIDI clip に不正なノートがあります"), "complete": False}
+        pitch = note.get("pitch")
+        start = note.get("start_time")
+        duration = note.get("duration")
+        velocity = note.get("velocity")
+        prob = note.get("probability")
+        if (
+            isinstance(pitch, bool)
+            or not isinstance(pitch, int)
+            or not 0 <= pitch <= 127
+            or isinstance(start, bool)
+            or not isinstance(start, (int, float))
+            or not math.isfinite(start)
+            or start < 0
+            or start >= clip_length
+            or isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not math.isfinite(duration)
+            or duration <= 0
+            or isinstance(velocity, bool)
+            or not isinstance(velocity, int)
+            or not 1 <= velocity <= 127
+            or (
+                prob is not None
+                and (
+                    isinstance(prob, bool)
+                    or not isinstance(prob, (int, float))
+                    or not math.isfinite(prob)
+                    or not 0.0 <= float(prob) <= 1.0
+                )
+            )
+        ):
+            return {**_failed("MIDI clip に不正なノートがあります"), "complete": False}
+    complete = not truncated and note_count == len(notes)
+    body: dict[str, Any] = {
+        **result,
+        "track_index": resolved,
+        "clip_index": clip_index,
+        "ok": complete,
+        "status": "SUCCESS" if complete else "PARTIAL",
+        "complete": complete,
+        "live_changed": False,
+    }
+    if track_name is not None and "track" not in body:
+        body["track"] = track_name
+    return body
+
+
 def produce_ableton_song(
     tempo: float = 110,
     key: str = "D# minor",
@@ -379,7 +494,7 @@ def register_live_tools(mcp: Any) -> None:
         "idempotentHint": True,
         "openWorldHint": True,
     }
-    for tool in (ableton_list_tracks, ableton_list_devices, ableton_get_arrangement):
+    for tool in (ableton_list_tracks, ableton_list_devices, ableton_get_arrangement, get_midi_clip_notes):
         mcp.tool(tool, annotations=read_only, meta={"kihachiRisk": RISK_SAFE})
     for tool in (
         ableton_play,
@@ -486,6 +601,8 @@ def _track_index(track_index: int | None, track_name: str | None) -> tuple[int |
         if isinstance(track_index, bool) or not isinstance(track_index, int) or track_index < 0:
             return None, "track_index が不正です"
         return track_index, None
+    if not isinstance(track_name, str) or not track_name.strip():
+        return None, "track_name が不正です"
     state, error = invoke("get_state", timeout=_READ_TIMEOUT)
     if error or state is None:
         return None, error or "ableton_error"

@@ -152,7 +152,7 @@ class _Provider:
 
     def generate_structured(self, prompt, schema):
         assert "source_notes" in prompt
-        assert schema["properties"]["notes"]["maxItems"] == 4096
+        assert schema["properties"]["notes"]["maxItems"] == 1024
         return {"notes": [{"pitch": 39, "start": 0.5, "duration": 0.25, "velocity": 90, "channel": 0}]}
 
 
@@ -420,3 +420,265 @@ def test_funky_slap_bass_turnaround_bar_is_strictly_monophonic_with_kick_avoidan
     )
     res = validate_music_plan(plan, {"slap_bass": slap_bass_spec()})
     assert res.ok is True, [issue.message for issue in res.issues]
+
+
+def test_openai_provider_aligns_structured_max_output_tokens_with_midi_schema(monkeypatch) -> None:
+    from kihachi_mcp.services.midi_composer import MAX_COMPOSED_MIDI_NOTES, midi_composition_schema
+    from kihachi_mcp.services.studio_interpreter import STUDIO_SCHEMA
+
+    captured_payloads: list[dict] = []
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return (
+                b'{"status":"completed","output":[{"type":"message","status":"completed","content":['
+                b'{"type":"output_text","text":"{\\"notes\\":[{\\"pitch\\":39,\\"start\\":0.0,\\"duration\\":0.25,\\"velocity\\":96,\\"channel\\":0}]}"}'
+                b']}],"usage":{"input_tokens":640,"output_tokens":42}}'
+            )
+
+    class FakeConnection:
+        def __init__(self, host, timeout):
+            assert host == "api.openai.com"
+
+        def request(self, method, path, body, headers):
+            assert method == "POST" and path == "/v1/responses"
+            import json
+            captured_payloads.append(json.loads(body.decode("utf-8")))
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-never-sent")
+    monkeypatch.setattr("kihachi_mcp.services.ai_provider.HTTPSConnection", FakeConnection)
+
+    provider = OpenAIProvider(model="gpt-6-astra")
+    composer = ProviderMIDIComposer(provider)
+    notes = composer.compose(
+        MidiCompositionRequest(MusicalConstraints(key="D#m", tempo=124, bars=8, role="bass"))
+    )
+    assert notes == (ComposedMidiNote(39, 0.0, 0.25, 96, 0),)
+    assert provider.last_usage == {"input_tokens": 640, "output_tokens": 42}
+
+    expected_midi_tokens = (
+        MAX_COMPOSED_MIDI_NOTES * OpenAIProvider.TOKENS_PER_SCHEMA_ITEM
+        + OpenAIProvider.STRUCTURED_OVERHEAD_TOKENS
+    )
+    assert expected_midi_tokens == 30_976
+    assert expected_midi_tokens <= OpenAIProvider.MAX_STRUCTURED_OUTPUT_TOKENS
+    assert captured_payloads[0]["max_output_tokens"] == expected_midi_tokens
+
+    # Small non-array-maxItems schema (e.g. STUDIO_SCHEMA) keeps the 1,000 token default
+    captured_payloads.clear()
+    provider.generate_structured("test brief", STUDIO_SCHEMA)
+    assert captured_payloads[0]["max_output_tokens"] == OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS
+
+    # Oversized schema exceeding MAX_STRUCTURED_OUTPUT_TOKENS fails safely before network request
+    captured_payloads.clear()
+    oversized_schema = {
+        "type": "object",
+        "properties": {"notes": {"type": "array", "maxItems": 4096, "items": {"type": "object"}}},
+    }
+    with pytest.raises(ValueError, match="安全上限"):
+        provider.generate_structured("oversized", oversized_schema)
+    assert captured_payloads == []
+
+    # midi_composition_schema also rejects max_notes above MAX_COMPOSED_MIDI_NOTES
+    with pytest.raises(ValueError, match="1〜1024件"):
+        midi_composition_schema(4096)
+
+
+def test_openai_provider_rejects_incomplete_or_truncated_midi_responses(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+
+    responses: list[dict] = []
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return json.dumps(responses.pop(0)).encode("utf-8")
+
+    class FakeConnection:
+        def __init__(self, host, timeout):
+            pass
+
+        def request(self, method, path, body, headers):
+            pass
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-never-sent")
+    monkeypatch.setattr("kihachi_mcp.services.ai_provider.HTTPSConnection", FakeConnection)
+
+    ledger = tmp_path / "costs.json"
+    runtime = StudioRuntime(cost_guard=MonthlyCostGuard(ledger))
+    assert runtime.update_settings(
+        {"ai_provider": "openai", "openai_model": "gpt-6-astra"}, persist=False
+    )["ok"]
+    constraints = {"key": "D#m", "tempo": 124, "bars": 8, "role": "bass"}
+
+    # 1. Top-level status == "incomplete" (e.g. max_output_tokens reached)
+    responses.append(
+        {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": '{"notes":[{"pitch":39,"start":0.0,"duration":0.25,"velocity":90,"channel":0}',
+            "usage": {"input_tokens": 500, "output_tokens": 30976},
+        }
+    )
+    res1 = runtime.compose_midi_part(constraints, confirmed_paid=True)
+    assert res1["ok"] is False
+    assert "途切れました" in res1["error"] and "max_output_tokens" in res1["error"]
+    assert "notes" not in res1
+
+    # 2. Output item status == "incomplete" even if top-level status is missing/completed
+    responses.append(
+        {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"notes":[{"pitch":39,"start":0.0,"duration":0.25,"velocity":90,"channel":0}]}',
+                        }
+                    ],
+                }
+            ],
+            "usage": {"input_tokens": 400, "output_tokens": 1000},
+        }
+    )
+    res2 = runtime.compose_midi_part(constraints, confirmed_paid=True)
+    assert res2["ok"] is False
+    assert "途切れました" in res2["error"]
+    assert "notes" not in res2
+
+    # 3. Truncated JSON string where inner note object braces close but outer object does not
+    responses.append(
+        {
+            "status": "completed",
+            "output_text": '{"notes":[{"pitch":39,"start":0.0,"duration":0.25,"velocity":90,"channel":0}',
+            "usage": {"input_tokens": 400, "output_tokens": 200},
+        }
+    )
+    res3 = runtime.compose_midi_part(constraints, confirmed_paid=True)
+    assert res3["ok"] is False
+    assert "JSON" in res3["error"]
+    assert "notes" not in res3
+
+    # Actual usage from failed/incomplete attempts was still recorded accurately by MonthlyCostGuard
+    status = MonthlyCostGuard(ledger).status()
+    assert status["spent_jpy"] > 0
+    rows = json.loads(ledger.read_text(encoding="utf-8"))
+    assert len(rows) == 3
+    assert all(row["basis"] == "actual_usage" for row in rows)
+
+
+def test_midi_composer_cost_estimate_matches_structured_limit_and_guards_monthly_budget(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+    from kihachi_mcp.services.ai_provider import _structured_max_output_tokens
+    from kihachi_mcp.services.midi_composer import midi_composition_schema
+
+    expected_output_tokens = _structured_max_output_tokens(midi_composition_schema())
+    assert expected_output_tokens == 30_976
+
+    ledger = tmp_path / "costs.json"
+    runtime = StudioRuntime(cost_guard=MonthlyCostGuard(ledger))
+    constraints = {"key": "D#m", "tempo": 124, "bars": 8, "role": "bass"}
+
+    # 1. Deterministic & Ollama providers do not apply OpenAI pricing or touch the ledger
+    assert runtime.update_settings({"ai_provider": "deterministic"}, persist=False)["ok"]
+    det_preview = runtime.midi_composer_preview(constraints)
+    assert det_preview["ok"] is True
+    assert det_preview["paid_api"] is False
+    assert det_preview["cost"] is None
+    det_composed = runtime.compose_midi_part(constraints, seed=5)
+    assert det_composed["ok"] is True
+    assert det_composed["paid_api"] is False
+    assert det_composed["cost"] is None
+    assert not ledger.exists()
+
+    assert runtime.update_settings({"ai_provider": "ollama"}, persist=False)["ok"]
+    ollama_preview = runtime.midi_composer_preview(constraints)
+    assert ollama_preview["ok"] is True
+    assert ollama_preview["paid_api"] is False
+    assert ollama_preview["cost"] is None
+
+    # 2. OpenAI pre-request estimate uses the exact structured output token cap (30,976)
+    from kihachi_mcp.services.ai_cost_control import estimate_cost
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-never-sent")
+    assert runtime.update_settings(
+        {"ai_provider": "openai", "openai_model": "gpt-6-astra"}, persist=False
+    )["ok"]
+    astra_preview = runtime.midi_composer_preview(constraints)
+    assert astra_preview["ok"] is True
+    assert astra_preview["paid_api"] is True
+    estimate = astra_preview["cost"]["estimate"]
+    assert estimate["output_tokens"] == expected_output_tokens
+    assert estimate["estimate_only"] is True
+    assert estimate["basis"] == "max_output_tokens_cap"
+    expected_cap_jpy = estimate_cost("gpt-6-astra", estimate["input_tokens"], expected_output_tokens)["estimated_jpy"]
+    assert estimate["estimated_jpy"] == expected_cap_jpy
+    assert expected_cap_jpy > 100.0
+
+    # 3. Missing confirmed_paid makes 0 provider calls
+    provider_calls = []
+
+    def fake_structured(self, prompt, schema):
+        provider_calls.append((prompt, schema))
+        self.last_usage = {"input_tokens": 600, "output_tokens": 120}
+        return {"notes": [{"pitch": 39, "start": 0.0, "duration": 0.25, "velocity": 95, "channel": 0}]}
+
+    monkeypatch.setattr(OpenAIProvider, "generate_structured", fake_structured)
+    unconfirmed = runtime.compose_midi_part(constraints, confirmed_paid=False)
+    assert unconfirmed["ok"] is False
+    assert provider_calls == []
+
+    # 4. Monthly limit guard blocks BEFORE calling provider when spent + worst-case cap > limit
+    month = __import__("datetime").datetime.now().astimezone().strftime("%Y-%m")
+    spent_before_block = round(500.0 - expected_cap_jpy + 10.0, 4)
+    ledger.write_text(
+        json.dumps([{"month": month, "model": "gpt-6-astra", "actual_jpy": spent_before_block, "basis": "actual_usage"}]),
+        encoding="utf-8",
+    )
+    blocked_preview = runtime.midi_composer_preview(constraints)
+    assert blocked_preview["cost"]["allowed"] is False
+    blocked = runtime.compose_midi_part(constraints, confirmed_paid=True)
+    assert blocked["ok"] is False
+    assert "月間AI利用上限" in blocked["error"]
+    assert provider_calls == []
+
+    # 5. Within monthly limit, compose succeeds and records actual usage (not the 30,976 cap)
+    spent_before_ok = round(500.0 - expected_cap_jpy - 10.0, 4)
+    ledger.write_text(
+        json.dumps([{"month": month, "model": "gpt-6-astra", "actual_jpy": spent_before_ok, "basis": "actual_usage"}]),
+        encoding="utf-8",
+    )
+    ok_res = runtime.compose_midi_part(constraints, confirmed_paid=True)
+    assert ok_res["ok"] is True
+    assert len(provider_calls) == 1
+    last_usage = ok_res["cost"]["last_usage"]
+    assert last_usage["basis"] == "actual_usage"
+    assert last_usage["input_tokens"] == 600
+    assert last_usage["output_tokens"] == 120
+    assert last_usage["estimated_jpy"] == expected_cap_jpy
+    expected_actual_jpy = estimate_cost("gpt-6-astra", 600, 120)["estimated_jpy"]
+    assert last_usage["actual_jpy"] == expected_actual_jpy
+    assert MonthlyCostGuard(ledger).status()["spent_jpy"] == round(spent_before_ok + expected_actual_jpy, 4)

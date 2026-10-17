@@ -191,24 +191,39 @@ class OpenAIProvider:
     def list_models(self) -> list[str]:
         return list(self.ALLOWED_MODELS)
 
+    DEFAULT_MAX_OUTPUT_TOKENS = 1_000
+    MAX_STRUCTURED_OUTPUT_TOKENS = 32_768
+    TOKENS_PER_SCHEMA_ITEM = 30
+    STRUCTURED_OVERHEAD_TOKENS = 256
+
     def generate(self, prompt: str) -> str:
         data = self._request({
             "model": self.model,
             "input": prompt,
-            "max_output_tokens": 1_000,
+            "max_output_tokens": self.DEFAULT_MAX_OUTPUT_TOKENS,
             "store": False,
         })
         return _response_text(data)
 
-    def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        max_output_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        limit = (
+            _clamp_structured_output_tokens(max_output_tokens)
+            if max_output_tokens is not None
+            else _structured_max_output_tokens(schema)
+        )
         data = self._request({
             "model": self.model,
             "input": prompt,
-            "max_output_tokens": 1_000,
+            "max_output_tokens": limit,
             "store": False,
             "text": {"format": {"type": "json_schema", "name": "kihachi_result", "strict": True, "schema": schema}},
         })
-        parsed = parse_model_json(_response_text(data))
+        parsed = _structured_payload(data)
         if not isinstance(parsed, dict):
             raise InterpretationError("AI応答のJSONがオブジェクトではありません")
         return parsed
@@ -268,15 +283,78 @@ class OpenAIProvider:
         return data
 
 
+def _clamp_structured_output_tokens(tokens: int) -> int:
+    if tokens < OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS:
+        return OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS
+    if tokens > OpenAIProvider.MAX_STRUCTURED_OUTPUT_TOKENS:
+        raise InterpretationError(
+            f"要求された構造化出力上限（{tokens}トークン）が安全上限（{OpenAIProvider.MAX_STRUCTURED_OUTPUT_TOKENS}トークン）を超えています"
+        )
+    return tokens
+
+
+def _structured_max_output_tokens(schema: dict[str, Any]) -> int:
+    """Compute a bounded output token budget aligned with the schema's maxItems."""
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    max_items = 0
+    if isinstance(properties, dict):
+        for prop in properties.values():
+            if isinstance(prop, dict) and prop.get("type") == "array":
+                item_limit = prop.get("maxItems")
+                if isinstance(item_limit, int) and item_limit > max_items:
+                    max_items = item_limit
+    if max_items <= 0:
+        return OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS
+    required_tokens = (
+        max_items * OpenAIProvider.TOKENS_PER_SCHEMA_ITEM
+        + OpenAIProvider.STRUCTURED_OVERHEAD_TOKENS
+    )
+    return _clamp_structured_output_tokens(required_tokens)
+
+
+def _structured_payload(data: dict[str, Any]) -> Any:
+    """Read JSON from a Responses API payload. Reasoning-only or incomplete replies are rejected."""
+    incomplete_details = data.get("incomplete_details")
+    if data.get("status") == "incomplete" or (isinstance(incomplete_details, dict) and incomplete_details.get("reason")):
+        reason = (incomplete_details.get("reason") if isinstance(incomplete_details, dict) else None) or "unknown"
+        raise InterpretationError(f"OpenAI APIの応答が途切れました（{reason}）")
+    for item in data.get("output") or []:
+        if item.get("status") == "incomplete":
+            reason = (item.get("incomplete_details") or {}).get("reason") or "output_incomplete"
+            raise InterpretationError(f"OpenAI APIの応答が途切れました（{reason}）")
+        if item.get("type") in {"refusal", "refused"} or item.get("status") == "refused":
+            raise InterpretationError("OpenAI APIが応答を拒否しました")
+        for content in item.get("content") or []:
+            if content.get("type") == "refusal" or content.get("refusal"):
+                raise InterpretationError("OpenAI APIが応答を拒否しました")
+            parsed = content.get("parsed")
+            if isinstance(parsed, (dict, list)):
+                return parsed
+            if content.get("type") in {"output_json", "json"} and isinstance(content.get("json"), (dict, list)):
+                return content["json"]
+    raw_text = _response_text(data).strip()
+    if not (raw_text.startswith("{") and raw_text.endswith("}")):
+        raise InterpretationError("AI応答をJSONとして読めません")
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise InterpretationError("AI応答をJSONとして読めません") from exc
+
+
 def _response_text(data: dict[str, Any]) -> str:
     direct = data.get("output_text")
-    if isinstance(direct, str):
+    if isinstance(direct, str) and direct.strip():
         return direct
+    chunks: list[str] = []
     for item in data.get("output") or []:
+        if item.get("type") == "reasoning":
+            continue
         for content in item.get("content") or []:
             text = content.get("text")
-            if isinstance(text, str):
-                return text
+            if isinstance(text, str) and text.strip():
+                chunks.append(text)
+    if chunks:
+        return "\n".join(chunks)
     raise InterpretationError("OpenAI APIの応答にテキストがありません")
 
 

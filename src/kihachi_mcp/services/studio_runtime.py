@@ -34,6 +34,7 @@ from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadErr
 from kihachi_mcp.services.ai_cost_control import MonthlyCostGuard, estimate_cost
 from kihachi_mcp.services.ai_provider import (
     OpenAIProvider,
+    _structured_max_output_tokens,
     provider_from_settings,
     split_ollama_url,
 )
@@ -67,6 +68,7 @@ from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_fr
 from kihachi_mcp.services.midi_composer import (
     DeterministicMIDIComposer,
     ProviderMIDIComposer,
+    midi_composition_schema,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
 from kihachi_mcp.services.music_plan_compiler import compile_music_plan
@@ -305,14 +307,28 @@ class StudioRuntime:
             save_settings(self._settings)
         return {"ok": True, "settings": self.settings()}
 
-    def ai_cost_status(self, brief: str = "") -> dict[str, Any]:
+    def ai_cost_status(
+        self,
+        brief: str = "",
+        output_tokens: int = OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS,
+    ) -> dict[str, Any]:
         """Estimate the next paid request and show this month's local ledger."""
         model = str(self._settings.get("openai_model") or "gpt-6.1-sol")
         # Includes the schema/system instructions and a conservative reply allowance.
         input_tokens = max(5_000, len(brief) * 2 + 3_000)
-        estimate = estimate_cost(model, input_tokens, 1_000)
+        estimate = estimate_cost(
+            model,
+            input_tokens,
+            output_tokens,
+            basis="max_output_tokens_cap",
+        )
         limit = int(self._settings.get("monthly_ai_limit_jpy") or 500)
-        return {"ok": True, "selected": self._settings.get("ai_provider") == "openai", "estimate": estimate, **self._cost_guard.authorize(estimate["estimated_jpy"], limit)}
+        return {
+            "ok": True,
+            "selected": self._settings.get("ai_provider") == "openai",
+            "estimate": estimate,
+            **self._cost_guard.authorize(estimate["estimated_jpy"], limit),
+        }
 
     def midi_composer_preview(
         self,
@@ -328,7 +344,14 @@ class StudioRuntime:
             return {"ok": False, "error": str(exc)}
         provider_name = str(provider.capabilities().get("provider") or "deterministic")
         payload = json.dumps(request.to_dict(), ensure_ascii=False, sort_keys=True)
-        cost = self.ai_cost_status(payload) if provider_name == "openai" else None
+        cost = (
+            self.ai_cost_status(
+                payload,
+                output_tokens=_structured_max_output_tokens(midi_composition_schema()),
+            )
+            if provider_name == "openai"
+            else None
+        )
         return {
             "ok": True,
             "preview": True,
@@ -367,6 +390,7 @@ class StudioRuntime:
             return {**preview, "ok": False, "error": "月間AI利用上限を超えるため、OpenAI APIを実行しません"}
         if paid and not provider.health().get("ok"):
             return {**preview, "ok": False, "error": "OPENAI_API_KEYが設定されていません"}
+        recorded_usage: dict[str, Any] | None = None
         try:
             if provider.capabilities().get("structured_output"):
                 composer = ProviderMIDIComposer(provider)
@@ -377,8 +401,11 @@ class StudioRuntime:
             return {**preview, "ok": False, "error": str(exc)}
         finally:
             if isinstance(provider, OpenAIProvider) and provider.last_usage:
-                self._cost_guard.record(provider.last_usage, cost["estimate"])
+                recorded_usage = self._cost_guard.record(provider.last_usage, cost["estimate"])
         payload = [note.to_dict() for note in notes]
+        post_cost = self.ai_cost_status() if paid else None
+        if post_cost is not None and recorded_usage is not None:
+            post_cost["last_usage"] = recorded_usage
         return {
             "ok": True,
             "preview": False,
@@ -387,7 +414,7 @@ class StudioRuntime:
             "paid_api": paid,
             "notes": payload,
             "note_count": len(payload),
-            "cost": self.ai_cost_status() if paid else None,
+            "cost": post_cost,
             "applied_to_live": False,
             "next_action": "ノートを確認し、候補クリップへ採用してからAbleton適用を別途承認してください",
         }

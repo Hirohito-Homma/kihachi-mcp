@@ -109,7 +109,12 @@ class ProviderMIDIComposer:
         return notes
 
 
-def midi_composition_schema() -> dict[str, Any]:
+MAX_COMPOSED_MIDI_NOTES = 1024
+
+
+def midi_composition_schema(max_notes: int = MAX_COMPOSED_MIDI_NOTES) -> dict[str, Any]:
+    if max_notes < 1 or max_notes > MAX_COMPOSED_MIDI_NOTES:
+        raise ValueError(f"MIDI構造化出力の上限ノート数は1〜{MAX_COMPOSED_MIDI_NOTES}件の範囲で指定してください")
     note = {
         "type": "object",
         "additionalProperties": False,
@@ -126,13 +131,15 @@ def midi_composition_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "required": ["notes"],
-        "properties": {"notes": {"type": "array", "maxItems": 4096, "items": note}},
+        "properties": {"notes": {"type": "array", "maxItems": max_notes, "items": note}},
     }
 
 
 def _validate_result(notes: tuple[ComposedMidiNote, ...], c: MusicalConstraints) -> None:
     if not notes:
         raise ValueError("MIDI Composerがノートを返しませんでした")
+    if len(notes) > MAX_COMPOSED_MIDI_NOTES:
+        raise ValueError(f"MIDI Composerのノート数が上限（{MAX_COMPOSED_MIDI_NOTES}件）を超えています")
     end = c.bars * 4
     if any(note.start + note.duration > end + 1e-6 for note in notes):
         raise ValueError("MIDI Composerのノートが指定小節を超えています")

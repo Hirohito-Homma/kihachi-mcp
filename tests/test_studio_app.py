@@ -551,6 +551,62 @@ def test_all_parts_plan_preview_does_not_touch_live(studio) -> None:
     assert live.tracks == before
 
 
+def test_astra_all_parts_preview_does_not_spend_or_touch_live(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-sent")
+    assert runtime.update_settings(
+        {"ai_provider": "openai", "openai_model": "gpt-6-astra"}, persist=False
+    )["ok"]
+    body = {
+        "operation": "generate",
+        "constraints": {
+            "role": "全パート",
+            "key": "D#m",
+            "tempo": 124,
+            "bars": 8,
+            "grid": "1/16",
+            "syncopation": 0.7,
+            "octave_jump": 0.2,
+            "ghost_notes": True,
+            "velocity_min": 65,
+            "velocity_max": 118,
+            "note_length_min": 0.25,
+            "note_length_max": 0.75,
+            "avoid_kick_collision": True,
+        },
+        "source_notes": [],
+    }
+    status, preview = _call(port, "POST", "/api/midi/preview", body)
+    assert status == 200
+    assert preview["ok"] is True
+    assert preview["preview"] is True
+    assert preview["model"] == "gpt-6-astra"
+    assert preview["paid_api"] is True
+    assert preview["request"]["constraints"]["role"] == "全パート"
+    assert preview["applied_to_live"] is False
+    extras = {
+        **body,
+        "constraints": {
+            **body["constraints"],
+            "genre": "mutation_funk",
+            "mood": "暗い",
+            "prompt": "キックは短め。ミューテーションファンクを作って",
+        },
+    }
+    status, directed = _call(port, "POST", "/api/midi/preview", extras)
+    assert status == 200
+    assert directed["ok"] is True
+    assert directed["request"]["constraints"]["genre"] == "mutation_funk"
+    assert directed["request"]["constraints"]["mood"] == "暗い"
+    assert "ミューテーションファンク" in directed["request"]["constraints"]["prompt"]
+    assert preview["cost"]["estimate"]["estimated_jpy"] > 0
+    assert live.tracks == []
+    status, refused = _call(port, "POST", "/api/midi/compose", body)
+    assert status == 200
+    assert refused["ok"] is False
+    assert live.tracks == []
+
+
 def test_music_plan_reject_creates_no_token_and_does_not_touch_live(studio) -> None:
     port, runtime, live = studio
     before = list(live.tracks)

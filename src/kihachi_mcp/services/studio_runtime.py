@@ -3016,10 +3016,7 @@ def _notes_from_plan(plan: Any) -> list[list[dict[str, Any]]]:
 def _apply_summary(
     candidate: MidiCandidate, plan: Any, snapshot: Any, change_tempo: bool
 ) -> dict[str, Any]:
-    from kihachi_mcp.models.live_contract import (
-        OP_CREATE_MIDI_TRACK,
-        OP_REPLACE_CLIP_NOTES,
-    )
+    from kihachi_mcp.models.live_contract import OP_REPLACE_CLIP_NOTES
 
     create_tracks = [
         operation.arguments.get("name")

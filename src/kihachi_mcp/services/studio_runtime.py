@@ -18,7 +18,11 @@ from kihachi_mcp.knowledge.part_sounds import (
     SIDECHAIN_DUCKING,
 )
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
-from kihachi_mcp.models.live_contract import managed_track_name
+from kihachi_mcp.models.live_contract import (
+    OP_CREATE_MIDI_TRACK,
+    canonical_hash,
+    managed_track_name,
+)
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
     ComposedMidiNote,
@@ -65,6 +69,7 @@ from kihachi_mcp.services.midi_composer import (
     ProviderMIDIComposer,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
+from kihachi_mcp.services.music_plan_compiler import compile_music_plan
 from kihachi_mcp.services.ollama_status import probe_ollama
 from kihachi_mcp.services.production_review import review_candidate
 from kihachi_mcp.services.production_revision import revise_candidate
@@ -1088,6 +1093,21 @@ class StudioRuntime:
             "musical_quality_claimed": False,
         }
 
+    def pending_revisions(self) -> list[dict[str, Any]]:
+        """Revisions still waiting for a person to adopt or reject them."""
+        pending = []
+        for record in self._pending_revisions.values():
+            parent = self._lookup(record["parent_candidate_id"])
+            child = self._pending_children.get(record["child_candidate_id"])
+            pending.append(
+                {
+                    **_public_revision(record),
+                    "note_count_before": parent.note_count() if parent is not None else None,
+                    "note_count_after": child.note_count() if child is not None else None,
+                }
+            )
+        return pending
+
     def decide_revision(self, revision_id: str, accept: bool) -> dict[str, Any]:
         """The human adopts or rejects a proposed revision. Rejection keeps the parent."""
         record = self._pending_revisions.pop(str(revision_id), None)
@@ -1109,6 +1129,127 @@ class StudioRuntime:
             "selected_candidate_id": self._selected_id,
             "revision": record,
         }
+
+    def reject_music_plan(self, plan: Any) -> dict[str, Any]:
+        """Refuse a plan without creating an approval token or sending it."""
+        if self._gate.holds(plan.plan_hash):
+            return {
+                "ok": True,
+                "approved": True,
+                "rejected": False,
+                "message": "この計画はすでに承認済みです。取り消しはしません。Liveには送っていません。",
+                "executed": False,
+                "live_changed": False,
+                "save": False,
+                "paid_api": False,
+                "plan_hash": plan.plan_hash,
+            }
+        return {
+            "ok": True,
+            "approved": False,
+            "rejected": True,
+            "message": "この計画は承認していません。Liveには送っていません。",
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "plan_hash": plan.plan_hash,
+        }
+
+    def record_music_plan_approval(self, plan: Any) -> dict[str, Any]:
+        """Record human approval of one inert Live plan. Nothing is sent."""
+        try:
+            self._gate.approve(plan)
+        except ApprovalError as exc:
+            return {
+                "ok": False,
+                "error": exc.message,
+                "executed": False,
+                "live_changed": False,
+                "save": False,
+                "paid_api": False,
+            }
+        return {
+            "ok": True,
+            "approved": True,
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "plan_hash": plan.plan_hash,
+        }
+
+    def bind_music_plan_to_live(
+        self, music: Any, instruments: Any = None
+    ) -> tuple[Any, dict[str, Any]]:
+        """Read the Set once and place the plan after its last track and scene. Nothing is written."""
+        base = {
+            "ok": False,
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "musical_quality_claimed": False,
+        }
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            detail = (failure or {}).get("error") or "接続がありません"
+            return None, {
+                **base,
+                "state": "UNKNOWN",
+                "reply": f"実機の Live を読めませんでした（{detail}）。実機には送っていません。",
+            }
+        if snapshot.is_recording or snapshot.is_playing:
+            return None, {
+                **base,
+                "state": "APPROVAL_REQUIRED",
+                "reply": "Live が再生中か録音中です。止めてから、もう一度押してください。実機には送っていません。",
+            }
+        plan = compile_music_plan(
+            music,
+            instruments,
+            track_index=len(snapshot.tracks),
+            scene_index=len(snapshot.scenes),
+            set_fingerprint=snapshot.set_fingerprint,
+            label=canonical_hash(music.to_dict())[:8],
+        )
+        taken = next(
+            (
+                operation.arguments["name"]
+                for operation in plan.operations
+                if operation.op == OP_CREATE_MIDI_TRACK
+                and snapshot.track_by_name(operation.arguments["name"]) is not None
+            ),
+            "",
+        )
+        if taken:
+            return None, {
+                **base,
+                "state": "APPROVAL_REQUIRED",
+                "reply": f"同じ名前のトラック「{taken}」が Live にあります。二重には置きません。実機には送っていません。",
+            }
+        return plan, {
+            **base,
+            "state": "APPROVAL_REQUIRED",
+            "plan_hash": plan.plan_hash,
+            "reply": (
+                f"実機の Live を読みました。トラック {len(snapshot.tracks) + 1} 番目とシーン "
+                f"{len(snapshot.scenes) + 1} 番目から足します。前の承認は無効です。"
+                "もう一度承認してから、もう一度押してください。まだ送っていません。"
+            ),
+        }
+
+    def execute_music_plan(self, plan: Any) -> tuple[Any, str]:
+        """Send one approved plan once through the Live bridge and return its receipt."""
+        token = self._gate.token_for(plan.plan_hash)
+        if token is None:
+            return None, "承認されていない計画は実機に送りません。"
+        if not self._apply_lock.acquire(blocking=False):
+            return None, "別の Live 適用が実行中です。実機には送っていません。"
+        try:
+            return self._executor.execute(plan, approved=True, approval_token=token), ""
+        finally:
+            self._apply_lock.release()
 
     def approve(self, candidate_id: str) -> dict[str, Any]:
         """Human approval of this take. Required before anything is sent to Live."""

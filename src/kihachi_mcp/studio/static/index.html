@@ -1957,36 +1957,157 @@
           skip_instruments: $("skip-instruments").checked
         })
       });
-      if (!dry.ok) { $("dry-run").innerHTML = `<p class="bad">${esc(dry.error)}</p>`; return; }
-      const p = dry.plan;
+      if (!dry.ok) { $("dry-run").innerHTML = `<p class="bad">${esc(dry.error)}</p>`; $("apply").disabled = true; return; }
+      const p = dry.plan || {};
+      const diff = dry.diff_report || {};
+      const song = diff.songspec || {};
       const ops = Object.entries(dry.live_operations || {}).map(([k, v]) => `<li>${esc(k)} × ${v}</li>`).join("") || (p.operations || []).map((x) => `<li>${esc(x)}</li>`).join("");
+
+      // Safety verdict determination (PASS / FAIL / UNKNOWN)
+      let safetyVerdict = diff.safety_verdict || "FAIL";
+      let verdictClass = "bad";
+      if (!dry.live || !dry.live.state || dry.live.state === "not_configured" || safetyVerdict === "UNKNOWN") {
+        safetyVerdict = "UNKNOWN";
+        verdictClass = "warn";
+      } else if (safetyVerdict === "PASS" && dry.can_send && dry.approved && dry.live.state === "ready" && (!diff.conflicts || diff.conflicts.length === 0)) {
+        safetyVerdict = "PASS";
+        verdictClass = "ok";
+      } else {
+        safetyVerdict = "FAIL";
+        verdictClass = "bad";
+      }
+
+      const tracksDiffHtml = (diff.tracks_diff || []).map((t) => {
+        const m = t.mapping || {};
+        const mappingStatus = m.matched ? (m.is_new ? '<span class="warn">新規作成</span>' : `<span class="ok">トラック #${m.track_index}: ${esc(m.track_name)}</span>`) : '<span class="bad">未対応</span>';
+        return `<tr>
+          <td><b>${esc(t.part)}</b></td>
+          <td>${mappingStatus}</td>
+          <td>${esc(t.bars_range || "-")}</td>
+          <td>${t.clips_to_create} クリップ</td>
+          <td>${t.notes_to_create} ノート</td>
+        </tr>`;
+      }).join("");
+
+      const arrSections = (diff.arrangement_summary && diff.arrangement_summary.sections) ? diff.arrangement_summary.sections : [];
+      const arrangementSectionsHtml = arrSections.length > 0
+        ? `<div style="margin: 8px 0; font-size: 0.9em;"><b>配置セクション:</b> ` +
+          arrSections.map((s) => `${esc(s.name)}: ${s.start_bar}–${s.end_bar}小節 (${s.length_bars}小節)`).join(" | ") +
+          `</div>`
+        : "";
+
+      const conflictsHtml = (diff.conflicts && diff.conflicts.length > 0)
+        ? `<ul class="bad">${diff.conflicts.map((c) => `<li>${esc(c.message || c.detail || c.conflict || JSON.stringify(c))}</li>`).join("")}</ul>`
+        : '<p class="ok">✓ 既存クリップ・トラックとの衝突・重複はありません</p>';
+
       $("dry-run").innerHTML = `
-        <h2>ABLETON PLAN（ドライラン）</h2>
-        <div class="grid">
-          <div class="metric"><b>Tempo</b>${esc(p.tempo)} BPM</div>
-          <div class="metric"><b>Tracks</b>${esc(p.tracks)}（${esc((p.track_names || []).join(", "))}）</div>
-          <div class="metric"><b>Clips</b>${esc(p.clips)}</div>
-          <div class="metric"><b>MIDI Notes</b>${esc(p.midi_notes)}</div>
-          <div class="metric"><b>Arrangement</b>${esc(p.arrangement_bars)} bars</div>
-          <div class="metric"><b>Live</b>${esc(dry.live.state === "ready" ? "READY" : "OFFLINE")} ${esc(dry.live.message || "")}</div>
+        <div class="card" style="border: 2px solid ${verdictClass === 'ok' ? '#2e7d32' : verdictClass === 'warn' ? '#f57f17' : '#c62828'}; padding: 16px; margin: 12px 0; border-radius: 8px;">
+          <h2>LIVE DELIVERY 差分レポート（ドライラン）</h2>
+
+          <div class="grid" style="margin-bottom: 12px;">
+            <div class="metric">
+              <b>安全判定 (Verdict)</b>
+              <span class="${verdictClass}" style="font-size: 1.4em; font-weight: bold;">${safetyVerdict}</span>
+            </div>
+            <div class="metric">
+              <b>承認状態</b>
+              <span>${dry.approved ? '<span class="ok">承認済み (APPROVED)</span>' : '<span class="bad">未承認 (AWAITING_APPROVAL)</span>'}</span>
+            </div>
+            <div class="metric">
+              <b>Live Set名</b>
+              <span><b>${esc(diff.live_set_name || "UNKNOWN")}</b></span>
+            </div>
+            <div class="metric">
+              <b>Liveトラック総数</b>
+              <span><b>${diff.live_track_count !== undefined ? diff.live_track_count : "UNKNOWN"} トラック</b></span>
+            </div>
+            <div class="metric">
+              <b>Live接続状態</b>
+              <span>${esc(dry.live.state === "ready" ? "READY" : dry.live.state ? dry.live.state.toUpperCase() : "UNKNOWN")}</span>
+            </div>
+            <div class="metric">
+              <b>Live反映状態</b>
+              <span>${dry.changes_live ? '<span class="warn">反映済み</span>' : '<span>未反映 (PENDING)</span>'}</span>
+            </div>
+          </div>
+
+          <div style="background: rgba(0,0,0,0.05); padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; font-family: monospace; font-size: 0.9em;">
+            <div><b>Project / Candidate ID:</b> ${esc(diff.project_id || diff.candidate_id || state.candidate.candidate_id)}</div>
+            <div><b>承認ハッシュ (Content Hash):</b> ${esc(diff.content_hash || "(未計算)")}</div>
+            <div><b>Live Set 指紋 (Fingerprint):</b> ${esc(diff.live_set_fingerprint ? diff.live_set_fingerprint.substring(0, 16) + '...' : 'UNKNOWN')}</div>
+            <div><b>配置予定小節範囲:</b> 1 – ${esc(song.bars || p.arrangement_bars || "?")} 小節 (${esc(song.tempo || p.tempo || "?")} BPM / ${esc(song.key || "?")})</div>
+            <div><b>Dry Run有効期限:</b> 実行から5分間有効 (TTL: 300秒)</div>
+            ${diff.live_set_name === "UNKNOWN" ? '<div class="warn" style="margin-top: 6px; padding: 6px; background: rgba(245,127,23,0.1); border-left: 3px solid #f57f17; font-size: 0.88em;"><b>⚠ Live Set識別に関する注意:</b> Live Set名がUNKNOWNのため、同じトラック構成（指紋）を持つ別Setの完全な識別は保証できません。現在Ableton Liveで開いているLive Setが本楽曲の対象であることを確認してください。</div>' : ''}
+            <div id="target-confirmation-area" style="margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);">
+              <div><b>Live Set対象確認状態:</b> <span id="target-confirm-status">${diff.target_confirmed ? '<span class="ok">✓ 確認済み (CONFIRMED)</span>' : (diff.requires_target_confirmation ? '<span class="warn">⚠ 未確認 (要確認: Set名UNKNOWN)</span>' : '<span class="ok">不要 (Set名確定済み)</span>')}</span></div>
+              ${diff.requires_target_confirmation ? `
+                <div style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
+                  <button id="confirm-target-btn" class="secondary" type="button" style="padding: 6px 12px; font-size: 13px;" ${diff.target_confirmed ? 'disabled' : ''}>${diff.target_confirmed ? '確認完了' : '現在のLive Setを対象として確認'}</button>
+                  <span class="sub">Candidate ID: ${esc(state.candidate.candidate_id.substring(0, 8))} | 指紋: ${esc(diff.live_set_fingerprint ? diff.live_set_fingerprint.substring(0, 16) + '...' : 'UNKNOWN')}</span>
+                </div>
+              ` : ''}
+            </div>
+            ${arrangementSectionsHtml}
+          </div>
+
+          <h3>対象トラック & 生成パート対応表</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
+            <thead>
+              <tr style="text-align: left; border-bottom: 1px solid #ccc;">
+                <th>パート</th><th>Liveトラック</th><th>配置小節範囲</th><th>追加クリップ</th><th>追加ノート</th>
+              </tr>
+            </thead>
+            <tbody>${tracksDiffHtml}</tbody>
+          </table>
+          <p><b>合計追加予定:</b> クリップ ${diff.total_clips || p.clips || 0} 個 / MIDIノート ${diff.total_notes || p.midi_notes || 0} 個</p>
+
+          <h3>Arrangement 衝突・重複検出結果</h3>
+          ${conflictsHtml}
+
+          <h3>反映操作 (Operations)</h3>
+          <ul>${ops}</ul>
+
+          ${(dry.blockers && dry.blockers.length > 0) ? `<h3>ブロッキング事由</h3><ul>${dry.blockers.map((x) => `<li class="bad">${esc(x)}</li>`).join("")}</ul>` : ""}
+
+          ${safetyVerdict === "PASS"
+            ? '<p class="ok" style="font-weight: bold; margin-top: 12px;">✓ 安全判定 PASS: 送信可能です。「この内容でLiveへ適用」で1回だけ実行します。</p>'
+            : '<p class="bad" style="font-weight: bold; margin-top: 12px;">✕ 安全判定 FAIL/UNKNOWN: 書き込み操作は無効化されています。承認、衝突、またはLive状態を確認してください。</p>'}
         </div>
-        <p><b>Operations</b></p><ul>${ops}</ul>
-        <ul>${(dry.blockers || []).map((x) => `<li class="bad">${esc(x)}</li>`).join("")}</ul>
-        ${dry.can_send ? '<p class="ok">送信できます。「この内容でLiveへ適用」で1回だけ実行します（自動再試行はしません）。</p>' : ""}
       `;
+
+      if ($("confirm-target-btn")) {
+        $("confirm-target-btn").onclick = async () => {
+          $("confirm-target-btn").disabled = true;
+          const res = await getJson("/api/ableton/confirm-target", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
+          });
+          if (res.ok) {
+            $("target-confirm-status").innerHTML = '<span class="ok">✓ 確認済み (CONFIRMED)</span>';
+            $("confirm-target-btn").textContent = "確認完了";
+            // Re-run dry-run to update status and enable apply button
+            $("preview-apply").click();
+          } else {
+            $("confirm-target-btn").disabled = false;
+            alert(res.error || "対象確認に失敗しました");
+          }
+        };
+      }
+
       const result = dry.live_preview;
-      if (!result) return;
-      const s = result.summary || {};
-      $("apply-summary").innerHTML = `
-        <p>対象Set: ${s.set_name || "不明"} / 現在 ${s.current_tempo || "?"} BPM</p>
-        <p>新規トラック: ${(s.new_tracks || []).join(", ") || "なし"}</p>
-        <p>クリップ ${s.clip_count || 0} / ノート ${s.note_count || 0}</p>
-        <p>残骸トラック: ${(s.leftover_tracks || []).join(", ") || "なし"}</p>
-        <p>プレビューと適用ノート: ${result.notes_match_preview ? "一致" : "不一致のため適用しません"}</p>
-        <ul>${(result.warnings || []).map((x) => `<li>${x}</li>`).join("")}</ul>
-        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
-      `;
-      $("apply").disabled = !dry.can_send;
+      if (result) {
+        const s = result.summary || {};
+        $("apply-summary").innerHTML = `
+          <p>対象Set: ${s.set_name || "不明"} / 現在 ${s.current_tempo || "?"} BPM</p>
+          <p>新規トラック: ${(s.new_tracks || []).join(", ") || "なし"}</p>
+          <p>プレビューと適用ノート: ${result.notes_match_preview ? '<span class="ok">一致</span>' : '<span class="bad">不一致のため適用拒否</span>'}</p>
+          <ul>${(result.warnings || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+        `;
+      }
+      // Strictly disable write when verdict is NOT PASS or target is unconfirmed
+      const needsTargetConf = diff.requires_target_confirmation && !diff.target_confirmed;
+      $("apply").disabled = (safetyVerdict !== "PASS") || needsTargetConf;
     };
 
     $("apply").onclick = async () => {
@@ -2102,6 +2223,8 @@
       retune: () => ({ parts: pickedRetuneParts() })
     };
 
+    $("change-tempo").onchange = () => { $("apply").disabled = true; };
+    $("skip-instruments").onchange = () => { $("apply").disabled = true; };
     $("retune-parts").onchange = () => { $("retune").disabled = true; };
     $("master-retune").onchange = () => { $("master").disabled = true; };
 

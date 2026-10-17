@@ -125,6 +125,7 @@ def test_verification_fails_when_live_lost_a_note(tmp_path: Path) -> None:
     runtime, live = _studio(tmp_path)
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=True)
     runtime.send_to_ableton(candidate_id, confirmed=True, change_tempo=True)
     clip = next(iter(live.session_clips.values()))
     clip.notes.pop()
@@ -138,6 +139,7 @@ def test_verification_survives_a_restart(tmp_path: Path) -> None:
     runtime, live = _studio(tmp_path)
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=True)
     runtime.send_to_ableton(candidate_id, confirmed=True, change_tempo=True)
     restarted, _ = _studio(tmp_path, live=live)
     assert restarted.is_approved(candidate_id)
@@ -149,6 +151,7 @@ def test_tempo_left_unchanged_is_skip_not_pass(tmp_path: Path) -> None:
     runtime, _live = _studio(tmp_path, live=FakeLiveSet(live_version="12.4.3", tempo=128))
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=False)
     result = runtime.send_to_ableton(candidate_id, confirmed=True)
     tempo = next(line for line in result["verification"]["lines"] if line["name"] == "Tempo")
     assert tempo["status"] == "SKIP"

@@ -425,6 +425,7 @@ def test_retune_route_needs_parts_and_previews_before_sending(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id)
     runtime.send_to_ableton(candidate_id, confirmed=True)
     runtime.apply_effects(candidate_id, confirmed=True)
     _status, empty = _call(port, "POST", "/api/ableton/retune", {"candidate_id": candidate_id})
@@ -977,3 +978,265 @@ def test_jarvis_midi_clip_routes_read_facts_and_preview_without_writing(studio, 
     assert partial_res["clip_evaluation"] is None
     assert partial_res["clip_preview"] is None
     assert live.tracks == []
+
+
+def test_http_confirm_target_binds_candidate_and_invalidates_on_fingerprint_change(
+    studio,
+) -> None:
+    """B.1: POST /api/ableton/confirm-target binds to candidate and current Set fingerprint,
+    and becomes invalid when Set fingerprint changes (including Arrangement changes).
+    """
+    from kihachi_mcp.services.live_transport_fake import FakeArrangementClip
+
+    port, runtime, live = studio
+    live.set_name = ""  # UNKNOWN set name
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    other_id = runtime.generate(SMOKE_TEST, seed=4)["candidate"]["candidate_id"]
+    transport = runtime._transport
+
+    # Unknown candidate_id is rejected
+    status, bad_conf = _call(
+        port, "POST", "/api/ableton/confirm-target", {"candidate_id": "unknown-cand-id"}
+    )
+    assert status == 200 and bad_conf["ok"] is False
+    assert "候補がありません" in bad_conf["error"]
+
+    # Approve and Dry Run on UNKNOWN Set
+    assert _call(port, "POST", "/api/approve", {"candidate_id": candidate_id})[1]["ok"] is True
+    status, dry1 = _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": candidate_id})
+    assert status == 200 and dry1["ok"] is True
+    assert dry1["diff_report"]["live_set_name"] == "UNKNOWN"
+    assert dry1["diff_report"]["requires_target_confirmation"] is True
+    assert dry1["diff_report"]["target_confirmed"] is False
+
+    # Confirm target via HTTP
+    status, conf = _call(
+        port, "POST", "/api/ableton/confirm-target", {"candidate_id": candidate_id}
+    )
+    assert status == 200 and conf["ok"] is True
+    assert conf["candidate_id"] == candidate_id
+    assert conf["target_confirmed"] is True
+    assert conf["set_fingerprint"] == dry1["diff_report"]["live_set_fingerprint"]
+
+    # Confirmation is bound only to candidate_id, not other_id
+    assert runtime.is_target_confirmed(other_id, conf["set_fingerprint"]) is False
+
+    # Dry run reflects target_confirmed = True
+    status, dry2 = _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": candidate_id})
+    assert status == 200 and dry2["diff_report"]["target_confirmed"] is True
+
+    # Mutate Live Set (add track + Arrangement clip) -> fingerprint changes, invalidating confirmation
+    track = live.add_track("External Track")
+    live.arrangement_clips.append(
+        FakeArrangementClip(
+            track_index=track["index"],
+            name="External Clip",
+            start_beats=0.0,
+            length_beats=16.0,
+        )
+    )
+    status, send_after_change = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": candidate_id, "confirmed": True},
+    )
+    assert status == 200 and send_after_change["ok"] is False
+    assert "Live Setの状態または接続先が変更されました" in send_after_change["error"]
+    assert candidate_id not in runtime._target_confirmed_records
+    assert transport.applied_operation_ids == []
+
+
+def test_http_delivery_status_reports_state_and_rejects_unknown_or_invalid_id(
+    studio,
+) -> None:
+    """B.2: POST /api/ableton/delivery-status returns accurate state for known candidates
+    and never returns ok=True for unknown or invalid candidate IDs.
+    """
+    port, runtime, _live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    transport = runtime._transport
+
+    # Unknown or empty IDs must return ok=False
+    for invalid_id in ("", "nonexistent_id", "../bad/path"):
+        status, bad = _call(
+            port, "POST", "/api/ableton/delivery-status", {"candidate_id": invalid_id}
+        )
+        assert status == 200 and bad["ok"] is False
+        assert "候補がありません" in bad["error"]
+
+    # Valid candidate before send is IDLE
+    status, idle = _call(
+        port, "POST", "/api/ableton/delivery-status", {"candidate_id": candidate_id}
+    )
+    assert status == 200 and idle["ok"] is True
+    assert idle["candidate_id"] == candidate_id
+    assert idle["delivery_status"] == "IDLE"
+    assert transport.applied_operation_ids == []
+
+    # Approve, Dry Run, and Send -> delivery_status transitions to VERIFIED
+    _call(port, "POST", "/api/approve", {"candidate_id": candidate_id})
+    _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": candidate_id})
+    status, sent = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": candidate_id, "confirmed": True},
+    )
+    assert status == 200 and sent["ok"] is True
+    status, verified = _call(
+        port, "POST", "/api/ableton/delivery-status", {"candidate_id": candidate_id}
+    )
+    assert status == 200 and verified["ok"] is True
+    assert verified["candidate_id"] == candidate_id
+    assert verified["delivery_status"] == "VERIFIED"
+
+
+def test_http_send_refused_without_dry_run_or_without_unknown_set_target_confirmation(
+    studio,
+) -> None:
+    """B.3 & B.4: POST /api/ableton/send over HTTP refuses when Dry Run was not run
+    or when Set name is UNKNOWN without target confirmation, with 0 Live mutations.
+    """
+    port, runtime, live = studio
+    transport = runtime._transport
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    _call(port, "POST", "/api/approve", {"candidate_id": candidate_id})
+
+    # B.3: Send without Dry Run -> refused, 0 mutations
+    status, no_dry = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": candidate_id, "confirmed": True},
+    )
+    assert status == 200 and no_dry["ok"] is False
+    assert "Dry Runが実行されていません" in no_dry["error"]
+    assert transport.applied_operation_ids == []
+    assert live.tracks == []
+
+    # B.4: Set name is UNKNOWN and target is not confirmed -> refused, 0 mutations
+    live.set_name = ""
+    status, dry = _call(
+        port, "POST", "/api/ableton/dry-run", {"candidate_id": candidate_id}
+    )
+    assert status == 200 and dry["ok"] is True
+    assert dry["safety_verdict"] == "PASS"
+    assert dry["diff_report"]["requires_target_confirmation"] is True
+    assert dry["diff_report"]["target_confirmed"] is False
+
+    status, unconfirmed_target = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": candidate_id, "confirmed": True},
+    )
+    assert status == 200 and unconfirmed_target["ok"] is False
+    assert unconfirmed_target.get("requires_target_confirmation") is True
+    assert "Live Set名がUNKNOWN" in unconfirmed_target["error"]
+    assert transport.applied_operation_ids == []
+    assert live.tracks == []
+
+
+def test_http_send_never_retries_from_partial_unknown_or_applying_states(
+    studio,
+) -> None:
+    """B.5: Partial application, crash-recovered UNKNOWN, and in-flight APPLYING states
+    strictly block resend over HTTP with 0 additional Live mutations.
+    """
+    port, runtime, _live = studio
+    transport = runtime._transport
+
+    # 1. PARTIAL state from mid-flight disconnect
+    cand_partial = runtime.generate(SMOKE_TEST, seed=11)["candidate"]["candidate_id"]
+    _call(port, "POST", "/api/approve", {"candidate_id": cand_partial})
+    _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": cand_partial})
+    transport.disconnect_after = 2
+    status, partial_send = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": cand_partial, "confirmed": True},
+    )
+    transport.disconnect_after = None
+    assert status == 200 and partial_send["ok"] is False
+    assert partial_send["delivery_status"] == "PARTIAL"
+    ops_after_partial = list(transport.applied_operation_ids)
+    assert len(ops_after_partial) == 2
+
+    status, status_partial = _call(
+        port, "POST", "/api/ableton/delivery-status", {"candidate_id": cand_partial}
+    )
+    assert status_partial["ok"] is True and status_partial["delivery_status"] == "PARTIAL"
+
+    # Attempt Dry Run and Send again on PARTIAL candidate -> blocked, 0 new operations
+    status, dry_after_partial = _call(
+        port, "POST", "/api/ableton/dry-run", {"candidate_id": cand_partial}
+    )
+    assert dry_after_partial["safety_verdict"] == "FAIL"
+    assert dry_after_partial["can_send"] is False
+    status, resend_partial = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": cand_partial, "confirmed": True},
+    )
+    assert resend_partial["ok"] is False
+    assert transport.applied_operation_ids == ops_after_partial
+
+    # 2. Crash-recovered APPLYING -> UNKNOWN state on disk
+    cand_crash = runtime.generate(SMOKE_TEST, seed=12)["candidate"]["candidate_id"]
+    _call(port, "POST", "/api/approve", {"candidate_id": cand_crash})
+    audit_path = runtime._delivery_audit_path(cand_crash)
+    assert audit_path is not None
+    audit_path.write_text(
+        json.dumps({"candidate_id": cand_crash, "delivery_status": "APPLYING"}),
+        encoding="utf-8",
+    )
+    runtime._delivery_audit_records.pop(cand_crash, None)
+
+    status, status_unknown = _call(
+        port, "POST", "/api/ableton/delivery-status", {"candidate_id": cand_crash}
+    )
+    assert status == 200 and status_unknown["ok"] is True
+    assert status_unknown["delivery_status"] == "UNKNOWN"
+    assert status_unknown.get("recovered_from_crash") is True
+
+    status, dry_unknown = _call(
+        port, "POST", "/api/ableton/dry-run", {"candidate_id": cand_crash}
+    )
+    assert dry_unknown["safety_verdict"] == "FAIL"
+    assert dry_unknown["can_send"] is False
+    status, send_unknown = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": cand_crash, "confirmed": True},
+    )
+    assert send_unknown["ok"] is False
+    assert transport.applied_operation_ids == ops_after_partial
+
+    # 3. In-memory APPLYING state
+    cand_applying = runtime.generate(SMOKE_TEST, seed=13)["candidate"]["candidate_id"]
+    _call(port, "POST", "/api/approve", {"candidate_id": cand_applying})
+    _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": cand_applying})
+    runtime._delivery_audit_records[cand_applying] = {
+        "candidate_id": cand_applying,
+        "delivery_status": "APPLYING",
+    }
+    status, send_applying = _call(
+        port,
+        "POST",
+        "/api/ableton/send",
+        {"candidate_id": cand_applying, "confirmed": True},
+    )
+    assert status == 200 and send_applying["ok"] is False
+    assert "すでに適用を試行済みです" in send_applying["error"]
+    assert transport.applied_operation_ids == ops_after_partial
+
+
+def test_index_html_disables_apply_when_change_tempo_or_skip_instruments_toggled() -> None:
+    """Focus Area C: Changing #change-tempo or #skip-instruments immediately disables #apply."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert '$("change-tempo").onchange = () => { $("apply").disabled = true; };' in html
+    assert '$("skip-instruments").onchange = () => { $("apply").disabled = true; };' in html

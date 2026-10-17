@@ -892,6 +892,10 @@ def _workflow_post(
         handler._send_json(runtime.approve(candidate_id))
     elif path == "/api/ableton/dry-run":
         handler._send_json(runtime.dry_run(candidate_id, **flags))
+    elif path == "/api/ableton/confirm-target":
+        handler._send_json(runtime.confirm_target_live_set(candidate_id))
+    elif path == "/api/ableton/delivery-status":
+        handler._send_json(runtime.get_delivery_status(candidate_id))
     elif path == "/api/ableton/send":
         handler._send_json(
             runtime.send_to_ableton(candidate_id, confirmed=bool(body.get("confirmed")), **flags)

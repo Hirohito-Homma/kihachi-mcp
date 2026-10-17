@@ -10,7 +10,20 @@ import math
 from typing import Any
 
 from kihachi_mcp.gateway.calls import invoke
-from kihachi_mcp.gateway.catalog import RISK_CONFIRM, RISK_SAFE
+from kihachi_mcp.gateway.catalog import RISK_CONFIRM, RISK_DESTRUCTIVE, RISK_SAFE
+from kihachi_mcp.gateway.drum_architecture import (
+    add_arrangement_midi_notes,
+    delete_arrangement_clip,
+    delete_arrangement_midi_notes,
+    duplicate_arrangement_clip,
+    get_arrangement_midi_notes,
+    list_drum_pads,
+    load_sample_to_pad,
+    load_sample_to_simpler,
+    move_arrangement_clip,
+    replace_arrangement_midi_notes,
+)
+from kihachi_mcp.gateway.samples.tools import attach_sample_plan, register_sample_tools
 from kihachi_mcp.gateway.song_execute import execute_song_plan
 from kihachi_mcp.gateway.song_plan import build_song_plan, public_view
 from kihachi_mcp.gateway.song_time import (
@@ -19,6 +32,14 @@ from kihachi_mcp.gateway.song_time import (
     NoteError,
     bar_start_beat,
     validate_note,
+)
+from kihachi_mcp.gateway.sound import register_sound_tools
+from kihachi_mcp.gateway.transport import (
+    ableton_get_playback_state,
+    ableton_get_song_time,
+    ableton_jump_song_time,
+    ableton_set_song_time,
+    ableton_set_start_time,
 )
 
 _READ_TIMEOUT = 10.0
@@ -428,6 +449,7 @@ def produce_ableton_song(
     seed: int = 1,
     confirm: bool = False,
     dry_run: bool = False,
+    sample_selection: str = "assisted",
 ) -> dict[str, Any]:
     """Plan or build the 32/64/128-bar test song on the local Arrangement.
 
@@ -456,7 +478,7 @@ def produce_ableton_song(
             "message": str(exc),
         }
     if dry_run or not confirm:
-        view = public_view(plan)
+        view = attach_sample_plan(public_view(plan), plan, sample_selection)
         preview = dry_run
         view.update(
             {
@@ -482,7 +504,9 @@ def produce_ableton_song(
             }
         )
         return view
-    return execute_song_plan(plan)
+    result = execute_song_plan(plan)
+    result["sample_plan"] = attach_sample_plan({}, plan, sample_selection)["sample_plan"]
+    return result
 
 
 def register_live_tools(mcp: Any) -> None:
@@ -494,11 +518,23 @@ def register_live_tools(mcp: Any) -> None:
         "idempotentHint": True,
         "openWorldHint": True,
     }
-    for tool in (ableton_list_tracks, ableton_list_devices, ableton_get_arrangement, get_midi_clip_notes):
+    for tool in (
+        ableton_list_tracks,
+        ableton_list_devices,
+        ableton_get_arrangement,
+        get_midi_clip_notes,
+        ableton_get_song_time,
+        ableton_get_playback_state,
+        list_drum_pads,
+        get_arrangement_midi_notes,
+    ):
         mcp.tool(tool, annotations=read_only, meta={"kihachiRisk": RISK_SAFE})
     for tool in (
         ableton_play,
         ableton_stop,
+        ableton_set_song_time,
+        ableton_set_start_time,
+        ableton_jump_song_time,
         ableton_create_midi_track,
         ableton_create_audio_track,
         ableton_create_midi_clip,
@@ -508,8 +544,27 @@ def register_live_tools(mcp: Any) -> None:
         ableton_mute,
         ableton_solo,
         produce_ableton_song,
+        load_sample_to_simpler,
+        load_sample_to_pad,
+        add_arrangement_midi_notes,
+        replace_arrangement_midi_notes,
+        duplicate_arrangement_clip,
     ):
         mcp.tool(tool, annotations=write, meta={"kihachiRisk": RISK_CONFIRM})
+    destructive = {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+    for tool in (
+        delete_arrangement_midi_notes,
+        delete_arrangement_clip,
+        move_arrangement_clip,
+    ):
+        mcp.tool(tool, annotations=destructive, meta={"kihachiRisk": RISK_DESTRUCTIVE})
+    register_sample_tools(mcp)
+    register_sound_tools(mcp)
 
 
 def _transport(action: str, confirm: bool) -> dict[str, Any]:

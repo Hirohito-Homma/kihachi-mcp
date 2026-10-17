@@ -23,6 +23,7 @@ from kihachi_mcp.services.jarvis.fake_execution import (
     run_approved_plan_on_fake,
 )
 from kihachi_mcp.services.jarvis.verification import settle_receipt
+from kihachi_mcp.services.live_candidate_context import brief_from_live
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
 from kihachi_mcp.services.music_plan_preview import prepare_music_plan
 from kihachi_mcp.services.live_paths import candidate_store_dir
@@ -342,6 +343,37 @@ def _handler_for(app: StudioApp):
                 return
             if parsed.path == "/api/health":
                 self._send_json(runtime.health())
+                return
+            if parsed.path == "/api/live/overview":
+                if runtime._transport is None:
+                    self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
+                    return
+                try:
+                    snapshot = runtime._inspector.snapshot(
+                        include_arrangement=True,
+                        count_session_notes=False,
+                        include_session_clips=True,
+                    )
+                    self._send_json({
+                        "ok": True,
+                        "live_set": {
+                            "tempo": snapshot.tempo,
+                            "time_signature": f"{snapshot.signature_numerator}/{snapshot.signature_denominator}",
+                            "tracks": [
+                                {
+                                    "name": t.name,
+                                    "kind": t.kind,
+                                    "clip_count": len(t.clips),
+                                }
+                                for t in snapshot.tracks
+                            ],
+                            "scene_count": len(snapshot.scenes),
+                            "cue_points": list(snapshot.cue_points),
+                        },
+                        "live_changed": False,
+                    })
+                except Exception as exc:  # noqa: BLE001 - one read, no retry
+                    self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
                 return
             if parsed.path == "/api/approvals":
                 self._send_json(app.pending_actions())
@@ -672,6 +704,29 @@ def _handler_for(app: StudioApp):
                     )
                 except (TypeError, ValueError) as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            if parsed.path == "/api/live/candidate":
+                if runtime._transport is None:
+                    self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
+                    return
+                if runtime._settings.get("ai_provider") == "openai":
+                    self._send_json({"ok": False, "error": "Liveからの候補生成はローカルAI設定で実行してください"}, 400)
+                    return
+                try:
+                    snapshot = runtime._inspector.snapshot(
+                        include_arrangement=True,
+                        count_session_notes=False,
+                        include_session_clips=True,
+                    )
+                    context = brief_from_live(snapshot, str(body.get("brief") or ""))
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except Exception as exc:  # noqa: BLE001 - one read, no retry
+                    self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
+                    return
+                result = runtime.queue_generate(str(context["brief"]))
+                self._send_json({**result, "live_context": context, "live_changed": False})
                 return
             if parsed.path == "/api/generate":
                 brief = str(body.get("brief") or "")

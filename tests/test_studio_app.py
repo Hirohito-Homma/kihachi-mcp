@@ -51,6 +51,67 @@ def test_health_no_longer_crashes(studio) -> None:
     assert {item["name"] for item in health["statuses"]} >= {"Ollama", "Ableton Live"}
 
 
+def test_live_overview_reads_set_without_mutation(studio) -> None:
+    port, _runtime, live = studio
+    live.tempo = 126
+    live.signature_numerator = 4
+    live.signature_denominator = 4
+    live.create_midi_track("Drums")
+    live.create_scene("Intro")
+
+    status, result = _call(port, "GET", "/api/live/overview")
+    assert status == 200
+    assert result["ok"] is True
+    assert result["live_changed"] is False
+    assert result["live_set"]["tempo"] == 126
+    assert result["live_set"]["time_signature"] == "4/4"
+    assert len(result["live_set"]["tracks"]) == 1
+    assert result["live_set"]["tracks"][0]["name"] == "Drums"
+    assert result["live_set"]["scene_count"] == 1
+
+
+def test_live_candidate_uses_overview_and_keeps_live_unchanged(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    live.tempo = 124
+    received = []
+    monkeypatch.setattr(runtime, "queue_generate", lambda brief: received.append(brief) or {"ok": True, "started": True})
+    status, result = _call(port, "POST", "/api/live/candidate", {"brief": "D minor、8小節のテクノ"})
+    assert status == 200
+    assert result["ok"] is True
+    assert result["live_changed"] is False
+    assert result["live_context"]["sources"]["tempo"] == "live"
+    assert received == ["124 BPM。D minor、8小節のテクノ"]
+    assert live.tracks == []
+
+
+def test_live_candidate_rejects_openai_provider(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+    queued = []
+    monkeypatch.setattr(runtime, "queue_generate", lambda brief: queued.append(brief) or {"ok": True})
+    status, result = _call(port, "POST", "/api/live/candidate", {"brief": "D minor、8小節のテクノ"})
+    assert status == 400
+    assert result["ok"] is False
+    assert "ローカルAI設定" in result["error"]
+    assert queued == []
+    assert live.tracks == []
+
+
+def test_live_candidate_rejects_empty_or_excessive_brief(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    queued = []
+    monkeypatch.setattr(runtime, "queue_generate", lambda brief: queued.append(brief) or {"ok": True})
+
+    for bad_brief in ("", "   \n  ", "a" * 4001):
+        status, result = _call(port, "POST", "/api/live/candidate", {"brief": bad_brief})
+        assert status == 400
+        assert result["ok"] is False
+        assert "1〜4000文字" in result["error"]
+
+    assert queued == []
+    assert live.tracks == []
+
+
 def test_candidate_audio_preview_is_read_only(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]

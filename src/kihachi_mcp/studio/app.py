@@ -11,6 +11,9 @@ from urllib.parse import parse_qs, urlparse
 
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
+from kihachi_mcp.services.jarvis import JarvisOrchestrator, context_from_runtime
+from kihachi_mcp.services.jarvis.intent import parse_intent
+from kihachi_mcp.services.jarvis.revision import revision_request
 from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
@@ -51,6 +54,7 @@ class StudioApp:
         self.reference_sources = reference_sources or ReferenceSources()
         self.sample_catalog = sample_catalog or SampleCatalog()
         self.dialogue = StudioDialogue(sample_catalog=self.sample_catalog)
+        self.jarvis = JarvisOrchestrator(context_reader=lambda: context_from_runtime(self.runtime))
 
     def serve_forever(self, host: str = HOST, port: int = PORT) -> None:
         """Start the blocking HTTP server."""
@@ -96,6 +100,9 @@ def _handler_for(app: StudioApp):
 
         def _get(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/jarvis":
+                self._send_json(app.jarvis.status())
+                return
             if _workflow_get(self, runtime, parsed):
                 return
             if parsed.path == "/references":
@@ -185,6 +192,51 @@ def _handler_for(app: StudioApp):
 
         def _post(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/jarvis/turn":
+                body = self._read_json()
+                self._send_json(
+                    app.jarvis.ask(
+                        str(body.get("utterance") or ""),
+                        track_index=body.get("track_index"),
+                        track_name=body.get("track_name"),
+                        clip_index=body.get("clip_index"),
+                    )
+                )
+                return
+            if parsed.path == "/api/jarvis/clip-preview":
+                body = self._read_json()
+                self._send_json(
+                    app.jarvis.inspect_midi_clip(
+                        track_index=body.get("track_index"),
+                        track_name=body.get("track_name"),
+                        clip_index=body.get("clip_index"),
+                        utterance=str(body.get("utterance") or ""),
+                        direction=body.get("direction"),
+                        scope=body.get("scope"),
+                        bar_range=body.get("bar_range"),
+                    )
+                )
+                return
+            if parsed.path == "/api/jarvis/revision":
+                body = self._read_json()
+                selected = runtime.selected_id()
+                project = runtime.project(selected) if selected else {}
+                song = {
+                    "bars": (project.get("songspec") or {}).get("bars"),
+                    "sections": (project.get("arrangement") or {}).get("sections") or [],
+                }
+                request = revision_request(parse_intent(str(body.get("utterance") or "")), song)
+                if not request["ok"]:
+                    self._send_json({**request, "live_changed": False})
+                    return
+                result = runtime.propose_revision(
+                    selected,
+                    scopes=request["scopes"],
+                    bars=request["bars"],
+                    parts=request["parts"],
+                )
+                self._send_json({**result, "live_changed": False})
+                return
             if parsed.path.startswith("/api/dialogue/"):
                 content_type = self.headers.get("Content-Type", "").split(";")[0]
                 allowed_types = (

@@ -293,3 +293,132 @@ def test_page_calls_only_routes_the_server_has() -> None:
         "composer-adopt",
     ):
         assert f'id="{element}"' in page
+
+def test_jarvis_change_request_becomes_a_revision_proposal_without_live(studio) -> None:
+    port, runtime, live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    runtime.select(candidate_id)
+    hats = next(clip for clip in runtime._lookup(candidate_id).clips_for_part("Hats") if clip.notes)
+    first, last = hats.start_bar, hats.start_bar + hats.length_bars - 1
+    _status, proposal = _call(
+        port, "POST", "/api/jarvis/revision", {"utterance": f"{first}-{last}小節のハットを減らして"}
+    )
+    assert proposal["ok"] is True
+    assert proposal["note_count_after"] < proposal["note_count_before"]
+    assert proposal["requires_approval"] is True
+    assert proposal["live_changed"] is False
+    assert runtime.selected_id() == candidate_id
+    assert live.tracks == []
+    _status, kick = _call(
+        port, "POST", "/api/jarvis/revision", {"utterance": f"{first}-{last}小節のキックを増やして"}
+    )
+    assert kick["ok"] is False and "ハットだけ" in kick["error"]
+    _status, later = _call(port, "POST", "/api/jarvis/revision", {"utterance": "後半のハットを増やして"})
+    assert later["ok"] is True
+    assert later["note_count_after"] > later["note_count_before"]
+    assert later["revision"]["after"][0].startswith("17–32 小節のHats")
+    assert live.tracks == []
+
+
+def test_jarvis_route_reports_the_open_candidate_without_writing(studio) -> None:
+    port, runtime, live = studio
+    status, idle = _call(port, "GET", "/api/jarvis")
+    assert status == 200 and idle["state"] == "IDLE" and idle["live_changed"] is False
+    status, empty = _call(port, "POST", "/api/jarvis/turn", {"utterance": "今の曲どうなってる？"})
+    assert status == 200 and empty["state"] == "COMPLETED" and empty["executed"] is False
+    assert live.tracks == []
+    runtime.generate(SMOKE_TEST, seed=3)
+    status, result = _call(port, "POST", "/api/jarvis/turn", {"utterance": "今の曲どうなってる？"})
+    assert result["state"] == "COMPLETED"
+    assert result["context"]["tempo"] == 120
+    status, blocked = _call(
+        port, "POST", "/api/jarvis/turn", {"utterance": "512から544のベースを少し減らして"}
+    )
+    assert blocked["state"] == "APPROVAL_REQUIRED"
+    assert blocked["executed"] is False
+    assert blocked["live_changed"] is False
+    assert live.tracks == []
+
+
+def test_jarvis_midi_clip_routes_read_facts_and_preview_without_writing(studio, monkeypatch) -> None:
+    port, _runtime, live = studio
+    notes = [
+        {"pitch": 36, "start_time": 0.0, "duration": 0.5, "velocity": 110},
+        {"pitch": 36, "start_time": 1.0, "duration": 0.5, "velocity": 100},
+        {"pitch": 36, "start_time": 4.0, "duration": 0.5, "velocity": 105},
+        {"pitch": 36, "start_time": 5.0, "duration": 0.5, "velocity": 95},
+    ]
+
+    def fake_clip_notes(track_index=None, track_name=None, clip_index=0):
+        if track_index == 0 and clip_index == 0:
+            return {
+                "ok": True,
+                "status": "SUCCESS",
+                "complete": True,
+                "live_changed": False,
+                "track_index": 0,
+                "track": "KICK",
+                "clip_index": 0,
+                "clip": "Kick 2Bar",
+                "length_beats": 8.0,
+                "notes": [dict(n) for n in notes],
+                "note_count": len(notes),
+                "truncated": False,
+            }
+        return {
+            "ok": False,
+            "status": "PARTIAL",
+            "complete": False,
+            "live_changed": False,
+            "truncated": True,
+            "notes": [dict(n) for n in notes],
+            "note_count": 5000,
+            "length_beats": 8.0,
+        }
+
+    monkeypatch.setattr("kihachi_mcp.services.jarvis.clip_review.get_midi_clip_notes", fake_clip_notes)
+
+    status, read_res = _call(
+        port,
+        "POST",
+        "/api/jarvis/turn",
+        {"utterance": "トラック0のクリップ0を評価して"},
+    )
+    assert status == 200
+    assert read_res["ok"] is True
+    assert read_res["state"] == "COMPLETED"
+    assert read_res["complete"] is True
+    assert read_res["live_changed"] is False
+    assert read_res["executed"] is False
+    assert read_res["clip_evaluation"]["note_count"] == 4
+    assert read_res["clip_evaluation"]["bar_notes"] == [2, 2]
+    assert read_res["clip_evaluation"]["timbre"] == "UNKNOWN"
+    assert read_res["clip_preview"]["original_notes"] == notes
+
+    status, preview_res = _call(
+        port,
+        "POST",
+        "/api/jarvis/clip-preview",
+        {"track_index": 0, "clip_index": 0, "direction": "reduce_density", "scope": "later_section"},
+    )
+    assert status == 200
+    assert preview_res["ok"] is True
+    assert preview_res["state"] == "APPROVAL_REQUIRED"
+    assert preview_res["clip_preview"]["original_notes"] == notes
+    assert preview_res["clip_preview"]["note_count_after"] == 3
+    assert preview_res["clip_preview"]["applied_to_live"] is False
+    assert preview_res["live_changed"] is False
+
+    status, partial_res = _call(
+        port,
+        "POST",
+        "/api/jarvis/clip-preview",
+        {"track_index": 0, "clip_index": 1},
+    )
+    assert status == 200
+    assert partial_res["ok"] is False
+    assert partial_res["state"] == "UNKNOWN"
+    assert partial_res["complete"] is False
+    assert partial_res["clip_evaluation"] is None
+    assert partial_res["clip_preview"] is None
+    assert live.tracks == []

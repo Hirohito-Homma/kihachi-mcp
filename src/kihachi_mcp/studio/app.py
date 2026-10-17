@@ -374,29 +374,22 @@ def _handler_for(app: StudioApp):
                         count_session_notes=False,
                         include_session_clips=True,
                     )
-                    self._send_json({
-                        "ok": True,
-                        "live_set": {
-                            "tempo": snapshot.tempo,
-                            "time_signature": f"{snapshot.signature_numerator}/{snapshot.signature_denominator}",
-                            "tracks": [
-                                {
-                                    "name": t.name,
-                                    "kind": t.kind,
-                                    "clip_count": len(t.clips),
-                                }
-                                for t in snapshot.tracks
-                            ],
-                            "scene_count": len(snapshot.scenes),
-                            "cue_points": list(snapshot.cue_points),
-                        },
-                        "live_changed": False,
-                    })
-                except Exception as exc:  # noqa: BLE001 - one read, no retry
+                except Exception as exc:  # noqa: BLE001 - report read failures without a retry
                     self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
-                return
-            if parsed.path == "/api/approvals":
-                self._send_json(app.pending_actions())
+                    return
+                self._send_json({
+                    "ok": True,
+                    "live_changed": False,
+                    "observed_at": snapshot.observed_at,
+                    "set_name": snapshot.set_name,
+                    "tempo": snapshot.tempo,
+                    "time_signature": snapshot.time_signature.to_dict(),
+                    "tracks": [track.to_dict() for track in snapshot.tracks],
+                    "scenes": [scene.to_dict() for scene in snapshot.scenes],
+                    "session_clips": [clip.to_dict() for clip in snapshot.session_clips],
+                    "arrangement_clips": [clip.to_dict() for clip in snapshot.arrangement_clips],
+                    "note_counts_included": False,
+                })
                 return
             if parsed.path == "/api/dialogue/voice/status":
                 self._send_json(voice_status())

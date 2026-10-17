@@ -53,21 +53,14 @@ def test_health_no_longer_crashes(studio) -> None:
 
 def test_live_overview_reads_set_without_mutation(studio) -> None:
     port, _runtime, live = studio
-    live.tempo = 126
-    live.signature_numerator = 4
-    live.signature_denominator = 4
-    live.create_midi_track("Drums")
-    live.create_scene("Intro")
-
-    status, result = _call(port, "GET", "/api/live/overview")
+    status, overview = _call(port, "GET", "/api/live/overview")
     assert status == 200
-    assert result["ok"] is True
-    assert result["live_changed"] is False
-    assert result["live_set"]["tempo"] == 126
-    assert result["live_set"]["time_signature"] == "4/4"
-    assert len(result["live_set"]["tracks"]) == 1
-    assert result["live_set"]["tracks"][0]["name"] == "Drums"
-    assert result["live_set"]["scene_count"] == 1
+    assert overview["ok"] is True
+    assert overview["live_changed"] is False
+    assert overview["tempo"] == live.tempo
+    assert overview["tracks"] == []
+    assert overview["note_counts_included"] is False
+    assert live.tracks == []
 
 
 def test_live_candidate_uses_overview_and_keeps_live_unchanged(studio, monkeypatch) -> None:

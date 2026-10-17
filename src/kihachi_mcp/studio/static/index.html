@@ -360,6 +360,36 @@
       <p id="live-candidate-context" class="sub" role="status"></p>
     </section>
 
+    <section id="astra-params-view">
+      <h2>Astraへ送るパラメーター</h2>
+      <p class="sub">ここで選んだ内容をAstraへ送ります。ジャンル・雰囲気・指示は音の方向だけです。最初のクリックは料金の確認だけです。同じ内容でもう一度押すとMIDI候補を生成します。Liveは変えません。</p>
+      <div id="astra-params" class="grid">
+        <label>操作<select id="astra-operation"><option value="generate">generate</option><option value="variation">variation</option><option value="revision">revision</option></select></label>
+        <label>役割<select id="astra-role"><option value="全パート">全パート</option><option value="Kick">Kick</option><option value="Snare">Snare</option><option value="Hats">Hats</option><option value="OpenHat">OpenHat</option><option value="Perc">Perc</option><option value="Sub">Sub</option><option value="bass" selected>Bass</option><option value="Stab">Stab</option><option value="Pad">Pad</option><option value="arp">Arp</option><option value="Guitar">Guitar</option><option value="Horn">Horn</option><option value="Lead">Lead</option><option value="Vocal">Vocal</option><option value="FX">FX</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
+        <label>ジャンル<input id="astra-genre" list="astra-genre-options" placeholder="例：mutation_funk"></label>
+        <datalist id="astra-genre-options"><option value="mutation_funk"><option value="dub_techno"><option value="tech_house"><option value="melodic_techno"></datalist>
+        <label>雰囲気<input id="astra-mood" placeholder="例：暗い、ファンキー"></label>
+        <label>Key<input id="astra-key" value="D#m"></label>
+        <label>Tempo<input id="astra-tempo" type="number" min="40" max="240" value="124"></label>
+        <label>Bars<input id="astra-bars" type="number" min="1" max="256" value="8"></label>
+        <label>Grid<select id="astra-grid"><option>1/16</option><option>1/8</option><option>1/4</option><option>1/32</option></select></label>
+        <label>Syncopation 0–1<input id="astra-syncopation" type="number" min="0" max="1" step="0.1" value="0.7"></label>
+        <label>Octave jump 0–1<input id="astra-octave" type="number" min="0" max="1" step="0.1" value="0.2"></label>
+        <label>Velocity min<input id="astra-velocity-min" type="number" min="1" max="127" value="65"></label>
+        <label>Velocity max<input id="astra-velocity-max" type="number" min="1" max="127" value="118"></label>
+        <label>ノート長 min<input id="astra-note-min" type="number" min="0.05" max="16" step="0.05" value="0.25"></label>
+        <label>ノート長 max<input id="astra-note-max" type="number" min="0.05" max="16" step="0.05" value="0.75"></label>
+        <label>変化させる小節<input id="astra-variation-bar" type="number" min="1" max="256" placeholder="なし"></label>
+        <label>Kick onsets（拍、カンマ区切り）<input id="astra-kicks" placeholder="0, 1, 2, 3"></label>
+        <label>元ノート<select id="astra-source"><option value="none">なし</option><option value="last">直前のMIDI候補</option></select></label>
+      </div>
+      <label class="inline"><input id="astra-ghost" type="checkbox" checked> Ghost notes</label>
+      <label class="inline"><input id="astra-avoid-kick" type="checkbox" checked> Kickとの同時発音を避ける</label>
+      <label>指示・プロンプト<textarea id="astra-prompt" rows="3" placeholder="例：キックは短め。ミューテーションファンクを作って。Live操作は書かない。"></textarea></label>
+      <div class="actions"><button id="astra-send" type="button">Astraへ送る</button></div>
+      <p id="astra-status" role="status" class="sub"></p>
+    </section>
+
     <section id="music-plan-view">
       <h2>パートの計画</h2>
       <p class="sub">上で選んだ役割、キー、テンポ、小節で、この画面の中で計画します。全パートを選ぶと、パートごとにトラックを分けます。承認だけでは Live に送りません。「実機の Live に送る」は、1回目で実機の Set を読んで末尾に置き直し、承認し直したあとの2回目で1回だけ送ります。再生と録音を止めてから押してください。読んだあと15分で期限切れです。同じ名前のトラックがあるときは送りません。保存はしません。</p>
@@ -1344,6 +1374,7 @@
 
     let composerPreview = null;
     let composerGenerated = null;
+    let astraSync = false;
     let musicPlanHash = null;
     function composerConstraints() {
       const kicksEl = $("composer-kicks") || $("astra-kicks");
@@ -1391,9 +1422,50 @@
       if (bar) constraints.variation_bar = Number(bar);
       return constraints;
     }
+    function midiPayload() {
+      const useLast = $("astra-source").value === "last" && composerGenerated;
+      return {
+        operation: $("astra-operation").value,
+        constraints: composerConstraints(),
+        source_notes: useLast ? composerGenerated.notes : []
+      };
+    }
+    function copyComposerToAstra() {
+      if (astraSync) return;
+      astraSync = true;
+      $("astra-role").value = $("composer-role").value;
+      $("astra-key").value = $("composer-key").value;
+      $("astra-tempo").value = $("composer-tempo").value;
+      $("astra-bars").value = $("composer-bars").value;
+      $("astra-grid").value = $("composer-grid").value;
+      $("astra-syncopation").value = $("composer-syncopation").value;
+      $("astra-octave").value = $("composer-octave").value;
+      $("astra-velocity-min").value = $("composer-velocity-min").value;
+      $("astra-velocity-max").value = $("composer-velocity-max").value;
+      $("astra-kicks").value = $("composer-kicks").value;
+      $("astra-ghost").checked = $("composer-ghost").checked;
+      $("astra-avoid-kick").checked = $("composer-avoid-kick").checked;
+      astraSync = false;
+    }
+    function copyAstraToComposer() {
+      if (astraSync) return;
+      astraSync = true;
+      $("composer-role").value = $("astra-role").value;
+      $("composer-key").value = $("astra-key").value;
+      $("composer-tempo").value = $("astra-tempo").value;
+      $("composer-bars").value = $("astra-bars").value;
+      $("composer-grid").value = $("astra-grid").value;
+      $("composer-syncopation").value = $("astra-syncopation").value;
+      $("composer-octave").value = $("astra-octave").value;
+      $("composer-velocity-min").value = $("astra-velocity-min").value;
+      $("composer-velocity-max").value = $("astra-velocity-max").value;
+      $("composer-kicks").value = $("astra-kicks").value;
+      $("composer-ghost").checked = $("astra-ghost").checked;
+      $("composer-avoid-kick").checked = $("astra-avoid-kick").checked;
+      astraSync = false;
+    }
     function invalidateComposerPreview() {
       composerPreview = null;
-      composerGenerated = null;
       musicPlanHash = null;
       $("composer-run").disabled = true;
       $("composer-adopt").disabled = true;
@@ -1410,9 +1482,105 @@
       const node = $("live-plan-pending");
       if (node) node.textContent = text;
     }
-    for (const element of document.querySelectorAll("#midi-composer-view input, #midi-composer-view select")) {
-      element.addEventListener("input", invalidateComposerPreview);
+    function showComposerNotes(data) {
+      composerPreview = null;
+      composerGenerated = {candidate_id: state.candidate?.candidate_id || "", role: data.role || composerConstraints().role, pattern_bars: composerConstraints().bars, notes: data.notes || []};
+      const line = `${data.provider} / ${data.model}: ${data.note_count}ノートを生成しました。Abletonには未適用です。`;
+      $("composer-status").textContent = line;
+      $("astra-status").textContent = line;
+      $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
+      $("composer-adopt").disabled = !state.candidate || ["drums", "全パート"].includes(composerConstraints().role);
     }
+    async function previewMidi(statusId) {
+      const payload = midiPayload();
+      if (payload.operation !== "generate" && !payload.source_notes.length) {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).textContent = "variation と revision には、元ノートで「直前のMIDI候補」を選んでください。";
+        return null;
+      }
+      let data;
+      try {
+        data = await post("/api/midi/preview", payload);
+      } catch {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).textContent = "確認に失敗しました。もう一度確認してください。";
+        return null;
+      }
+      if (!data.ok) {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`;
+        return null;
+      }
+      composerPreview = {key: JSON.stringify(payload), paid: data.paid_api, model: data.model, allowed: !(data.cost && !data.cost.allowed), astraConfirmed: false};
+      const estimate = data.cost?.estimate?.estimated_jpy;
+      const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
+      $(statusId).textContent = `${data.provider} / ${data.model}${money}。まだ送っていません。`;
+      $("composer-run").disabled = !composerPreview.allowed;
+      return data;
+    }
+    async function composeMidi(statusId, requireAstra = false) {
+      const payload = midiPayload();
+      if (!composerPreview || composerPreview.key !== JSON.stringify(payload) || !composerPreview.allowed || (requireAstra && (!composerPreview.astraConfirmed || composerPreview.model !== "gpt-6-astra"))) {
+        invalidateComposerPreview();
+        return null;
+      }
+      const paid = composerPreview.paid;
+      composerPreview = null;
+      $("composer-run").disabled = true;
+      $(statusId).textContent = "MIDI候補を生成中…";
+      let data;
+      try {
+        data = await post("/api/midi/compose", {...payload, confirmed_paid: paid});
+      } catch {
+        $(statusId).textContent = "MIDI候補の生成に失敗しました。もう一度確認してから試してください。";
+        return null;
+      }
+      if (!data.ok) { $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`; return null; }
+      showComposerNotes(data);
+      return data;
+    }
+    for (const element of document.querySelectorAll("#midi-composer-view input, #midi-composer-view select")) {
+      const sync = () => { copyComposerToAstra(); invalidateComposerPreview(); };
+      element.addEventListener("input", sync);
+      element.addEventListener("change", sync);
+    }
+    for (const element of document.querySelectorAll("#astra-params-view input, #astra-params-view select, #astra-params-view textarea")) {
+      const sync = () => { copyAstraToComposer(); invalidateComposerPreview(); };
+      element.addEventListener("input", sync);
+      element.addEventListener("change", sync);
+    }
+    $("astra-send").onclick = async () => {
+      const payload = midiPayload();
+      $("astra-send").disabled = true;
+      try {
+        const confirmed = Boolean(composerPreview && composerPreview.key === JSON.stringify(payload) && composerPreview.astraConfirmed && composerPreview.model === "gpt-6-astra" && composerPreview.allowed);
+        if (!confirmed) {
+          const data = await previewMidi("astra-status");
+          if (!data) return;
+          if (data.model !== "gpt-6-astra") {
+            composerPreview = null;
+            $("composer-run").disabled = true;
+            $("astra-status").textContent = `いまのモデルは ${data.model} です。Astraへは送っていません。システムで Astra を選んで保存してください。`;
+            return;
+          }
+          if (!composerPreview?.allowed) {
+            composerPreview = null;
+            $("composer-run").disabled = true;
+            $("astra-status").textContent = "月間上限を超えるため、Astraへは送りません。";
+            return;
+          }
+          composerPreview.astraConfirmed = true;
+          $("composer-run").disabled = true;
+          const estimate = Number(data.cost?.estimate?.estimated_jpy || 0).toFixed(2);
+          $("astra-status").textContent = `確認しました。推定 約${estimate}円。同じ内容で「Astraへ送る」をもう一度押すと生成します。Liveは変えません。`;
+          return;
+        }
+        await composeMidi("astra-status", true);
+      } finally { $("astra-send").disabled = false; }
+    };
     $("music-plan-preview").onclick = async () => {
       $("music-plan-preview").disabled = true;
       $("music-plan-status").textContent = "計画を確認しています。Liveには送りません。";
@@ -1530,32 +1698,15 @@
       if (data.rejected) $("music-plan-approve").disabled = false;
     };
     $("composer-preview").onclick = async () => {
-      const constraints = composerConstraints();
       $("composer-preview").disabled = true;
       $("composer-run").disabled = true;
       $("composer-result").innerHTML = "";
-      try {
-        const data = await post("/api/midi/preview", {operation: "generate", constraints});
-        if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
-        composerPreview = {constraints: JSON.stringify(constraints), paid: data.paid_api};
-        const estimate = data.cost?.estimate?.estimated_jpy;
-        const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
-        $("composer-status").textContent = `${data.provider} / ${data.model}${money}。Abletonには送りません。`;
-        $("composer-run").disabled = Boolean(data.cost && !data.cost.allowed);
-      } finally { $("composer-preview").disabled = false; }
+      try { await previewMidi("composer-status"); }
+      finally { $("composer-preview").disabled = false; }
     };
     $("composer-run").onclick = async () => {
-      const constraints = composerConstraints();
-      if (!composerPreview || composerPreview.constraints !== JSON.stringify(constraints)) { invalidateComposerPreview(); return; }
       $("composer-run").disabled = true;
-      $("composer-status").textContent = "MIDI候補を生成中…";
-      const data = await post("/api/midi/compose", {operation: "generate", constraints, confirmed_paid: composerPreview.paid});
-      if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
-      composerPreview = null;
-      composerGenerated = {candidate_id: state.candidate?.candidate_id || "", role: constraints.role, pattern_bars: constraints.bars, notes: data.notes || []};
-      $("composer-status").textContent = `${data.provider} / ${data.model}: ${data.note_count}ノートを生成しました。Abletonには未適用です。`;
-      $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
-      $("composer-adopt").disabled = !state.candidate || constraints.role === "drums";
+      await composeMidi("composer-status");
     };
     $("composer-adopt").onclick = async () => {
       if (!composerGenerated || !state.candidate) return;

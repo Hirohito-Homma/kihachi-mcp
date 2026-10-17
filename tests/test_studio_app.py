@@ -285,6 +285,15 @@ def test_sample_replacement_http_requires_preview_and_confirmation(tmp_path: Pat
         thread.join(timeout=3)
 
 
+def test_sample_replacement_rejects_unlisted_bundled_asset(studio) -> None:
+    port, _runtime, _live = studio
+    status, response = _call(
+        port, "POST", "/api/samples/replace-preview", {"bundled_sample": "../other.wav"}
+    )
+    assert status == 400
+    assert response["ok"] is False
+
+
 def test_full_studio_flow_over_http(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]

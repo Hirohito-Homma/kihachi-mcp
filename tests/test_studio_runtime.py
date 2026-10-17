@@ -132,6 +132,57 @@ def test_kick_replacement_requires_preview_then_changes_only_kick(tmp_path: Path
     assert hats["occupied_pads"] == hats_before
 
 
+def test_kick_replacement_uses_compact_snapshot_for_plan_and_execute(
+    tmp_path: Path,
+) -> None:
+    class RecordingTransport(FakeLiveTransport):
+        def __init__(self) -> None:
+            super().__init__(FakeLiveSet(live_version="12.4.3", tempo=125))
+            self.state_payloads: list[dict] = []
+
+        def request(self, message: dict) -> dict:
+            if message.get("method") == "get_state":
+                self.state_payloads.append(dict(message.get("payload") or {}))
+            return super().request(message)
+
+    transport = RecordingTransport()
+    runtime = StudioRuntime(
+        transport=transport,
+        gate=gate(tmp_path),
+        export_dir=tmp_path / "exports",
+    )
+    candidate = _candidate()
+    runtime._store(candidate)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    transport.state_payloads.clear()
+
+    replacement = tmp_path / "fat-kick.wav"
+    replacement.write_bytes(b"fat")
+    preview = runtime.sample_replacement_preview(candidate.candidate_id, str(replacement))
+    assert preview["ok"] is True
+    result = runtime.apply_sample_replacement(preview["replacement_id"], confirmed=True)
+    assert result["ok"] is True
+    assert transport.state_payloads
+    assert all(payload["include_session_clips"] is False for payload in transport.state_payloads)
+
+
+def test_kick_replacement_refuses_occupied_pad_without_readable_sample(
+    tmp_path: Path,
+) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    kick = next(track for track in transport.live_set.tracks if "Kick" in track["name"])
+    kick["occupied_pads"][0]["sample_path"] = ""
+    replacement = tmp_path / "fat-kick.wav"
+    replacement.write_bytes(b"fat")
+
+    preview = runtime.sample_replacement_preview(candidate.candidate_id, str(replacement))
+
+    assert preview["ok"] is False
+    assert "現在サンプルを読み取れません" in preview["error"]
+    assert kick["occupied_pads"][0]["sample_path"] == ""
+
+
 def test_inspect_coverage_lists_leftover_kihachi_tracks(tmp_path: Path) -> None:
     live = FakeLiveSet(live_version="12.4.3", tempo=125)
     live.add_track("KIHACHI Kick ca90283e [KIHACHI]")

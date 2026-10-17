@@ -15,18 +15,19 @@ from kihachi_mcp.models.live_mutation import LiveMutationPlan
 from kihachi_mcp.models.music_plan import MusicPlan
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
+from kihachi_mcp.services.drum_samples import FAT_TIGHT_KICK, sample_dir
 from kihachi_mcp.services.jarvis import JarvisOrchestrator, context_from_runtime
-from kihachi_mcp.services.jarvis.intent import parse_intent
-from kihachi_mcp.services.jarvis.revision import revision_request
 from kihachi_mcp.services.jarvis.fake_execution import (
     rebind_uninspected_plan,
     run_approved_plan_on_fake,
 )
+from kihachi_mcp.services.jarvis.intent import parse_intent
+from kihachi_mcp.services.jarvis.revision import revision_request
 from kihachi_mcp.services.jarvis.verification import settle_receipt
 from kihachi_mcp.services.live_candidate_context import brief_from_live
+from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
 from kihachi_mcp.services.music_plan_preview import prepare_music_plan
-from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
@@ -582,9 +583,16 @@ def _handler_for(app: StudioApp):
             body = self._read_json()
             if parsed.path == "/api/samples/replace-preview":
                 try:
-                    sample_path = app.sample_catalog.audio_path(
-                        str(body.get("sample_id") or "")
-                    )
+                    if body.get("bundled_sample") == FAT_TIGHT_KICK:
+                        sample_path = sample_dir() / FAT_TIGHT_KICK
+                        if not sample_path.is_file():
+                            raise ReferenceError("Fat-tight Kick音源が見つかりません")
+                    elif body.get("bundled_sample") is not None:
+                        raise ReferenceError("指定された同梱音源は使用できません")
+                    else:
+                        sample_path = app.sample_catalog.audio_path(
+                            str(body.get("sample_id") or "")
+                        )
                 except ReferenceError as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                     return

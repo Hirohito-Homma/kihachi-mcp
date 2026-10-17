@@ -170,6 +170,15 @@ class StudioRuntime:
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
         )
+        # A pad replacement needs track/device identity, not every Session clip.
+        # Plan and execute against the same compact snapshot so the fingerprint
+        # guard remains meaningful on large Sets.
+        self._sample_executor = executor or LiveExecutionService(
+            transport=self._transport,
+            inspector=self._coverage_inspector,
+            approval_gate=self._gate,
+            request_id_factory=_unique_request_ids(),
+        )
         # Arrangement expansion reads Arrangement clips, and the Set fingerprint
         # covers them, so planning and execution must read the Set the same way.
         self._arrangement_inspector = (
@@ -2160,9 +2169,16 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
-        snapshot, failure = self._coverage_snapshot()
-        if snapshot is None:
-            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        try:
+            snapshot = self._coverage_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "error": f"{exc.code}: {exc.message}",
+                "error_code": exc.code,
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
         expected_name = managed_track_name(
             f"KIHACHI Kick {candidate.candidate_id[:8]}"
         )
@@ -2183,11 +2199,18 @@ class StudioRuntime:
             {
                 "note": pad.get("note"),
                 "sample_path": pad.get("sample_path") or "",
+                "device_class_name": pad.get("device_class_name") or "",
             }
             for device in summary.get("devices") or []
             for pad in device.get("occupied_pads") or []
         ]
         current_path = str(pads[0].get("sample_path") or "") if len(pads) == 1 else ""
+        if pads and not current_path:
+            return {
+                "ok": False,
+                "error": "Kickパッド36の現在サンプルを読み取れません。差し替えを停止します",
+                "observed_pads": observed_pads,
+            }
         plan = create_sample_replacement_plan(
             snapshot,
             track_index=track.index,
@@ -2229,7 +2252,9 @@ class StudioRuntime:
                 token = self._gate.approve(plan)
             except ApprovalError as exc:
                 return {"ok": False, "error": exc.message}
-            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            receipt = self._sample_executor.execute(
+                plan, approved=True, approval_token=token
+            )
             return {
                 "ok": receipt.status == "verified",
                 "receipt": receipt.to_dict(),

@@ -33,6 +33,7 @@ Status: Living Document
 - AIProvider は `health` / `list_models` / `generate` / `generate_structured` / `capabilities` を持ち、設定（画面保存 → 環境変数 → 既定値）から選びます。
 - Live への書き込みは「承認 → ドライラン → 1回だけ送信 → 読み戻し比較」の順だけです。期待値（トラックごとのクリップ数・ノート数）は送信前に `<id>.expected.json` に保存し、再起動後も検証できます。
 - 修正は子候補を作る提案で、採用するまで親候補は変わりません。履歴は `.kihachi-revisions.json`。
+- Astra の作曲結果は `MusicPlan`（`kihachi.music_plan.v1`）です。Live へ出すときは既存の `LiveMutationPlan` に変換し、承認前には送りません。対応表は `docs/ASTRA_MUSIC_PROTOCOL.md` です。
 
 ---
 

@@ -83,7 +83,7 @@ Gateway は落ちません。`ableton_ping` は `connected: false` と `error: "
 
 | 状態 | 内容 |
 | --- | --- |
-| SUPPORTED | `ableton_ping`, `ableton_status`, `server_status`, `set_tempo`（確認あり）, `ableton_tool_catalogue`, `ableton_play` / `ableton_stop`（確認あり）, `ableton_list_tracks`, `ableton_create_midi_track`, `ableton_create_audio_track`（どちらも末尾へ追加）, `ableton_create_midi_clip`, `ableton_add_notes`, `ableton_set_volume`, `ableton_set_pan`, `ableton_mute`, `ableton_solo`, `ableton_list_devices`, `ableton_get_arrangement`, `produce_ableton_song` |
+| SUPPORTED | `ableton_ping`, `ableton_status`, `server_status`, `set_tempo`（確認あり）, `ableton_tool_catalogue`, `ableton_play` / `ableton_stop`（確認あり）, `ableton_list_tracks`, `ableton_create_midi_track`, `ableton_create_audio_track`（どちらも末尾へ追加）, `ableton_create_midi_clip`, `get_midi_clip_notes`（Session MIDI を読み取り。完全読取か切り詰めかを返す。Remote Script が返す `track_index` / `clip_index` / トラック名が要求と食い違う場合や `clip` が無い場合は `FAILED`）, `ableton_add_notes`, `ableton_set_volume`, `ableton_set_pan`, `ableton_mute`, `ableton_solo`, `ableton_list_devices`, `ableton_get_arrangement`, `produce_ableton_song`, `sample_library_status`, `index_sample_library`, `search_samples`, `get_sample`, `find_samples_for_song`, `select_sample`, `place_sample` |
 | PARTIAL | Remote Script にはあるが、この曲の経路では呼ばない。クリップ発射、デバイスの追加、プリセットのロード、パラメータ変更、`toggle_cue_at_playhead` |
 | NOT IMPLEMENTED | Remote Script にコマンドが無い。`rename_track`（作成時の `name` で足りる）, `delete_track`, `delete_clip`, `overwrite_project`, `replace_device`, `remove_device`, `save_over_existing_project` |
 

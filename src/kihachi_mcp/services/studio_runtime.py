@@ -108,6 +108,7 @@ JOB_CANCELLED = "cancelled"
 _CANDIDATE_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 #: The dot keeps this file out of the candidate id pattern.
 REVISION_HISTORY_FILE = ".kihachi-revisions.json"
+SELECTED_CANDIDATE_FILE = ".kihachi-selected.json"
 AUDIO_SUFFIXES = frozenset({".wav", ".aif", ".aiff", ".flac"})
 DRY_RUN_TTL_SECONDS: float = 300.0  # 5 minutes
 #: A model reply that fails validation is asked for again at most this often.
@@ -219,7 +220,12 @@ class StudioRuntime:
         # None keeps candidates in memory only, as tests and the MCP server do.
         self._candidate_dir = Path(candidate_dir) if candidate_dir else None
         if self._candidate_dir is not None:
-            self._selected_id = _latest_saved_id(self._candidate_dir)
+            preferred_id = _read_selected_id(self._candidate_dir)
+            self._selected_id = (
+                preferred_id
+                if preferred_id and self._lookup(preferred_id) is not None
+                else _latest_saved_id(self._candidate_dir)
+            )
             self._revision_history = _read_json_list(
                 self._candidate_dir / REVISION_HISTORY_FILE
             )
@@ -445,6 +451,8 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
+        if str(role) == "全パート":
+            return {"ok": False, "error": "全パートは一度に採用できません。パートを選んでください。"}
         part = {
             "bass": "Bass",
             "chords": "Stab",
@@ -762,6 +770,14 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
+        if self._candidate_dir is not None:
+            try:
+                _write_json_atomic(
+                    self._candidate_dir / SELECTED_CANDIDATE_FILE,
+                    {"candidate_id": candidate.candidate_id},
+                )
+            except OSError:
+                return {"ok": False, "error": "候補の選択を保存できません"}
         self._selected_id = candidate.candidate_id
         return {"ok": True, "candidate": candidate.to_dict()}
 
@@ -1119,6 +1135,7 @@ class StudioRuntime:
         issue_ids: list[str] | None = None,
         scopes: list[str] | None = None,
         bars: tuple[int, int] | None = None,
+        parts: list[str] | None = None,
     ) -> dict[str, Any]:
         """Build a local revision as a proposal. Nothing is adopted until accepted."""
         candidate = self._lookup(candidate_id)
@@ -1128,7 +1145,9 @@ class StudioRuntime:
         wanted = [item for item in issue_ids or [] if item not in ignored] or None
         if issue_ids and wanted is None:
             return {"ok": False, "error": "選んだ指摘はすべて無視されています"}
-        result = revise_candidate(candidate, scopes=scopes, issue_ids=wanted, bars=bars)
+        result = revise_candidate(
+            candidate, scopes=scopes, issue_ids=wanted, bars=bars, parts=parts
+        )
         if not result.get("ok"):
             return {"ok": False, "error": result.get("error") or "修正案を作れませんでした"}
         record = revision_record(result)
@@ -2577,6 +2596,10 @@ class StudioRuntime:
         path = self._candidate_path(candidate.candidate_id)
         if path is not None:
             _write_json_atomic(path, candidate.to_dict())
+            _write_json_atomic(
+                self._candidate_dir / SELECTED_CANDIDATE_FILE,
+                {"candidate_id": candidate.candidate_id},
+            )
 
     def _lookup(self, candidate_id: str) -> MidiCandidate | None:
         """Return a candidate from memory, or the one saved before a restart."""
@@ -2796,6 +2819,18 @@ def _latest_saved_id(directory: Path) -> str:
     if not saved:
         return ""
     return max(saved, key=lambda path: path.stat().st_mtime).stem
+
+
+def _read_selected_id(directory: Path) -> str:
+    """Read the explicit Studio selection, ignoring malformed or stale state."""
+    try:
+        data = json.loads((directory / SELECTED_CANDIDATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    candidate_id = data.get("candidate_id") if isinstance(data, dict) else None
+    if isinstance(candidate_id, str) and _CANDIDATE_ID_RE.fullmatch(candidate_id):
+        return candidate_id
+    return ""
 
 
 def _setting_reading(parameter: dict[str, Any] | None, setting: Any) -> Any:

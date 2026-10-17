@@ -188,6 +188,26 @@ def test_a_saved_candidate_survives_a_restart_with_the_same_notes(tmp_path: Path
     assert preview["notes_match_preview"] is True
 
 
+def test_explicit_selection_survives_newer_candidate_and_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, original, transport = _runtime(tmp_path, candidate_dir=saved)
+    newer = build_candidate(original.brief, seed=5, candidate_id="runtime02deadbeef")
+    runtime._store(newer)
+    assert runtime.select(original.candidate_id)["ok"] is True
+    restarted = _restarted(tmp_path, transport, saved)
+    assert restarted.selected_id() == original.candidate_id
+    assert restarted.selected_candidate().note_fingerprint == original.note_fingerprint
+
+
+def test_invalid_saved_selection_falls_back_to_candidate(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _runtime_a, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    (saved / ".kihachi-selected.json").write_text(
+        '{"candidate_id":"../outside"}', encoding="utf-8"
+    )
+    assert _restarted(tmp_path, transport, saved).selected_id() == candidate.candidate_id
+
+
 def test_a_restart_does_not_allow_a_second_apply(tmp_path: Path) -> None:
     saved = tmp_path / "candidates"
     runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)

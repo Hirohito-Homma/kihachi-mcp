@@ -66,3 +66,63 @@ def test_syncopation_skips_kick_collision_and_respects_bar_range():
     assert result["ok"] is True
     revised_bass = next(clip for clip in result["candidate"].clips if clip.part == "Bass")
     assert [note.start_beats for note in revised_bass.notes] == [0, 1, 2, 3.5]
+
+
+def _hats_in(candidate, first: int, last: int) -> int:
+    beats = candidate.brief.beats_per_bar
+    return sum(
+        1
+        for clip in candidate.clips_for_part("Hats")
+        for note in clip.notes
+        if first <= clip.start_bar + int(note.start_beats // beats) <= last
+    )
+
+
+def test_thin_removes_every_other_hat_only_inside_the_bars():
+    candidate, _bass = _candidate()
+    before_inside = _hats_in(candidate, 9, 12)
+    before_outside = _hats_in(candidate, 1, 8)
+    assert before_inside > 1
+
+    result = revise_candidate(candidate, scopes=["thin"], bars=(9, 12), parts=["Hats"])
+
+    assert result["ok"] is True
+    revised = result["candidate"]
+    assert 0 < _hats_in(revised, 9, 12) < before_inside
+    assert _hats_in(revised, 1, 8) == before_outside
+    assert revised.clips_for_part("Kick") == candidate.clips_for_part("Kick")
+    assert "Hats" in result["after"][0]
+
+
+def test_clear_removes_the_named_part_inside_the_bars_and_needs_a_part():
+    candidate, _bass = _candidate()
+    result = revise_candidate(candidate, scopes=["clear"], bars=(9, 12), parts=["Hats"])
+    assert result["ok"] is True
+    assert _hats_in(result["candidate"], 9, 12) == 0
+    assert _hats_in(result["candidate"], 1, 8) == _hats_in(candidate, 1, 8)
+
+    refused = revise_candidate(candidate, scopes=["clear"], bars=(9, 12))
+    assert refused["ok"] is False
+
+
+def test_thicken_adds_softer_hats_between_hits_without_overlaps():
+    candidate, _bass = _candidate()
+    hats = candidate.clips_for_part("Hats")[0]
+    sparse = tuple(MidiNote(42, float(beat), 0.25, 100) for beat in range(hats.length_bars * 4))
+    clips = tuple(replace(clip, notes=sparse) if clip is hats else clip for clip in candidate.clips)
+    candidate = replace(candidate, clips=clips)
+    first = hats.start_bar
+    before_outside = _hats_in(candidate, first + 1, first + hats.length_bars - 1)
+
+    result = revise_candidate(candidate, scopes=["thicken"], bars=(first, first), parts=["Hats"])
+
+    assert result["ok"] is True
+    revised = next(clip for clip in result["candidate"].clips_for_part("Hats") if clip.start_bar == first)
+    starts = [note.start_beats for note in revised.notes]
+    assert starts[:8] == [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]
+    assert all(note.velocity == 75 for note in revised.notes if note.start_beats in (0.5, 1.5))
+    assert all(
+        later.start_beats >= earlier.start_beats + earlier.duration_beats - 1e-9
+        for earlier, later in zip(revised.notes, revised.notes[1:], strict=False)
+    )
+    assert _hats_in(result["candidate"], first + 1, first + hats.length_bars - 1) == before_outside

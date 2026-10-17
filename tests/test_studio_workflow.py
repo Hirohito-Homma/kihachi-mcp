@@ -231,6 +231,25 @@ def test_golden_path_1_reaches_project_ready(tmp_path: Path) -> None:
     _send_expand_verify(runtime, candidate_id)
 
 
+def test_repeated_drop_names_do_not_double_count_section_notes(tmp_path: Path) -> None:
+    runtime, _live = _studio(tmp_path)
+    candidate_id = _create(runtime, "124 BPM、D# minor、128小節")
+    candidate = runtime.get_candidate(candidate_id)
+    sections = runtime.project(candidate_id)["arrangement"]["sections"]
+
+    assert [section["name"] for section in sections].count("Drop") == 2
+    assert sum(section["notes"] for section in sections) == candidate.note_count()
+    for section in sections:
+        clips = [
+            clip for clip in candidate.clips
+            if section["start_bar"] <= clip.start_bar <= section["end_bar"]
+        ]
+        assert section["notes"] == sum(len(clip.notes) for clip in clips)
+        assert set(section["active_tracks"]) == {
+            clip.part for clip in clips if clip.notes
+        }
+
+
 def test_kihachi_golden_path_shapes_the_notes(tmp_path: Path) -> None:
     runtime, _live = _studio(tmp_path)
     candidate_id = _create(runtime, KIHACHI_GOLDEN_PATH)
@@ -313,6 +332,8 @@ def test_swing_amount_is_not_the_swing_genre() -> None:
 def test_model_json_is_repaired_only_around_one_object() -> None:
     assert parse_model_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_model_json('Here: {"a": 1} done') == {"a": 1}
+    assert parse_model_json({"a": 1}) == {"a": 1}
+    assert parse_model_json('<think>scratch {</think>{"a": 1}') == {"a": 1}
     with pytest.raises(InterpretationError):
         parse_model_json("no json at all")
 

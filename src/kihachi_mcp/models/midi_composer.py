@@ -5,9 +5,30 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Self
 
+from kihachi_mcp.models.production_brief import PART_ORDER
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
-MIDI_ROLES = frozenset({"drums", "bass", "chords", "melody", "arp", "percussion"})
+ROLE_ALL = "全パート"
+MIDI_ROLES = frozenset({"drums", "bass", "chords", "melody", "arp", "percussion", *PART_ORDER, ROLE_ALL})
+#: Studio part names use the same note engines as the six composer roles.
+COMPOSITION_ENGINE = {
+    "Kick": "drums",
+    "Snare": "drums",
+    "Hats": "drums",
+    "OpenHat": "drums",
+    "Perc": "percussion",
+    "FX": "percussion",
+    "Sub": "bass",
+    "Bass": "bass",
+    "Stab": "chords",
+    "Pad": "chords",
+    "Guitar": "chords",
+    "Horn": "melody",
+    "Arp": "arp",
+    "Lead": "melody",
+    "Vocal": "melody",
+}
+PART_PITCH = {"Kick": 36, "Snare": 38, "Hats": 42, "OpenHat": 46}
 COMPOSITION_OPERATIONS = frozenset({"generate", "variation", "revision"})
 GRIDS = frozenset({"1/4", "1/8", "1/16", "1/32"})
 
@@ -29,6 +50,10 @@ class MusicalConstraints:
     avoid_kick_collision: bool = False
     variation_bar: int | None = None
     kick_onsets: tuple[float, ...] = field(default_factory=tuple)
+    genre: str = ""
+    mood: str = ""
+    prompt: str = ""
+    swing: float = 0.5
 
     def __post_init__(self) -> None:
         if self.role not in MIDI_ROLES:
@@ -41,15 +66,24 @@ class MusicalConstraints:
             raise ValueError("grid must be 1/4, 1/8, 1/16 or 1/32")
         if not 0 <= self.syncopation <= 1 or not 0 <= self.octave_jump <= 1:
             raise ValueError("syncopation and octave_jump must be between 0 and 1")
+        if not 0 <= self.swing <= 1:
+            raise ValueError("swing must be between 0 and 1")
         if not 1 <= self.velocity_min <= self.velocity_max <= 127:
             raise ValueError("velocity range is invalid")
         if not 0 < self.note_length_min <= self.note_length_max:
             raise ValueError("note length range is invalid")
         if self.variation_bar is not None and not 1 <= self.variation_bar <= self.bars:
             raise ValueError("variation_bar is outside the clip")
+        object.__setattr__(self, "genre", str(self.genre or "").strip()[:80])
+        object.__setattr__(self, "mood", str(self.mood or "").strip()[:80])
+        object.__setattr__(self, "prompt", str(self.prompt or "").strip()[:500])
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        for key in ("genre", "mood", "prompt"):
+            if not data.get(key):
+                data.pop(key, None)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -71,6 +105,10 @@ class MusicalConstraints:
             avoid_kick_collision=bool(data.get("avoid_kick_collision")),
             variation_bar=int(data["variation_bar"]) if data.get("variation_bar") is not None else None,
             kick_onsets=tuple(float(value) for value in data.get("kick_onsets") or ()),
+            genre=str(data.get("genre") or ""),
+            mood=str(data.get("mood") or ""),
+            prompt=str(data.get("prompt") or ""),
+            swing=float(data.get("swing") if data.get("swing") is not None else 0.5),
         )
 
 

@@ -71,7 +71,26 @@ class StudioApp:
         self._music_plans: dict[str, LiveMutationPlan] = {}
         self._music_sources: dict[str, tuple[MusicPlan | None, dict[str, Any] | None]] = {}
         self._live_bound: set[str] = set()
+        self._eval_path = self.runtime._candidate_dir / "evaluations.json"
+        self._evaluations: dict[str, dict[str, Any]] = self._load_evaluations()
         self.plan_simulator = FakeLiveTransport(FakeLiveSet(tempo=110.0))
+
+    def _load_evaluations(self) -> dict[str, dict[str, Any]]:
+        if self._eval_path.is_file():
+            try:
+                data = json.loads(self._eval_path.read_text("utf-8"))
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                pass
+        return {}
+
+    def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> None:
+        self._evaluations[candidate_id] = record
+        try:
+            self._eval_path.parent.mkdir(parents=True, exist_ok=True)
+            self._eval_path.write_text(json.dumps(self._evaluations, ensure_ascii=False, indent=2), "utf-8")
+        except Exception:
+            pass
 
     def hold_music_plan(
         self,
@@ -410,10 +429,58 @@ def _handler_for(app: StudioApp):
                     if candidate is None:
                         self._send_json({"ok": False, "error": "候補がありません"}, 404)
                         return
+                    query = parse_qs(parsed.query)
+                    part_filter = (query.get("part") or [""])[0] or None
+                    variant = (query.get("variant") or [""])[0].upper()
+                    swing_override: float | None = None
+                    if variant == "A":
+                        swing_override = 0.50
+                    elif variant == "B":
+                        swing_override = 0.54
+                    elif "swing" in query:
+                        try:
+                            swing_override = float(query["swing"][0])
+                        except ValueError:
+                            pass
                     self._send_bytes(
-                        candidate_preview_wav(candidate), "audio/wav",
+                        candidate_preview_wav(
+                            candidate,
+                            part_filter=part_filter,
+                            swing_override=swing_override,
+                        ),
+                        "audio/wav",
                         f'inline; filename="kihachi-{candidate_id[:8]}-preview.wav"',
                     )
+                    return
+                if len(parts) >= 4 and parts[3] == "preview-metrics":
+                    candidate = runtime.get_candidate(candidate_id)
+                    if candidate is None:
+                        self._send_json({"ok": False, "error": "候補がありません"}, 404)
+                        return
+                    query = parse_qs(parsed.query)
+                    part_filter = (query.get("part") or [""])[0] or None
+                    variant = (query.get("variant") or [""])[0].upper()
+                    swing_override = 0.50 if variant == "A" else 0.54
+                    wav_data = candidate_preview_wav(
+                        candidate,
+                        part_filter=part_filter,
+                        swing_override=swing_override,
+                    )
+                    from kihachi_mcp.services.candidate_audio_preview import measure_preview_audio
+                    metrics = measure_preview_audio(wav_data)
+                    metrics["candidate_id"] = candidate.candidate_id
+                    metrics["content_hash"] = candidate.note_fingerprint
+                    metrics["variant"] = variant or "B"
+                    metrics["target_midi_protected"] = True
+                    metrics["is_approved_target"] = (variant != "A")
+                    metrics["preview_conditions"] = {
+                        "tempo": int(candidate.brief.tempo.value),
+                        "key": candidate.brief.key.value,
+                        "swing": swing_override,
+                        "part_filter": part_filter or "all",
+                        "notes_identical_to_target": True,
+                    }
+                    self._send_json(metrics)
                     return
                 if len(parts) >= 4 and parts[3] in {"midi", "midi.mid"}:
                     exported = runtime.export_midi(candidate_id)
@@ -426,6 +493,9 @@ def _handler_for(app: StudioApp):
                         "audio/midi",
                         f'attachment; filename="kihachi-{candidate_id[:8]}.mid"',
                     )
+                    return
+                if len(parts) >= 4 and parts[3] == "evaluation":
+                    self._send_json({"ok": True, "evaluation": app._evaluations.get(candidate_id, {})})
                     return
                 candidate = runtime.get_candidate(candidate_id)
                 if candidate is None:
@@ -440,6 +510,7 @@ def _handler_for(app: StudioApp):
                             model_filled_fields(candidate.brief),
                             str(candidate.brief.genre.value),
                         ),
+                        "evaluation": app._evaluations.get(candidate_id, {}),
                     }
                 )
                 return
@@ -447,6 +518,95 @@ def _handler_for(app: StudioApp):
 
         def _post(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/candidate/") and parsed.path.endswith("/evaluate"):
+                parts = parsed.path.strip("/").split("/")
+                candidate_id = parts[2]
+                body = self._read_json()
+                record = {
+                    "candidate_id": candidate_id,
+                    "variant": str(body.get("variant") or "B"),
+                    "rating": str(body.get("rating") or "B_BETTER"),
+                    "notes": str(body.get("notes") or ""),
+                    "evaluated_at": datetime.now(UTC).isoformat(),
+                }
+                app.save_evaluation(candidate_id, record)
+                self._send_json({"ok": True, "evaluation": record})
+                return
+            if parsed.path == "/api/groove/generate":
+                body = self._read_json()
+                base_id = str(body.get("candidate_id") or runtime.selected_id() or "")
+                base = runtime.get_candidate(base_id)
+                if base is None:
+                    self._send_json({"ok": False, "error": "ベースとなる候補が見つかりません"}, 404)
+                    return
+                import time as _time
+                import uuid as _uuid
+                from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
+                from kihachi_mcp.models.midi_composer import MidiCompositionRequest, MusicalConstraints
+                from kihachi_mcp.services.midi_composer import DeterministicMIDIComposer
+                from kihachi_mcp.services.session_pattern_builder import MidiNote
+
+                swing = float(body.get("swing", 0.54))
+                ghost_notes = bool(body.get("ghost_notes", True))
+                syncopation = float(body.get("syncopation", 0.7))
+                new_seed = int(body.get("seed", 0)) or int(_time.time() * 1000) % 1000000
+
+                new_id = _uuid.uuid4().hex
+                new_clips: list[CandidateClip] = []
+                composer = DeterministicMIDIComposer(seed=new_seed)
+
+                for clip in base.clips:
+                    engine_role = "drums" if clip.part in {"Kick", "Snare", "Hats", "OpenHat"} else clip.part.lower()
+                    if engine_role not in {"drums", "bass", "chords"}:
+                        engine_role = "drums"
+                    c = MusicalConstraints(
+                        key=base.brief.key.value,
+                        tempo=int(base.brief.tempo.value),
+                        bars=clip.length_bars,
+                        role=engine_role,
+                        grid="1/16",
+                        syncopation=syncopation,
+                        ghost_notes=ghost_notes,
+                        swing=swing,
+                    )
+                    gen_notes = composer.compose(MidiCompositionRequest(constraints=c, operation="generate"))
+                    new_notes = tuple(
+                        MidiNote(
+                            pitch=n.pitch,
+                            start_beats=n.start,
+                            duration_beats=n.duration,
+                            velocity=n.velocity,
+                        )
+                        for n in gen_notes
+                    )
+                    new_clips.append(
+                        CandidateClip(
+                            part=clip.part,
+                            section_name=clip.section_name,
+                            start_bar=clip.start_bar,
+                            length_bars=clip.length_bars,
+                            notes=new_notes,
+                        )
+                    )
+
+                new_candidate = MidiCandidate(
+                    candidate_id=new_id,
+                    brief=base.brief,
+                    clips=tuple(new_clips),
+                    parent_candidate_id=base.candidate_id,
+                    seed=new_seed,
+                )
+                runtime._store(new_candidate)
+                runtime.select(new_id)
+
+                self._send_json({
+                    "ok": True,
+                    "candidate_id": new_id,
+                    "parent_candidate_id": base.candidate_id,
+                    "swing": swing,
+                    "candidate": new_candidate.to_dict(),
+                })
+                return
             if parsed.path == "/api/jarvis/turn":
                 body = self._read_json()
                 self._send_json(

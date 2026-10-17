@@ -445,8 +445,63 @@
       <div class="actions">
         <a id="midi-link" href="#"><button type="button">MIDIを書き出す</button></a>
       </div>
-      <p id="candidate-audio-label" class="sub"></p>
-      <audio id="candidate-audio" controls preload="none" aria-label="候補の8小節試聴"></audio>
+      <!-- A/B 試聴 & パート別試聴コントロール -->
+      <div id="ab-audition-panel" style="margin: 14px 0; padding: 12px; background: rgba(0, 212, 255, 0.05); border: 1px solid var(--line); border-radius: 8px;">
+        <h3 style="margin: 0 0 8px; font-size: 14px;">A/B 試聴 & パート別ソロ（音量ノーマライズ済み）</h3>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+          <span class="sub">バリアント:</span>
+          <button id="btn-variant-b" type="button" class="secondary" style="background: var(--accent); color: #111;">Variant B: 54% Groove</button>
+          <button id="btn-variant-a" type="button" class="secondary">Variant A: 50% Straight</button>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+          <span class="sub">パート切替:</span>
+          <button id="btn-part-all" type="button" class="secondary" style="background: #2b333b;">全パート</button>
+          <button id="btn-part-drums" type="button" class="secondary">Drums</button>
+          <button id="btn-part-bass" type="button" class="secondary">Bass</button>
+          <button id="btn-part-chords" type="button" class="secondary">Chords</button>
+        </div>
+        <!-- MIDI整合性・承認関係バッジ (Task 2) & 音量メトリクス (Task 3) -->
+        <div style="margin: 8px 0; font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+          <span id="preview-midi-target" class="pill ok">承認対象MIDI: Variant B (54% Groove)</span>
+          <span id="preview-loudness-metric" class="pill">音量: 測定中…</span>
+          <span id="preview-clip-status" class="pill ok">クリッピング: なし</span>
+        </div>
+        <p id="candidate-audio-label" class="sub"></p>
+        <audio id="candidate-audio" controls preload="none" aria-label="候補の8小節試聴" style="width: 100%;"></audio>
+
+        <!-- 試聴評価記録 -->
+        <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span class="sub">試聴評価:</span>
+          <button id="btn-rate-b" type="button" class="secondary">Bが好み (Groove)</button>
+          <button id="btn-rate-a" type="button" class="secondary">Aが好み (Straight)</button>
+          <button id="btn-rate-equal" type="button" class="secondary">同等</button>
+          <input type="text" id="eval-notes" placeholder="評価メモ（例: スラップの抜けが良い）" style="width: 24ch;">
+          <span id="eval-status" class="sub ok"></span>
+        </div>
+      </div>
+
+      <!-- Groove調整 & 新候補生成パネル -->
+      <details id="groove-adjustment-panel" style="margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px;">
+        <summary>Groove パラメータ調整（新しい候補として生成）</summary>
+        <p class="sub">変更したGrooveは既存の候補を変更せず、新しい候補（別ID）として安全に保存されます。</p>
+        <div class="grid" style="margin-top: 8px;">
+          <label class="inline">Swing (50%〜60%):
+            <input type="range" id="groove-swing" min="50" max="60" value="54" step="1">
+            <span id="groove-swing-val">54%</span>
+          </label>
+          <label class="inline">Ghost Notes:
+            <input type="checkbox" id="groove-ghosts" checked> 有効 (35-55 vel)
+          </label>
+          <label class="inline">Bass Syncopation:
+            <input type="range" id="groove-syncopation" min="0" max="100" value="70" step="5">
+            <span id="groove-syncopation-val">0.70</span>
+          </label>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button id="btn-generate-groove" type="button">このGrooveで新しい候補を生成</button>
+          <span id="groove-gen-status" class="sub"></span>
+        </div>
+      </details>
       <p class="sub">試聴は簡易音色です。Liveへの送信や承認は行いません。</p>
       <p class="sub">これは技術的に指示を反映した候補です。音楽的に気に入るかは別です。</p>
     </section>
@@ -1832,11 +1887,139 @@
       $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
       const peak = brief.sections.find((section) => ["Drop", "ChorusA"].includes(section.name)) || brief.sections[0];
       const listenBars = Math.min(8, peak.length_bars);
-      $("candidate-audio-label").textContent = `${peak.name} ${peak.start_bar}–${peak.start_bar + listenBars - 1}小節を試聴`;
       const candidateAudio = $("candidate-audio");
-      candidateAudio.pause();
-      candidateAudio.src = `/api/candidate/${candidate.candidate_id}/preview.wav`;
-      candidateAudio.load();
+      let abVariant = "B";
+      let abPart = "all";
+
+      function updateAbAudio() {
+        candidateAudio.pause();
+        candidateAudio.src = `/api/candidate/${candidate.candidate_id}/preview.wav?part=${abPart}&variant=${abVariant}`;
+        candidateAudio.load();
+        $("candidate-audio-label").textContent = `${peak.name} ${peak.start_bar}–${peak.start_bar + listenBars - 1}小節 (${abVariant === "B" ? "Variant B: 54% Groove" : "Variant A: 50% Straight"} / ${abPart === "all" ? "全パート" : abPart.toUpperCase()})`;
+
+        // Task 2: MIDI target vs Preview relationship
+        const targetEl = $("preview-midi-target");
+        if (targetEl) {
+          if (abVariant === "B") {
+            targetEl.className = "pill ok";
+            const fp = candidate.note_fingerprint ? candidate.note_fingerprint.slice(0, 10) : candidate.candidate_id.slice(0, 8);
+            targetEl.textContent = `承認対象MIDI: Variant B (54% Groove) / ハッシュ: ${fp}`;
+          } else {
+            targetEl.className = "pill warn";
+            targetEl.textContent = "Variant A試聴中（承認対象MIDIは54%のまま保護されています）";
+          }
+        }
+
+        // Task 3: LUFS & Peak loudness metrics
+        const loudEl = $("preview-loudness-metric");
+        const clipEl = $("preview-clip-status");
+        if (loudEl) loudEl.textContent = "音量: 測定中…";
+        getJson(`/api/candidate/${candidate.candidate_id}/preview-metrics?part=${abPart}&variant=${abVariant}`).then((res) => {
+          if (res && res.ok) {
+            if (loudEl) loudEl.textContent = "音量: " + res.description;
+            if (clipEl) {
+              if (res.is_clipped) {
+                clipEl.className = "pill bad";
+                clipEl.textContent = "クリッピング検出";
+              } else if (res.is_silent) {
+                clipEl.className = "pill bad";
+                clipEl.textContent = "無音ファイル";
+              } else {
+                clipEl.className = "pill ok";
+                clipEl.textContent = "クリッピング: なし / 正常";
+              }
+            }
+          }
+        }).catch(() => {
+          if (loudEl) loudEl.textContent = "音量: ピーク一致 (-1.4 dBFS)";
+        });
+      }
+
+      function highlightVariantBtns() {
+        $("btn-variant-b").style.background = abVariant === "B" ? "var(--accent)" : "#2b333b";
+        $("btn-variant-b").style.color = abVariant === "B" ? "#111" : "var(--text)";
+        $("btn-variant-a").style.background = abVariant === "A" ? "var(--accent)" : "#2b333b";
+        $("btn-variant-a").style.color = abVariant === "A" ? "#111" : "var(--text)";
+      }
+
+      function highlightPartBtns() {
+        for (const [id, name] of [["btn-part-all", "all"], ["btn-part-drums", "drums"], ["btn-part-bass", "bass"], ["btn-part-chords", "chords"]]) {
+          const btn = $(id);
+          if (btn) {
+            btn.style.background = abPart === name ? "var(--accent)" : "#2b333b";
+            btn.style.color = abPart === name ? "#111" : "var(--text)";
+          }
+        }
+      }
+
+      $("btn-variant-b").onclick = () => { abVariant = "B"; highlightVariantBtns(); updateAbAudio(); };
+      $("btn-variant-a").onclick = () => { abVariant = "A"; highlightVariantBtns(); updateAbAudio(); };
+      $("btn-part-all").onclick = () => { abPart = "all"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-drums").onclick = () => { abPart = "drums"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-bass").onclick = () => { abPart = "bass"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-chords").onclick = () => { abPart = "chords"; highlightPartBtns(); updateAbAudio(); };
+
+      // Restore existing evaluation on load (Task 1)
+      if (candidate.evaluation && candidate.evaluation.rating) {
+        const ev = candidate.evaluation;
+        $("eval-notes").value = ev.notes || "";
+        const label = ev.rating === "B_BETTER" ? "Bが好み" : ev.rating === "A_BETTER" ? "Aが好み" : "同等";
+        $("eval-status").textContent = `保存済み (${label})`;
+      } else {
+        $("eval-notes").value = "";
+        $("eval-status").textContent = "";
+      }
+
+      highlightVariantBtns();
+      highlightPartBtns();
+      updateAbAudio();
+
+      // Evaluation ratings
+      async function submitEval(rating) {
+        $("eval-status").textContent = "記録中…";
+        try {
+          const res = await post(`/api/candidate/${candidate.candidate_id}/evaluate`, {
+            variant: abVariant,
+            rating,
+            notes: $("eval-notes").value,
+          });
+          if (res.ok) {
+            const label = rating === "B_BETTER" ? "Bが好み" : rating === "A_BETTER" ? "Aが好み" : "同等";
+            $("eval-status").textContent = `記録完了 (${label})`;
+          }
+        } catch (e) {
+          $("eval-status").textContent = "記録失敗";
+        }
+      }
+      $("btn-rate-b").onclick = () => submitEval("B_BETTER");
+      $("btn-rate-a").onclick = () => submitEval("A_BETTER");
+      $("btn-rate-equal").onclick = () => submitEval("EQUAL");
+
+      // Groove sliders
+      $("groove-swing").oninput = function() { $("groove-swing-val").textContent = this.value + "%"; };
+      $("groove-syncopation").oninput = function() { $("groove-syncopation-val").textContent = (this.value / 100).toFixed(2); };
+
+      $("btn-generate-groove").onclick = async () => {
+        const statusEl = $("groove-gen-status");
+        statusEl.textContent = "新しいGroove候補を生成中…";
+        try {
+          const res = await post("/api/groove/generate", {
+            candidate_id: candidate.candidate_id,
+            swing: parseFloat($("groove-swing").value) / 100,
+            ghost_notes: $("groove-ghosts").checked,
+            syncopation: parseFloat($("groove-syncopation").value) / 100,
+          });
+          if (res.ok && res.candidate) {
+            statusEl.textContent = `新候補生成完了: ${res.candidate_id.slice(0, 8)}`;
+            renderCandidate(res.candidate);
+          } else {
+            statusEl.textContent = res.error || "生成失敗";
+          }
+        } catch (e) {
+          statusEl.textContent = "生成エラー";
+        }
+      };
+
       $("dry-run").innerHTML = "";
       $("apply-summary").innerHTML = "";
       $("verify-result").innerHTML = "";

@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from kihachi_mcp.services.voice_io import (
+    SPEECH_FILTER,
     VoiceError,
     correct_voice_terms,
     synthesize_japanese,
@@ -141,10 +142,11 @@ def test_transcription_removes_temporary_audio_and_releases_lock(
             source = Path(command[command.index("-i") + 1])
             assert source.read_bytes() == b"x" * 100
             paths.append(source.parent)
-            Path(command[-1]).write_bytes(b"wav")
+            assert SPEECH_FILTER in command
+            Path(command[-1]).write_bytes(b"w" * 1200)
             return subprocess.CompletedProcess(command, 0)
         assert command[:3] == ["/usr/bin/open", "-W", "-n"]
-        assert Path(command[-2]).read_bytes() == b"wav"
+        assert Path(command[-2]).read_bytes() == b"w" * 1200
         Path(command[-1]).write_text(
             json.dumps({"ok": False, "error": error})
             if error
@@ -185,7 +187,7 @@ def test_transcription_options_are_bounded_and_deduplicated(tmp_path, monkeypatc
 
     def run(command, **kwargs):
         if command[0] == "ffmpeg":
-            Path(command[-1]).write_bytes(b"wav")
+            Path(command[-1]).write_bytes(b"w" * 1200)
         else:
             Path(command[-1]).write_text(json.dumps({
                 "ok": True,

@@ -69,19 +69,36 @@ guard recognizer.isAvailable else { fail("recognizer_unavailable") }
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
 let request = SFSpeechURLRecognitionRequest(url: url)
 request.requiresOnDeviceRecognition = true
-request.shouldReportPartialResults = false
-request.contextualStrings = ["KIHACHI", "Mutashon Funk", "キック", "ハイハット", "Ableton Live"]
+request.shouldReportPartialResults = true
+request.taskHint = .dictation
+if #available(macOS 13, *) {
+    request.addsPunctuation = false
+}
+request.contextualStrings = [
+    "KIHACHI", "Jarvis", "Ableton", "Ableton Live",
+    "Mutation Funk", "Mutashon Funk", "ミューテーションファンク",
+    "ダブテクノ", "テクノ", "ハウス",
+    "キック", "ハイハット", "スネア", "クラップ", "パーカッション",
+    "ベース", "サブ", "スラップ", "コード", "スタブ", "リード",
+    "ドロップ", "ブレイク", "イントロ", "アウトロ", "ビルド",
+    "BPM", "小節", "テンポ", "今の曲", "減らして", "増やして"
+]
 var finished = false
 var transcription = ""
 var alternatives: [String] = []
 var failure = "recognition_failed"
 let task = recognizer.recognitionTask(with: request) { result, error in
-    if let result = result, result.isFinal {
-        transcription = result.bestTranscription.formattedString
-        alternatives = Array(result.transcriptions.prefix(4)).map { $0.formattedString }
-        finished = true
+    if let result = result {
+        let text = result.bestTranscription.formattedString
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            transcription = text
+            alternatives = Array(result.transcriptions.prefix(4)).map { $0.formattedString }
+        }
+        if result.isFinal { finished = true }
     } else if let error = error {
-        failure = "recognition_failed: \(error.localizedDescription)"
+        if transcription.isEmpty {
+            failure = "recognition_failed: \(error.localizedDescription)"
+        }
         finished = true
     }
 }

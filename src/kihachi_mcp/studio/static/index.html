@@ -772,11 +772,11 @@
       $('dialogue-record').disabled=true;
       $('dialogue-send').disabled=true;
       try {
-        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+        const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
         voiceStream=stream;
         const options=['audio/webm;codecs=opus','audio/mp4','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
         if(!options){stream.getTracks().forEach(track=>track.stop());throw new Error('対応する音声形式がありません');}
-        const recorder=new MediaRecorder(stream,{mimeType:options});
+        const recorder=new MediaRecorder(stream,{mimeType:options,audioBitsPerSecond:64000});
         voiceRecorder=recorder;
         const chunks=[];
         recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
@@ -806,18 +806,18 @@
               $('dialogue-alternatives').append(label);
               for(const choice of choices){
                 const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=choice;
-                button.onclick=()=>{$('dialogue-utterance').value=choice;$('dialogue-voice-status').textContent='選んだ発話を確認してから「話しかける」を押してください。';};
+                button.onclick=()=>{$('dialogue-utterance').value=choice;$('dialogue-voice-status').textContent='選んだ発話を確認してから「聞く」を押してください。';};
                 $('dialogue-alternatives').append(button);
               }
             }
             shouldAutoSend=$('dialogue-auto-send').checked && !corrected;
             const review=corrected?'元の聞き取り: '+data.raw_transcript+' → 表記候補: '+data.transcript+'。内容を確認してください。':'聞き取った内容を確認・修正してください。';
-            $('dialogue-voice-status').textContent=shouldAutoSend?'聞き取った発話を対話へ送ります…':review+' 問題なければ「話しかける」を押してください。';
+            $('dialogue-voice-status').textContent=shouldAutoSend?'聞き取った発話を送ります…':review+' 問題なければ「聞く」を押してください。';
           }catch(error){$('dialogue-voice-status').textContent=error.message;}
           finally{voiceBusy=false;$('dialogue-record').disabled=!voiceReady;$('dialogue-send').disabled=false;}
           if(shouldAutoSend)$('dialogue-send').click();
         };
-        recorder.start();
+        recorder.start(250);
         $('dialogue-record').disabled=!voiceReady;
         $('dialogue-record').textContent='■ 録音を止める';
         $('dialogue-voice-status').textContent='録音中…';

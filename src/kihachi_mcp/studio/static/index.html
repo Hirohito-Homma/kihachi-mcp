@@ -265,6 +265,8 @@
       <div id="project-pill" class="pill">Project: 確認中</div>
       <div id="job-pill" class="pill">生成: 待機</div>
     </div>
+    <div class="actions"><button id="live-overview-load" class="secondary" type="button">現在の Live Set を取得</button></div>
+    <div id="live-overview" role="status" class="sub">Live の概要はまだ取得していません。</div>
     <div id="error-banner" class="banner hidden" role="alert">
       <p id="error-message"></p>
       <pre id="error-detail" class="hidden"></pre>
@@ -338,9 +340,11 @@
 57小節目からドロップにして</textarea>
       <div class="actions">
         <button id="generate">候補を生成</button>
+        <button id="generate-from-live" class="secondary" type="button">現在の Live Set から候補を生成</button>
         <button id="cancel" class="secondary" disabled>キャンセル</button>
         <button id="regenerate" class="secondary" disabled>別候補を再生成</button>
       </div>
+      <p class="sub">Live から生成する前に上の例文を自分の制作指示へ書き換えてください。BPM を指定した場合はその値を優先します。4/4拍子の Set に対応します。</p>
       <details id="reference-guidance">
         <summary>参考音源DBからBPMを提案</summary>
         <p>確認済みBPMの中央値を参考にします。既にテンポの指定がある場合は変更しません。</p>
@@ -353,6 +357,7 @@
         <a href="/references">参考音源の分類・確認済みBPMを編集</a>
       </details>
       <p id="job-line" class="progress"></p>
+      <p id="live-candidate-context" class="sub" role="status"></p>
     </section>
 
     <section id="music-plan-view">
@@ -1573,6 +1578,33 @@
     }
 
     const STATUS_PILLS = { "Ollama": "ollama-pill", "Ableton Live": "live-pill", "AbletonGPT": "gpt-pill", "Project": "project-pill" };
+    $('live-overview-load').onclick = async () => {
+      const button = $('live-overview-load');
+      const output = $('live-overview');
+      button.disabled = true;
+      output.textContent = 'Live の Set を読み取っています…';
+      try {
+        const result = await getJson('/api/live/overview');
+        if (!result || !result.ok) {
+          output.innerHTML = '';
+          output.textContent = (result && result.error) || 'Live を読み取れませんでした。';
+          return;
+        }
+        const liveSet = result.live_set || {};
+        const tracks = liveSet.tracks || [];
+        const trackNames = tracks.map((track) => `<li>${escapeHtml(track.name || '名称なし')}（${escapeHtml(track.kind || '不明')} / クリップ: ${track.clip_count ?? 0}）</li>`).join('');
+        const changedNotice = result.live_changed ? '（警告: Liveが変更されました）' : 'Live は変更していません。';
+        output.innerHTML = `<p><b>Live Set</b> — ${escapeHtml(liveSet.tempo ?? '?')} BPM / ${escapeHtml(liveSet.time_signature || '4/4')}拍子</p>
+          <p>トラック ${tracks.length}、シーン ${liveSet.scene_count ?? 0}。ノート数は取得していません。${changedNotice}</p>
+          ${tracks.length > 0 ? `<details><summary>トラック一覧（${tracks.length}）</summary><ul>${trackNames}</ul></details>` : ''}
+          <p class="sub">テンポ・拍子・トラック名のみ読み取りました。ノート内容・キーは推定していません。Live は変更していません。</p>`;
+      } catch {
+        output.innerHTML = '';
+        output.textContent = 'Studio または Live に接続できませんでした。';
+      } finally {
+        button.disabled = false;
+      }
+    };
     async function refreshHealth() {
       const health = await getJson("/api/health");
       if (!health.statuses) return health;
@@ -1701,6 +1733,36 @@
       $("job-line").textContent = "生成を開始しました";
       state.poll = setInterval(pollJob, 700);
       pollJob();
+    };
+
+    $('generate-from-live').onclick = async () => {
+      const button = $('generate-from-live');
+      button.disabled = true;
+      $('live-candidate-context').textContent = 'Live を読み、制作指示と合わせています…';
+      try {
+        const result = await getJson('/api/live/candidate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brief: $('brief').value })
+        });
+        if (result && result.ok) {
+          $('job-line').textContent = '生成を開始しました';
+          state.poll = setInterval(pollJob, 700);
+          pollJob();
+          const context = result.live_context || {};
+          const tempoSource = context.sources?.tempo === 'live' ? 'Liveから補完' : '制作指示（ユーザー指定）';
+          const trackCount = Array.isArray(context.tracks) ? context.tracks.length : 0;
+          $('live-candidate-context').textContent = `Live Setを参照して候補生成を開始しました。テンポ: ${tempoSource}。参照トラック数: ${trackCount}。ノート内容参照: なし。キー・ジャンルは推定していません。これは承認前の候補作成であり、Liveへの書き込み・保存・再生は行っていません。`;
+        } else {
+          const err = (result && result.error) || 'Live 由来の候補は生成していません。';
+          $('job-line').textContent = err;
+          $('live-candidate-context').textContent = `生成エラー: ${err}（Liveへの書き込み・保存・再生は行っていません）`;
+        }
+      } catch {
+        $('live-candidate-context').textContent = 'Studio または Live に接続できませんでした。候補は生成していません。';
+      } finally {
+        button.disabled = false;
+      }
     };
 
     $("cancel").onclick = async () => {

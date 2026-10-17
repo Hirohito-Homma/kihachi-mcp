@@ -78,6 +78,10 @@
     h2 { margin: 0 0 10px; font-size: 16px; }
     ul { margin: 0; padding-left: 18px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+    .jarvis-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 4px; }
+    .jarvis-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .jarvis-card h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.04em; }
+    .jarvis-card label.inline { margin: 6px 0; }
     .metric { border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
     .metric b { display: block; font-size: 12px; color: var(--muted); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -109,6 +113,144 @@
     .issue { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 6px 0; }
     .banner { border: 1px solid var(--bad); border-radius: 10px; padding: 10px 14px; margin: 12px 0; background: #2a1a1a; }
     details > summary { cursor: pointer; font-weight: 700; }
+    .table-scroll { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+    .diff-val-del { color: var(--muted); text-decoration: line-through; margin-right: 4px; }
+    .diff-val-add { color: var(--accent); font-weight: bold; }
+    .diff-tag-add { color: var(--good); font-weight: bold; font-size: 11px; }
+    .diff-tag-del { color: var(--bad); font-weight: bold; font-size: 11px; }
+    .diff-tag-mod { color: var(--warn); font-weight: bold; font-size: 11px; }
+
+    /* JARVIS HUD theme: an override layer on the base styles above. */
+    :root {
+      --bg: #03080d;
+      --panel: rgba(8, 24, 36, 0.72);
+      --line: rgba(0, 212, 255, 0.28);
+      --text: #d9f6ff;
+      --muted: #6fa8bd;
+      --accent: #00d4ff;
+      --good: #3dffb0;
+      --warn: #ffb547;
+      --bad: #ff5470;
+      --glow: 0 0 12px rgba(0, 212, 255, 0.35);
+      --hud-font: "SF Mono", "Menlo", "Hiragino Sans", monospace;
+    }
+    body {
+      background:
+        radial-gradient(ellipse at 50% -10%, rgba(0, 150, 200, 0.22), transparent 60%),
+        linear-gradient(rgba(0, 212, 255, 0.045) 1px, transparent 1px) 0 0 / 40px 40px,
+        linear-gradient(90deg, rgba(0, 212, 255, 0.045) 1px, transparent 1px) 0 0 / 40px 40px,
+        var(--bg);
+      background-attachment: fixed;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
+    }
+    header { position: relative; padding-left: 96px; }
+    header::before, header::after {
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: 22px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+    }
+    header::before {
+      border: 2px solid var(--accent);
+      border-top-color: transparent;
+      border-bottom-color: transparent;
+      box-shadow: var(--glow), inset var(--glow);
+      animation: hud-spin 6s linear infinite;
+    }
+    header::after {
+      inset: auto;
+      left: 36px;
+      top: 38px;
+      width: 24px;
+      height: 24px;
+      background: radial-gradient(circle, #e9fdff 0 20%, var(--accent) 45%, transparent 72%);
+      animation: hud-pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes hud-spin { to { transform: rotate(360deg); } }
+    @keyframes hud-pulse { 50% { opacity: 0.55; transform: scale(0.85); } }
+    header h1 {
+      font-family: var(--hud-font);
+      font-weight: 600;
+      letter-spacing: 0.22em;
+      color: var(--accent);
+      text-shadow: var(--glow);
+    }
+    h2 {
+      font-family: var(--hud-font);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    h2::before { content: "▍"; margin-right: 6px; }
+    section {
+      position: relative;
+      border-radius: 4px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      box-shadow: inset 0 0 24px rgba(0, 212, 255, 0.05);
+    }
+    section::before, section::after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--accent);
+      pointer-events: none;
+    }
+    section::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+    section::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+    .pill {
+      font-family: var(--hud-font);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      border-radius: 3px;
+      background: rgba(0, 30, 45, 0.6);
+    }
+    .pill.ok { border-color: var(--good); box-shadow: 0 0 8px rgba(61, 255, 176, 0.3); }
+    .pill.bad { border-color: var(--bad); box-shadow: 0 0 8px rgba(255, 84, 112, 0.35); }
+    button {
+      color: #021018;
+      border-radius: 3px;
+      font-family: var(--hud-font);
+      letter-spacing: 0.05em;
+      box-shadow: var(--glow);
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    button:not(:disabled):hover { filter: brightness(1.15); box-shadow: 0 0 16px rgba(0, 212, 255, 0.55); }
+    textarea, input[type="text"], select, input[type="number"] {
+      background: rgba(0, 16, 26, 0.75);
+      border-radius: 3px;
+      caret-color: var(--accent);
+    }
+    textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+    .metric, .issue, .arrangement div { border-radius: 3px; }
+    .arrangement div {
+      background: linear-gradient(to top, rgba(0, 212, 255, 0.3) var(--energy), transparent var(--energy));
+    }
+    .banner { border-radius: 3px; background: rgba(60, 8, 20, 0.7); }
+    pre, .progress, td { font-family: var(--hud-font); }
+    a { color: var(--accent); }
+    @media (prefers-reduced-motion: reduce) {
+      header::before, header::after { animation: none; }
+    }
+    @media (max-width: 600px) {
+      header { padding-left: 20px; padding-top: 92px; }
+    }
   </style>
 </head>
 <body>
@@ -136,14 +278,57 @@
     </div>
   </header>
   <main>
-    <section aria-labelledby="dialogue-heading">
-      <h2 id="dialogue-heading">KIHACHIと対話</h2>
-      <p class="sub">🎙で話すか文字で入力できます。聞き取った内容を対話へ送れます。制作指示への反映は確認後に行います。</p>
-      <label for="dialogue-utterance">話しかける内容</label>
-      <textarea id="dialogue-utterance" placeholder="例: Mutation Funkで、キックは短めに"></textarea>
-      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" class="secondary">話しかける</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div><label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label><label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を対話へ自動送信する（制作指示・Liveは変更しません）</label>
-      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div><p id="dialogue-reply" role="status"></p>
-      <pre id="dialogue-proposal"></pre><div id="dialogue-samples"></div>
+    <section aria-labelledby="jarvis-heading">
+      <h2 id="jarvis-heading">JARVIS</h2>
+      <p class="sub">話しかけると、曲の状態と変更案は Jarvis が返し、制作の相談は確認してから制作指示に追記できます。この欄からは Live を変更しません。</p>
+      <label for="dialogue-utterance">Jarvisへの依頼</label>
+      <textarea id="dialogue-utterance" placeholder="例: 今の曲どうなってる？ / Mutation Funkで、キックは短めに"></textarea>
+      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" type="button">聞く</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div>
+      <p id="jarvis-state" role="status"></p>
+      <p id="jarvis-reply" role="status"></p>
+      <p id="dialogue-reply" class="hidden" aria-hidden="true"></p>
+      <h3>制作指示への追記案</h3>
+      <pre id="dialogue-proposal"></pre>
+      <div id="dialogue-samples"></div>
+      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div>
+      <div class="jarvis-board">
+        <aside class="jarvis-card" aria-labelledby="jarvis-settings-heading">
+          <h3 id="jarvis-settings-heading">設定</h3>
+          <label class="inline"><input id="jarvis-show-plan" type="checkbox" checked> 計画を表示</label>
+          <label class="inline"><input id="jarvis-show-context" type="checkbox" checked> プロジェクト状態を表示</label>
+          <label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label>
+          <label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を送る（制作指示・Liveは変更しません）</label>
+          <p class="sub">書き込み案は承認が必要です。「聞く」は実行しません。AIの接続先は下の「システム」で保存します。</p>
+        </aside>
+        <div class="jarvis-card" id="jarvis-context-card">
+          <h3>プロジェクト状態</h3>
+          <div id="jarvis-context" class="grid"></div>
+        </div>
+        <div class="jarvis-card">
+          <h3>Ableton</h3>
+          <div id="jarvis-live" class="grid"></div>
+        </div>
+        <div class="jarvis-card">
+          <h3>承認</h3>
+          <p id="jarvis-approval" role="status">まだ依頼はありません。書き込み案が出ても、この画面からは Live を変更しません。</p>
+          <button id="jarvis-revise" class="secondary" type="button" hidden>この変更案を修正案にする</button>
+          <h3>保留中の操作</h3>
+          <div id="approval-center"><p class="sub">確認中…</p></div>
+        </div>
+      </div>
+      <div id="jarvis-plan-card">
+        <h3>計画</h3>
+        <pre id="jarvis-plan"></pre>
+      </div>
+      <div id="jarvis-clip-preview-card" class="jarvis-card" hidden role="region" aria-labelledby="jarvis-clip-preview-heading">
+        <h3 id="jarvis-clip-preview-heading">Session MIDI クリップ ノート単位プレビュー</h3>
+        <p id="jarvis-clip-preview-meta" class="sub"></p>
+        <div id="jarvis-clip-preview-diff-area"></div>
+        <details id="jarvis-clip-preview-all-details" style="margin-top: 10px;">
+          <summary id="jarvis-clip-preview-all-summary">全ノートの詳細を表示</summary>
+          <div class="table-scroll" id="jarvis-clip-preview-all-area"></div>
+        </details>
+      </div>
     </section>
 
     <section>
@@ -597,8 +782,434 @@
     window.addEventListener('pagehide',()=>{clearTimeout(voiceStopTimer);stopDialogueAudio();if(voiceRecorder){voiceRecorder.onstop=null;if(voiceRecorder.state==='recording')voiceRecorder.stop();}voiceStream?.getTracks().forEach(track=>track.stop());});
     const dialogueSession = crypto.randomUUID().replaceAll('-', '');
     let dialogueProposal = null;
+    const JARVIS_PREFS = [
+      ['jarvis-show-plan', 'kihachi.jarvis.showPlan', true],
+      ['jarvis-show-context', 'kihachi.jarvis.showContext', true]
+    ];
+    function jarvisPref(key, fallback) {
+      try {
+        const stored = localStorage.getItem(key);
+        return stored === null ? fallback : stored === '1';
+      } catch {
+        return fallback;
+      }
+    }
+    function applyJarvisLayout() {
+      $('jarvis-plan-card').classList.toggle('hidden', !$('jarvis-show-plan').checked);
+      $('jarvis-context-card').classList.toggle('hidden', !$('jarvis-show-context').checked);
+    }
+    for (const [id, key, fallback] of JARVIS_PREFS) {
+      const box = $(id);
+      box.checked = jarvisPref(key, fallback);
+      box.onchange = () => {
+        try { localStorage.setItem(key, box.checked ? '1' : '0'); } catch { /* 表示設定は保存できなくても動作する */ }
+        applyJarvisLayout();
+      };
+    }
+    applyJarvisLayout();
+    function jarvisFact(label, value) {
+      const shown = value === undefined || value === null || value === '' ? 'UNKNOWN' : String(value);
+      return `<div class="metric"><b>${esc(label)}</b>${esc(shown)}</div>`;
+    }
+    function renderJarvisContext(context) {
+      const facts = context && typeof context === 'object' ? context : {};
+      $('jarvis-context').innerHTML = [
+        jarvisFact('ジャンル', facts.genre),
+        jarvisFact('テンポ', facts.tempo),
+        jarvisFact('キー', facts.key),
+        jarvisFact('小節', facts.bars),
+        jarvisFact('承認', facts.approved === true ? '承認済み' : facts.approved === false ? '未承認' : facts.approved)
+      ].join('');
+    }
+    function renderJarvisApproval(data) {
+      const plan = data && data.plan;
+      const intent = data && data.intent;
+      $('jarvis-revise').hidden = true;
+      if (!plan) {
+        $('jarvis-approval').textContent = 'まだ依頼はありません。書き込み案が出ても、この画面からは Live を変更しません。';
+        return;
+      }
+      if (intent && intent.type === 'modify_midi_clip') {
+        const preview = data.clip_preview || plan.clip_preview;
+        const counts = preview ? `（ノート数 ${preview.note_count_before} → ${preview.note_count_after}、元データ保持）` : '';
+        $('jarvis-approval').textContent = `Session MIDI クリップの改訂プレビューです${counts}。Live への書き戻しは行いません。`;
+        return;
+      }
+      if (plan.requires_human_approval) {
+        $('jarvis-approval').textContent = `承認が必要な変更案です。危険度は${plan.risk_level || 'UNKNOWN'}。「この変更案を修正案にする」で、Live を変えずに新しい候補として試せます。`;
+        $('jarvis-revise').hidden = false;
+        $('jarvis-revise').disabled = false;
+        return;
+      }
+      if (Array.isArray(plan.proposal)) {
+        const text = plan.proposal.length ? plan.proposal.join(' / ') : '指摘はありません。';
+        $('jarvis-approval').textContent = `Brain の案です。${text} Live には書いていません。`;
+        return;
+      }
+      $('jarvis-approval').textContent = 'この依頼は読み取りです。Live は変更していません。';
+    }
+    function renderJarvisConnections(health) {
+      const items = Array.isArray(health && health.statuses) ? health.statuses : [];
+      const wanted = items.filter((item) => item.name === 'Ableton Live' || item.name === 'AbletonGPT');
+      $('jarvis-live').innerHTML = (wanted.length ? wanted : [{name: 'Ableton Live', status: 'UNKNOWN'}, {name: 'AbletonGPT', status: 'UNKNOWN'}])
+        .map((item) => jarvisFact(item.name === 'Ableton Live' ? 'Live' : 'AbletonGPT', item.status || 'UNKNOWN'))
+        .join('');
+    }
+    renderJarvisContext(null);
+    function setReply(text) {
+      const line = text || '';
+      $('jarvis-reply').textContent = line;
+      $('dialogue-reply').textContent = line;
+    }
+    function dialogueOwns(text) {
+      return /探して|探す|検索|番を詳しく|番の詳細|生成して|再生成|作り直して/.test(text);
+    }
+    function jarvisShouldAnswer(data, text) {
+      const intent = data && data.intent;
+      if (!intent) return false;
+      if (intent.clip_target) return true;
+      if (!intent.recognized) return false;
+      if (
+        intent.type === 'inspect_project'
+        || intent.type === 'modify_arrangement'
+        || intent.type === 'musical_judgment'
+        || intent.type === 'evaluate_midi_clip'
+        || intent.type === 'modify_midi_clip'
+      ) return true;
+      if (intent.type === 'evaluate_arrangement') return /[?？]/.test(text) || text.endsWith('ない');
+      return false;
+    }
+    function jarvisPlanText(plan, state) {
+      const list = (items) => Array.isArray(items) && items.length ? items.join('、') : 'なし';
+      const writes = (Array.isArray(plan.proposed_writes) ? plan.proposed_writes : []).map((write) => {
+        const span = write.range && typeof write.range === 'object' ? ` ${write.range.start}–${write.range.end}小節` : '';
+        return `${write.action || 'UNKNOWN'} ${write.target || 'UNKNOWN'}${span}`;
+      });
+      const lines = [
+        `目的: ${plan.goal || 'UNKNOWN'}`,
+        `読むもの: ${list(plan.reads)}`,
+        `書き込み案: ${list(writes)}`,
+        `危険度: ${plan.risk_level || 'UNKNOWN'}`,
+        `人の承認: ${plan.requires_human_approval ? '必要' : '不要'}`,
+        `状態: ${state || 'UNKNOWN'}`
+      ];
+      if (Array.isArray(plan.proposal)) lines.push(`Brain の案: ${list(plan.proposal)}`);
+      if (plan.clip_evaluation) {
+        const ev = plan.clip_evaluation;
+        lines.push(`クリップ事実: ノート数 ${ev.note_count} / 小節別 ${JSON.stringify(ev.bar_notes)} / 音色 ${ev.timbre}`);
+      }
+      if (plan.clip_preview) {
+        lines.push(`改訂プレビュー: ${plan.clip_preview.summary || ''}（元ノート ${plan.clip_preview.note_count_before} → 案 ${plan.clip_preview.note_count_after}）`);
+      }
+      return lines.join('\n');
+    }
+    function isValidNote(note) {
+      if (!note || typeof note !== 'object' || Array.isArray(note)) return false;
+      const p = note.pitch;
+      if (typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p > 127) return false;
+      const s = note.start_time;
+      if (typeof s !== 'number' || !Number.isFinite(s) || s < 0) return false;
+      const d = note.duration;
+      if (typeof d !== 'number' || !Number.isFinite(d) || d <= 0) return false;
+      const v = note.velocity;
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 127) return false;
+      const prob = note.probability;
+      if (prob !== undefined && prob !== null) {
+        if (typeof prob !== 'number' || !Number.isFinite(prob) || prob < 0 || prob > 1) return false;
+      }
+      return true;
+    }
+    function renderJarvisClipPreview(data) {
+      const card = $('jarvis-clip-preview-card');
+      if (!card) return;
+      const plan = data && data.plan;
+      const preview = (data && data.clip_preview) || (plan && plan.clip_preview);
+      if (!preview) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      const metaEl = $('jarvis-clip-preview-meta');
+      const diffArea = $('jarvis-clip-preview-diff-area');
+      const allArea = $('jarvis-clip-preview-all-area');
+      const allSummary = $('jarvis-clip-preview-all-summary');
+
+      const isLiveChanged = Boolean(preview.live_changed || preview.applied_to_live || (data && data.live_changed));
+      const statusBadge = isLiveChanged
+        ? '<span class="bad">【注意】Live に適用済みのデータです（プレビューではありません）</span> '
+        : '<span class="ok">プレビュー表示（Live 未変更・元データ保持）</span> ';
+
+      const actionName = preview.action ? esc(preview.action) : 'UNKNOWN';
+      const targetBars = preview.out_of_range
+        ? '範囲外（変更なし）'
+        : (preview.target_bars && typeof preview.target_bars === 'object'
+          ? `${preview.target_bars.start ?? ''}–${preview.target_bars.end ?? ''}小節`
+          : '全小節');
+      const summaryText = preview.summary ? esc(preview.summary) : '';
+
+      metaEl.innerHTML = `${statusBadge} <b>アクション:</b> ${actionName} / <b>対象:</b> ${targetBars}${summaryText ? ` / ${summaryText}` : ''}`;
+
+      // 1. 配列検証: 両方が有効な配列であること
+      if (!Array.isArray(preview.original_notes) || !Array.isArray(preview.preview_notes)) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（ノートデータが不完全です）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      const origList = preview.original_notes;
+      const prevList = preview.preview_notes;
+
+      // 2. 有効な空配列同士の場合のみ「ノートデータがありません」
+      if (origList.length === 0 && prevList.length === 0) {
+        diffArea.innerHTML = '<p class="sub">ノートデータがありません。</p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細を表示（0音）';
+        return;
+      }
+
+      // 3. 各配列要素の検証（オブジェクトかつ必須キーが有効な数値であること）
+      const hasInvalidOrig = origList.some(n => !isValidNote(n));
+      const hasInvalidPrev = prevList.some(n => !isValidNote(n));
+      if (hasInvalidOrig || hasInvalidPrev) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（不正なノートデータが含まれています）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      // 4. 重複・曖昧性チェックと決定的属性対応付け
+      const isClose = (a, b) => Math.abs(a - b) <= 1e-4;
+      const isExactNote = (a, b) => (
+        a.pitch === b.pitch &&
+        isClose(a.start_time, b.start_time) &&
+        isClose(a.duration, b.duration) &&
+        a.velocity === b.velocity &&
+        isClose(a.probability !== undefined && a.probability !== null ? a.probability : 1.0, b.probability !== undefined && b.probability !== null ? b.probability : 1.0)
+      );
+
+      // (a) 完全一致ペアの抽出
+      const matchedPairs = [];
+      const remainingOrig = [];
+      const usedPrevIndices = new Set();
+
+      for (let i = 0; i < origList.length; i++) {
+        const o = origList[i];
+        let foundIdx = -1;
+        for (let j = 0; j < prevList.length; j++) {
+          if (!usedPrevIndices.has(j) && isExactNote(o, prevList[j])) {
+            foundIdx = j;
+            break;
+          }
+        }
+        if (foundIdx !== -1) {
+          usedPrevIndices.add(foundIdx);
+          matchedPairs.push({ orig: o, prev: prevList[foundIdx], type: 'none' });
+        } else {
+          remainingOrig.push(o);
+        }
+      }
+
+      const remainingPrev = [];
+      for (let j = 0; j < prevList.length; j++) {
+        if (!usedPrevIndices.has(j)) {
+          remainingPrev.push(prevList[j]);
+        }
+      }
+
+      // (b) 残ったノートを (pitch, start_time 近傍) でグループ化
+      const buckets = [];
+      for (const o of remainingOrig) {
+        let bucket = buckets.find(b => b.pitch === o.pitch && isClose(b.start_time, o.start_time));
+        if (!bucket) {
+          bucket = { pitch: o.pitch, start_time: o.start_time, origs: [], prevs: [] };
+          buckets.push(bucket);
+        }
+        bucket.origs.push(o);
+      }
+
+      for (const p of remainingPrev) {
+        let bucket = buckets.find(b => b.pitch === p.pitch && isClose(b.start_time, p.start_time));
+        if (!bucket) {
+          bucket = { pitch: p.pitch, start_time: p.start_time, origs: [], prevs: [] };
+          buckets.push(bucket);
+        }
+        bucket.prevs.push(p);
+      }
+
+      let isAmbiguous = false;
+      for (const b of buckets) {
+        if (b.origs.length === 1 && b.prevs.length === 1) {
+          matchedPairs.push({ orig: b.origs[0], prev: b.prevs[0], type: 'modify' });
+        } else if (b.origs.length > 0 && b.prevs.length === 0) {
+          for (const o of b.origs) {
+            matchedPairs.push({ orig: o, prev: null, type: 'delete' });
+          }
+        } else if (b.origs.length === 0 && b.prevs.length > 0) {
+          for (const p of b.prevs) {
+            matchedPairs.push({ orig: null, prev: p, type: 'add' });
+          }
+        } else {
+          // 同一時刻・同一ピッチの複数ノートが両側に存在し、一意に対応付けられない
+          isAmbiguous = true;
+          break;
+        }
+      }
+
+      if (isAmbiguous) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（同時刻・同音高の重複ノートが含まれ、対応付けが曖昧です）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      // (c) タイムライン順 (start_time 昇順、次いで pitch 昇順) にソート
+      matchedPairs.sort((a, b) => {
+        const aNote = a.orig || a.prev;
+        const bNote = b.orig || b.prev;
+        if (!isClose(aNote.start_time, bNote.start_time)) {
+          return aNote.start_time - bNote.start_time;
+        }
+        return aNote.pitch - bNote.pitch;
+      });
+
+      const totalNotes = matchedPairs.length;
+      const diffRows = [];
+      const allRows = [];
+
+      for (let i = 0; i < totalNotes; i++) {
+        const pair = matchedPairs[i];
+        const o = pair.orig;
+        const p = pair.prev;
+        const changeType = pair.type;
+
+        function formatCell(oVal, pVal, isDiff) {
+          if (changeType === 'add') {
+            return `<span class="diff-val-add">${esc(pVal ?? '—')}</span>`;
+          }
+          if (changeType === 'delete') {
+            return `<span class="diff-val-del">${esc(oVal ?? '—')}</span>`;
+          }
+          if (isDiff) {
+            return `<span class="diff-val-del">${esc(oVal ?? '—')}</span> → <span class="diff-val-add">${esc(pVal ?? '—')}</span>`;
+          }
+          return `${esc(oVal ?? '—')}`;
+        }
+
+        const isDiff = changeType === 'modify';
+        const pitchDiff = isDiff && o.pitch !== p.pitch;
+        const startDiff = isDiff && !isClose(o.start_time, p.start_time);
+        const durDiff = isDiff && !isClose(o.duration, p.duration);
+        const velDiff = isDiff && o.velocity !== p.velocity;
+        const oProb = o ? (o.probability !== undefined && o.probability !== null ? o.probability : 1.0) : 1.0;
+        const pProb = p ? (p.probability !== undefined && p.probability !== null ? p.probability : 1.0) : 1.0;
+        const probDiff = isDiff && !isClose(oProb, pProb);
+
+        const pitchCell = formatCell(o ? o.pitch : null, p ? p.pitch : null, pitchDiff);
+        const startCell = formatCell(o ? o.start_time : null, p ? p.start_time : null, startDiff);
+        const durCell = formatCell(o ? o.duration : null, p ? p.duration : null, durDiff);
+        const velCell = formatCell(o ? o.velocity : null, p ? p.velocity : null, velDiff);
+        const probCell = formatCell(o ? (o.probability ?? 1.0) : null, p ? (p.probability ?? 1.0) : null, probDiff);
+
+        const refStart = o ? o.start_time : (p ? p.start_time : 0);
+        const bar = Math.floor(refStart / 4) + 1;
+        const beatInBar = (refStart % 4) + 1;
+        const posLabel = `${bar}小節 ${beatInBar.toFixed(2).replace(/\.00$/, '')}拍`;
+
+        let tag = '';
+        if (changeType === 'add') tag = '<span class="diff-tag-add">[追加]</span> ';
+        else if (changeType === 'delete') tag = '<span class="diff-tag-del">[削除]</span> ';
+        else if (changeType === 'modify') tag = '<span class="diff-tag-mod">[変更]</span> ';
+
+        const rowHtml = `
+          <tr>
+            <td>${tag}#${i} <span class="sub">(${posLabel})</span></td>
+            <td>${pitchCell}</td>
+            <td>${startCell}</td>
+            <td>${durCell}</td>
+            <td>${velCell}</td>
+            <td>${probCell}</td>
+          </tr>
+        `;
+
+        allRows.push(rowHtml);
+        if (changeType !== 'none') {
+          diffRows.push(rowHtml);
+        }
+      }
+
+      if (diffRows.length === 0) {
+        diffArea.innerHTML = '<p class="sub"><b>変更ノートはありません（変更なし）。</b></p>';
+      } else {
+        diffArea.innerHTML = `
+          <h4>差分のあるノート（${diffRows.length}音 / 全${totalNotes}音）</h4>
+          <div class="table-scroll">
+            <table aria-label="変更のあるノート一覧">
+              <thead>
+                <tr>
+                  <th scope="col">ノート (小節・拍)</th>
+                  <th scope="col">Pitch (元→案)</th>
+                  <th scope="col">Start (元→案)</th>
+                  <th scope="col">Length (元→案)</th>
+                  <th scope="col">Velocity (元→案)</th>
+                  <th scope="col">Prob (元→案)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${diffRows.join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      allSummary.textContent = `全ノートの詳細を表示（全${totalNotes}音、差分${diffRows.length}音）`;
+      allArea.innerHTML = `
+        <table aria-label="全ノート一覧">
+          <thead>
+            <tr>
+              <th scope="col">ノート (小節・拍)</th>
+              <th scope="col">Pitch</th>
+              <th scope="col">Start</th>
+              <th scope="col">Length</th>
+              <th scope="col">Velocity</th>
+              <th scope="col">Prob</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${allRows.join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function showJarvisAnswer(data) {
+      $('jarvis-state').textContent = data.state || 'UNKNOWN';
+      setReply(data.reply || data.error || '応答がありません');
+      $('jarvis-plan').textContent = $('jarvis-show-plan').checked && data.plan ? jarvisPlanText(data.plan, data.state) : '';
+      renderJarvisContext(data.context);
+      renderJarvisApproval(data);
+      renderJarvisClipPreview(data);
+      dialogueProposal = null;
+      $('dialogue-accept').disabled = true;
+      $('dialogue-proposal').textContent = '';
+      $('dialogue-samples').replaceChildren();
+    }
+    let jarvisUtterance = '';
+    $('jarvis-revise').onclick = async () => {
+      if (!jarvisUtterance) return;
+      $('jarvis-revise').disabled = true;
+      const data = await getJson('/api/jarvis/revision', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({utterance: jarvisUtterance})});
+      if (!data.ok) {
+        $('jarvis-approval').textContent = data.error || '修正案を作れませんでした。Live は変えていません。';
+        $('jarvis-revise').disabled = false;
+        return;
+      }
+      $('jarvis-approval').textContent = '修正案を作りました。下の「修正案」で採用するか決めてください。Live は変えていません。';
+      renderRevisionProposal(data);
+    };
     $('dialogue-send').onclick = async () => {
-      if(!$('dialogue-utterance').value.trim()){$('dialogue-reply').textContent='話すか、内容を文字で入力してから送信してください。';return;}
+      const utterance = $('dialogue-utterance').value.trim();
+      if(!utterance){setReply('話すか、内容を文字で入力してから送信してください。');return;}
       if(voiceBusy)return;
       stopDialogueAudio();
       const briefSnapshot=$('brief').value;
@@ -606,9 +1217,30 @@
       $('dialogue-send').disabled = true;
       $('dialogue-accept').disabled = true;
       dialogueProposal = null;
-      $('dialogue-reply').textContent = '確認中…';
+      $('jarvis-state').textContent = 'UNDERSTANDING';
+      setReply('確認中…');
+      renderJarvisClipPreview(null);
       try {
-        const data = await getJson('/api/dialogue/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:dialogueSession, utterance:$('dialogue-utterance').value, brief:briefSnapshot})});
+        if (!dialogueOwns(utterance)) {
+          const judged = await getJson('/api/jarvis/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({utterance})});
+          if (judged.executed || judged.live_changed) {
+            $('jarvis-state').textContent = 'UNKNOWN';
+            setReply('実行済みという応答は採用しません。Live を変更したとは扱いません。');
+            renderJarvisClipPreview(null);
+            return;
+          }
+          if (jarvisShouldAnswer(judged, utterance)) {
+            jarvisUtterance = utterance;
+            showJarvisAnswer(judged);
+            if (judged.reply) void speakDialogue(judged.reply);
+            return;
+          }
+        }
+        $('jarvis-state').textContent = 'UNKNOWN';
+        $('jarvis-plan').textContent = '';
+        renderJarvisApproval(null);
+        renderJarvisClipPreview(null);
+        const data = await getJson('/api/dialogue/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:dialogueSession, utterance, brief:briefSnapshot})});
         $('dialogue-samples').replaceChildren();
         if(data.search_results){
           const list=document.createElement('ol');
@@ -623,11 +1255,11 @@
           const note=document.createElement('p');note.className='sub';note.textContent='ファイル名による候補です。音色を解析した推薦ではありません。';$('dialogue-samples').append(note);
         }
         if(data.sample_detail){const detail=document.createElement('pre');const sample=data.sample_detail;detail.textContent=sample.name+'\n'+sample.path+'\n'+(sample.bytes/1024/1024).toFixed(2)+' MB';$('dialogue-samples').append(detail);}
-        $('dialogue-reply').textContent = data.reply || data.error;
+        setReply(data.reply || data.error);
         if(data.ok) void speakDialogue(data.reply);
         $('dialogue-proposal').textContent = data.proposal?.brief || '';
         if (data.ok && data.proposal && $('brief').value===briefSnapshot) {dialogueProposal = {...data.proposal, original:briefSnapshot};$('dialogue-accept').disabled = false;}
-      } catch { $('dialogue-reply').textContent = '対話に接続できません。'; }
+      } catch { $('jarvis-state').textContent = 'UNKNOWN'; setReply('応答を取得できませんでした。成功にはしていません。'); renderJarvisClipPreview(null); }
       finally { $('dialogue-send').disabled = false;$('dialogue-record').disabled=!voiceReady; }
     };
     $('dialogue-accept').onclick = async () => {
@@ -785,6 +1417,7 @@
       }
       const job = health.inference;
       setPill("job-pill", job.state === "done" ? true : job.state === "error" || job.state === "cancelled" ? false : null, "生成: " + job.state);
+      if ($('jarvis-live')) renderJarvisConnections(health);
       return health;
     }
 

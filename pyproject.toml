@@ -35,6 +35,7 @@ src = ["src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kihachi_mcp"]
+exclude = ["**/*.asd"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/kihachi_mcp/resources/genres/dub_techno.yaml" = "kihachi_mcp/resources/genres/dub_techno.yaml"
@@ -43,3 +44,4 @@ packages = ["src/kihachi_mcp"]
 "src/kihachi_mcp/resources/genre_database.json" = "kihachi_mcp/resources/genre_database.json"
 "src/kihachi_mcp/studio/static/index.html" = "kihachi_mcp/studio/static/index.html"
 "src/kihachi_mcp/studio/static/references.html" = "kihachi_mcp/studio/static/references.html"
+"src/kihachi_mcp/assets/drums/kihachi-kick-fat-tight.wav" = "kihachi_mcp/assets/drums/kihachi-kick-fat-tight.wav"

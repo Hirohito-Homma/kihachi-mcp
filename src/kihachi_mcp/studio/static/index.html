@@ -355,11 +355,19 @@
       <p id="job-line" class="progress"></p>
     </section>
 
+    <section id="music-plan-view">
+      <h2>パートの計画</h2>
+      <p class="sub">上で選んだ役割、キー、テンポ、小節で、この画面の中で計画します。全パートを選ぶと、パートごとにトラックを分けます。承認だけでは Live に送りません。「実機の Live に送る」は、1回目で実機の Set を読んで末尾に置き直し、承認し直したあとの2回目で1回だけ送ります。再生と録音を止めてから押してください。読んだあと15分で期限切れです。同じ名前のトラックがあるときは送りません。保存はしません。</p>
+      <div class="actions"><button id="music-plan-preview" type="button">計画を確認</button><button id="music-plan-approve" type="button" disabled>この計画を承認</button><button id="music-plan-reject" class="secondary" type="button" disabled>承認しない</button><button id="music-plan-verify" class="secondary" type="button" disabled>読み戻しを確認</button><button id="music-plan-live" type="button" disabled>実機の Live に送る</button></div>
+      <p id="music-plan-status" role="status" class="sub"></p>
+      <div id="music-plan-result"></div>
+    </section>
+
     <section id="midi-composer-view">
       <h2>パート単位MIDI Composer</h2>
       <p class="sub">制約を先に確認し、MIDIノート候補だけを生成します。Abletonや現在の曲は変更しません。</p>
       <div class="grid">
-        <label>役割<select id="composer-role"><option value="bass">Bass</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="arp">Arp</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
+        <label>役割<select id="composer-role"><option value="全パート">全パート</option><option value="Kick">Kick</option><option value="Snare">Snare</option><option value="Hats">Hats</option><option value="OpenHat">OpenHat</option><option value="Perc">Perc</option><option value="Sub">Sub</option><option value="bass" selected>Bass</option><option value="Stab">Stab</option><option value="Pad">Pad</option><option value="arp">Arp</option><option value="Guitar">Guitar</option><option value="Horn">Horn</option><option value="Lead">Lead</option><option value="Vocal">Vocal</option><option value="FX">FX</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
         <label>Key<input id="composer-key" value="D#m"></label>
         <label>Tempo<input id="composer-tempo" type="number" min="40" max="240" value="124"></label>
         <label>Bars<input id="composer-bars" type="number" min="1" max="256" value="8"></label>
@@ -482,6 +490,7 @@
 
     <section id="apply-view" class="hidden">
       <h2>Liveへ適用</h2>
+      <p id="live-plan-pending" role="status" class="sub">パート計画の保留はありません。Liveには送っていません。</p>
       <p class="sub">流れ: 承認 → 適用内容を確認（ドライラン。Liveは変わりません）→ この内容でLiveへ適用 → Liveから読み戻して検証。</p>
       <label class="inline"><input type="checkbox" id="change-tempo"> Setのテンポも候補に合わせる（既存曲のテンポが変わります）</label>
       <label class="inline"><input type="checkbox" id="skip-instruments"> 音源は入れない（AbletonGPT や手作業でキット・プリセットを入れる）</label>
@@ -1330,33 +1339,191 @@
 
     let composerPreview = null;
     let composerGenerated = null;
+    let musicPlanHash = null;
     function composerConstraints() {
-      const kickOnsets = $("composer-kicks").value.split(",").map((value) => Number(value.trim())).filter(Number.isFinite);
-      return {
-        role: $("composer-role").value,
-        key: $("composer-key").value.trim(),
-        tempo: Number($("composer-tempo").value),
-        bars: Number($("composer-bars").value),
-        grid: $("composer-grid").value,
-        syncopation: Number($("composer-syncopation").value),
-        octave_jump: Number($("composer-octave").value),
-        ghost_notes: $("composer-ghost").checked,
-        velocity_min: Number($("composer-velocity-min").value),
-        velocity_max: Number($("composer-velocity-max").value),
-        avoid_kick_collision: $("composer-avoid-kick").checked,
+      const kicksEl = $("composer-kicks") || $("astra-kicks");
+      const kickOnsets = kicksEl ? kicksEl.value.split(",").map((value) => value.trim()).filter(Boolean).map(Number).filter(Number.isFinite) : [];
+      const barEl = $("composer-variation-bar") || $("astra-variation-bar");
+      const bar = barEl ? barEl.value.trim() : "";
+      const roleEl = $("composer-role") || $("astra-role");
+      const keyEl = $("composer-key") || $("astra-key");
+      const tempoEl = $("composer-tempo") || $("astra-tempo");
+      const barsEl = $("composer-bars") || $("astra-bars");
+      const gridEl = $("composer-grid") || $("astra-grid");
+      const syncEl = $("composer-syncopation") || $("astra-syncopation");
+      const octEl = $("composer-octave") || $("astra-octave");
+      const ghostEl = $("composer-ghost") || $("astra-ghost");
+      const velMinEl = $("composer-velocity-min") || $("astra-velocity-min");
+      const velMaxEl = $("composer-velocity-max") || $("astra-velocity-max");
+      const avoidEl = $("composer-avoid-kick") || $("astra-avoid-kick");
+      const noteMinEl = $("composer-note-min") || $("astra-note-min");
+      const noteMaxEl = $("composer-note-max") || $("astra-note-max");
+      const constraints = {
+        role: roleEl ? roleEl.value : "bass",
+        key: keyEl ? keyEl.value.trim() : "D#m",
+        tempo: tempoEl ? Number(tempoEl.value) : 124,
+        bars: barsEl ? Number(barsEl.value) : 8,
+        grid: gridEl ? gridEl.value : "1/16",
+        syncopation: syncEl ? Number(syncEl.value) : 0.7,
+        octave_jump: octEl ? Number(octEl.value) : 0.2,
+        ghost_notes: ghostEl ? ghostEl.checked : true,
+        velocity_min: velMinEl ? Number(velMinEl.value) : 65,
+        velocity_max: velMaxEl ? Number(velMaxEl.value) : 118,
+        note_length_min: noteMinEl ? Number(noteMinEl.value) : 0.25,
+        note_length_max: noteMaxEl ? Number(noteMaxEl.value) : 0.75,
+        avoid_kick_collision: avoidEl ? avoidEl.checked : true,
         kick_onsets: kickOnsets
       };
+      const genreEl = $("composer-genre") || $("astra-genre");
+      const moodEl = $("composer-mood") || $("astra-mood");
+      const promptEl = $("composer-prompt") || $("astra-prompt");
+      const genre = genreEl ? genreEl.value.trim() : "";
+      const mood = moodEl ? moodEl.value.trim() : "";
+      const prompt = promptEl ? promptEl.value.trim() : "";
+      if (genre) constraints.genre = genre;
+      if (mood) constraints.mood = mood;
+      if (prompt) constraints.prompt = prompt;
+      if (bar) constraints.variation_bar = Number(bar);
+      return constraints;
     }
     function invalidateComposerPreview() {
       composerPreview = null;
       composerGenerated = null;
+      musicPlanHash = null;
       $("composer-run").disabled = true;
       $("composer-adopt").disabled = true;
+      $("music-plan-approve").disabled = true;
+      $("music-plan-reject").disabled = true;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      setLivePlanPending("入力が変わったので、このパート計画は保留ではありません。Liveには送っていません。");
       $("composer-status").textContent = "入力が変わりました。制約と料金をもう一度確認してください。";
+      const astraStatus = $("astra-status");
+      if (astraStatus) astraStatus.textContent = "内容が変わりました。Astraへ送る前に、もう一度確認します。";
+    }
+    function setLivePlanPending(text) {
+      const node = $("live-plan-pending");
+      if (node) node.textContent = text;
     }
     for (const element of document.querySelectorAll("#midi-composer-view input, #midi-composer-view select")) {
       element.addEventListener("input", invalidateComposerPreview);
     }
+    $("music-plan-preview").onclick = async () => {
+      $("music-plan-preview").disabled = true;
+      $("music-plan-status").textContent = "計画を確認しています。Liveには送りません。";
+      setLivePlanPending("計画を確認しています。Liveには送りません。");
+      try {
+        const data = await post("/api/music-plan/preview", {constraints: composerConstraints()});
+        if (!data.ok) {
+          musicPlanHash = null;
+          $("music-plan-approve").disabled = true;
+          $("music-plan-reject").disabled = true;
+          $("music-plan-verify").disabled = true;
+          $("music-plan-live").disabled = true;
+          $("music-plan-status").textContent = data.error || "計画を作れませんでした。Liveは変えていません。";
+          setLivePlanPending("計画を作れませんでした。Liveは変えていません。");
+          $("music-plan-result").textContent = "";
+          return;
+        }
+        musicPlanHash = data.plan_hash || null;
+        $("music-plan-approve").disabled = !musicPlanHash;
+        $("music-plan-reject").disabled = !musicPlanHash;
+        $("music-plan-verify").disabled = true;
+        $("music-plan-live").disabled = true;
+        const run = data.dry_run;
+        const music = data.music;
+        const direction = data.direction || {};
+        const directionBits = [
+          direction.genre && `ジャンル ${direction.genre}`,
+          direction.mood && `雰囲気 ${direction.mood}`,
+          direction.prompt && `指示 ${direction.prompt}`
+        ].filter(Boolean);
+        const roleName = data.role === "全パート" ? "全パート" : (music.tracks || []).map((track) => track.name).join("、");
+        const pending = `${roleName} / ${music.key} / ${music.tempo} BPM / ${music.bars}小節${directionBits.length ? ` / ${directionBits.join(" / ")}` : ""}。状態は ${run.status}。再生は ${run.playback}。Liveは変えていません。`;
+        $("music-plan-status").textContent = pending;
+        setLivePlanPending(`保留中です。${pending}`);
+        const names = (music.tracks || []).map((track) => esc(track.name)).join("、");
+        const warnings = (music.warnings || []).map((line) => `<li>${esc(line)}</li>`).join("");
+        const directionLine = directionBits.map((line) => esc(line)).join(" / ");
+        $("music-plan-result").innerHTML = `<div class="grid"><p>トラック ${esc(run.changes.tracks)}</p><p>クリップ ${esc(run.changes.clips)}</p><p>ノート ${esc(run.changes.notes)}</p><p>拍 ${esc(run.range.start)}–${esc(run.range.end)}</p><p>保存 ${run.save ? "する" : "しない"}</p><p>実行 ${run.executed ? "した" : "していない"}</p></div><p class="sub">${names}</p>${directionLine ? `<p class="sub">${directionLine}</p>` : ""}<p class="sub">${esc((data.operations || []).filter((op, index, all) => all.indexOf(op) === index).join(" → "))}</p>${warnings ? `<ul>${warnings}</ul>` : ""}`;
+      } finally {
+        $("music-plan-preview").disabled = false;
+      }
+    };
+    $("music-plan-approve").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-approve").disabled = true;
+      const data = await post("/api/music-plan/approve", {plan_hash: musicPlanHash});
+      if (!data.ok) {
+        $("music-plan-status").textContent = data.error || "承認できませんでした。Liveは変えていません。";
+        setLivePlanPending(data.error || "承認できませんでした。Liveは変えていません。");
+        return;
+      }
+      $("music-plan-status").textContent = "この計画を承認しました。Liveには送っていません。";
+      setLivePlanPending("この計画は承認済みです。Liveには送っていません。");
+      $("music-plan-reject").disabled = true;
+      $("music-plan-verify").disabled = false;
+      $("music-plan-live").disabled = false;
+      refreshApprovals();
+    };
+    $("music-plan-verify").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      const data = await post("/api/music-plan/verify", {plan_hash: musicPlanHash});
+      const line = data.reply || data.error || "検証できませんでした。完了にはしていません。";
+      if (data.plan_hash && data.plan_hash !== musicPlanHash) {
+        musicPlanHash = data.plan_hash;
+        $("music-plan-approve").disabled = false;
+        $("music-plan-reject").disabled = false;
+      } else if (!data.ok) {
+        $("music-plan-verify").disabled = false;
+        $("music-plan-live").disabled = false;
+      }
+      $("music-plan-status").textContent = line;
+      setLivePlanPending(line);
+      refreshApprovals();
+    };
+    $("music-plan-live").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-live").disabled = true;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-status").textContent = "実機の Live に問い合わせています…";
+      try {
+        const data = await post("/api/music-plan/live", {plan_hash: musicPlanHash});
+        const line = data.reply || data.error || "実機の Live に送れませんでした。";
+        if (data.plan_hash && data.plan_hash !== musicPlanHash) {
+          musicPlanHash = data.plan_hash;
+          $("music-plan-approve").disabled = false;
+          $("music-plan-reject").disabled = false;
+        } else if (!data.ok && !data.executed) {
+          $("music-plan-live").disabled = false;
+        }
+        $("music-plan-status").textContent = line;
+        setLivePlanPending(line);
+        refreshApprovals();
+      } catch {
+        $("music-plan-live").disabled = false;
+        $("music-plan-status").textContent = "Studioに届きませんでした。実機には送っていません。";
+        setLivePlanPending("Studioに届きませんでした。実機には送っていません。");
+      }
+    };
+    $("music-plan-reject").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-reject").disabled = true;
+      const data = await post("/api/music-plan/reject", {plan_hash: musicPlanHash});
+      if (!data.ok) {
+        $("music-plan-status").textContent = data.error || "判断できませんでした。Liveは変えていません。";
+        setLivePlanPending(data.error || "判断できませんでした。Liveは変えていません。");
+        $("music-plan-reject").disabled = false;
+        return;
+      }
+      $("music-plan-status").textContent = data.message;
+      setLivePlanPending(data.message);
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      if (data.rejected) $("music-plan-approve").disabled = false;
+    };
     $("composer-preview").onclick = async () => {
       const constraints = composerConstraints();
       $("composer-preview").disabled = true;
@@ -2035,12 +2202,15 @@
       await loadProject(state.candidate.candidate_id);
       refreshHealth();
     };
-    async function decideRevision(accept) {
-      if (!pendingRevision) return;
-      $("revision-accept").disabled = true;
-      $("revision-reject").disabled = true;
-      const data = await post("/api/revision/decide", { revision_id: pendingRevision.revision_id, accept });
-      pendingRevision = null;
+    async function decideRevision(accept, revisionId = pendingRevision ? pendingRevision.revision_id : "") {
+      if (!revisionId) return;
+      if (pendingRevision && pendingRevision.revision_id === revisionId) {
+        $("revision-accept").disabled = true;
+        $("revision-reject").disabled = true;
+        pendingRevision = null;
+      }
+      const data = await post("/api/revision/decide", { revision_id: revisionId, accept });
+      refreshApprovals();
       if (!data.ok) { $("revision-meta").textContent = data.error; return; }
       if (accept) {
         const payload = await getJson("/api/candidate/" + data.selected_candidate_id);
@@ -2051,6 +2221,30 @@
     }
     $("revision-accept").onclick = () => decideRevision(true);
     $("revision-reject").onclick = () => decideRevision(false);
+    async function refreshApprovals() {
+      try {
+        const data = await getJson("/api/approvals");
+        const rows = (data.revisions || []).map((item) => `<li>修正案（採用待ち）: ${esc((item.after || []).join(" "))}（ノート ${esc(item.note_count_before ?? "UNKNOWN")} → ${esc(item.note_count_after ?? "UNKNOWN")}） <button type="button" class="secondary" data-revision="${esc(item.revision_id)}" data-accept="1">採用</button> <button type="button" class="secondary" data-revision="${esc(item.revision_id)}" data-accept="0">却下</button></li>`);
+        for (const plan of data.music_plans || []) {
+          const tracks = esc((plan.tracks || []).join("、"));
+          const approved = plan.approved !== false;
+          const hash = esc((plan.plan_hash || "").slice(0, 8));
+          const left = Number.isFinite(plan.remaining_seconds)
+            ? ` あと${Math.max(1, Math.ceil(Number(plan.remaining_seconds) / 60))}分`
+            : "";
+          if (plan.live_bound && !approved) rows.push(`<li>パート計画（実機の Set に合わせ済み・承認待ち）: ${tracks}（${hash}）${left}。「パートの計画」で「この計画を承認」を押してください。</li>`);
+          else if (plan.live_bound) rows.push(`<li>パート計画（実機の Set に合わせ済み・承認済み）: ${tracks}（${hash}）${left}。「実機の Live に送る」をもう一度押すと1回だけ送ります。</li>`);
+          else rows.push(`<li>パート計画（承認済み・未送信）: ${tracks}（${hash}）${left}。送るのは「パートの計画」からです。</li>`);
+        }
+        $("approval-center").innerHTML = rows.length ? `<ul>${rows.join("")}</ul>` : '<p class="sub">保留中の操作はありません。</p>';
+      } catch {
+        $("approval-center").innerHTML = '<p class="sub warn">承認センターの読み込みに失敗しました。</p>';
+      }
+    }
+    $("approval-center").onclick = (event) => {
+      const button = event.target.closest("button[data-revision]");
+      if (button) decideRevision(button.dataset.accept === "1", button.dataset.revision);
+    };
     $("revision-edit").onclick = () => { $("request-edit").open = true; $("request-bars").focus(); };
     function renderHistory(items) {
       $("revision-history").innerHTML = items.length
@@ -2109,7 +2303,9 @@
     } else {
       loadProjects();
       loadSelected();
+      refreshApprovals();
       setInterval(refreshHealth, 4000);
+      setInterval(refreshApprovals, 4000);
     }
   </script>
 </body>

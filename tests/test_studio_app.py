@@ -112,6 +112,121 @@ def test_live_candidate_rejects_empty_or_excessive_brief(studio, monkeypatch) ->
     assert live.tracks == []
 
 
+def test_openai_connection_route_checks_saved_provider(studio, monkeypatch) -> None:
+    from kihachi_mcp.services.ai_provider import OpenAIProvider
+
+    port, runtime, _live = studio
+    status, result = _call(port, "GET", "/api/ai/connection")
+    assert status == 200 and result["ok"] is False
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+    monkeypatch.setattr(OpenAIProvider, "test_connection", lambda self: {"ok": True, "model": self.model})
+    status, result = _call(port, "GET", "/api/ai/connection")
+    assert status == 200 and result == {"ok": True, "model": "gpt-6.1-sol"}
+
+
+def test_http_generate_previews_paid_cost_before_start(studio) -> None:
+    port, runtime, _live = studio
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+    status, result = _call(port, "POST", "/api/generate", {"brief": "124 BPM、D# minor"})
+    assert status == 200 and result["ok"] is False
+    assert result["cost"]["estimate"]["estimated_jpy"] > 0
+    assert runtime.job_status()["state"] == "idle"
+
+
+def test_http_regenerate_enforces_paid_confirmation_and_cost_guards(
+    studio, tmp_path: Path, monkeypatch
+) -> None:
+    from kihachi_mcp.services.ai_cost_control import MonthlyCostGuard, estimate_cost
+    from kihachi_mcp.services.ai_provider import OpenAIProvider
+
+    port, runtime, _live = studio
+    runtime._cost_guard = MonthlyCostGuard(tmp_path / "regen_ledger.json")
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+
+    provider_calls = []
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "interpret",
+        lambda self, brief: provider_calls.append(brief) or pytest.fail("provider must not run"),
+    )
+
+    # 1 & 2. Unconfirmed /api/regenerate requires paid confirmation and never starts a job or calls provider
+    status, unconfirmed = _call(port, "POST", "/api/regenerate", {"candidate_id": candidate_id})
+    assert status == 200 and unconfirmed["ok"] is False
+    assert "有料再生成" in unconfirmed["error"]
+    assert unconfirmed["cost"]["estimate"]["estimated_jpy"] > 0
+    assert provider_calls == []
+
+    # 3. Confirmed /api/regenerate forwards confirmed_paid=True to runtime
+    regenerated_calls = []
+    orig_regenerate = runtime.regenerate
+    monkeypatch.setattr(
+        runtime,
+        "regenerate",
+        lambda cid, confirmed_paid=False: regenerated_calls.append((cid, confirmed_paid))
+        or {"ok": True},
+    )
+    status, confirmed_res = _call(
+        port, "POST", "/api/regenerate", {"candidate_id": candidate_id, "confirmed_paid": True}
+    )
+    assert status == 200 and confirmed_res["ok"] is True
+    for _ in range(50):
+        if regenerated_calls:
+            break
+        threading.Event().wait(0.01)
+    assert regenerated_calls == [(candidate_id, True)]
+    assert provider_calls == []
+    monkeypatch.setattr(runtime, "regenerate", orig_regenerate)
+
+    # 4. Monthly cost limit exceeded blocks execution before provider even when confirmed_paid=True over HTTP
+    assert runtime.update_settings({"monthly_ai_limit_jpy": 100}, persist=False)["ok"]
+    runtime._cost_guard.record(
+        {"input_tokens": 500_000, "output_tokens": 0},
+        estimate_cost("gpt-6.1-sol", 500_000, 0),
+    )
+    status, _queued_over_limit = _call(
+        port, "POST", "/api/regenerate", {"candidate_id": candidate_id, "confirmed_paid": True}
+    )
+    assert status == 200
+    for _ in range(50):
+        if runtime.job_status()["state"] == "error":
+            break
+        threading.Event().wait(0.01)
+    assert runtime.job_status()["state"] == "error"
+    assert "月間AI利用上限" in runtime.job_status()["error"]
+    assert provider_calls == []
+
+    # 5. Connection test over HTTP sanitizes secrets, Authorization headers, and external raw error bodies
+    class FakeErrorResponse:
+        status = 401
+
+        def read(self):
+            return b'{"error":{"code":"invalid_api_key","message":"Incorrect API key provided: sk-secret-999"}}'
+
+    class FakeErrorConn:
+        def __init__(self, host, timeout):
+            pass
+
+        def request(self, method, path, headers):
+            pass
+
+        def getresponse(self):
+            return FakeErrorResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-999")
+    monkeypatch.setattr("kihachi_mcp.services.ai_provider.HTTPSConnection", FakeErrorConn)
+    conn_status, conn_body = _call(port, "GET", "/api/ai/connection")
+    assert conn_status == 200 and conn_body["ok"] is False
+    serialized = json.dumps(conn_body, ensure_ascii=False)
+    assert "sk-secret-999" not in serialized
+    assert "Bearer" not in serialized
+    assert "Incorrect API key provided" not in serialized
+
+
 def test_candidate_audio_preview_is_read_only(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]

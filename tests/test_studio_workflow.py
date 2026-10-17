@@ -314,6 +314,22 @@ def test_model_json_is_repaired_only_around_one_object() -> None:
         parse_model_json("no json at all")
 
 
+def test_openai_structured_payload_reads_parsed_json_and_skips_reasoning() -> None:
+    from kihachi_mcp.services.ai_provider import _structured_payload
+
+    payload = {
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "content": [{"text": "scratch {"}]},
+            {"type": "message", "content": [{"parsed": {"a": 1}}]},
+        ],
+    }
+    assert _structured_payload(payload) == {"a": 1}
+    incomplete = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
+    with pytest.raises(InterpretationError, match="途切れました"):
+        _structured_payload(incomplete)
+
+
 class _Client:
     def __init__(self, replies: list[str], calls: list[int]) -> None:
         self._replies = replies

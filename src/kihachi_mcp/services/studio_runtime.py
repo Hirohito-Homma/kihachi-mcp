@@ -253,6 +253,13 @@ class StudioRuntime:
             "settings": self.settings(),
         }
 
+    def openai_connection_status(self) -> dict[str, Any]:
+        """Run a read-only authentication check for the saved OpenAI model."""
+        provider = provider_from_settings(self._settings)
+        if not isinstance(provider, OpenAIProvider):
+            return {"ok": False, "message": "先にOpenAIを選んで設定を保存してください。"}
+        return provider.test_connection()
+
     def _abletongpt_state(self) -> str | None:
         """Ping AbletonGPT at most every 15 s; a blocked Live makes each ping slow."""
         if self._kit_loader is None:
@@ -551,28 +558,35 @@ class StudioRuntime:
         """Read the bridge health and return only contract-backed capabilities."""
         return discover_capabilities(self._inspector.health(), self._abletongpt_state())
 
-    def queue_generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
+    def queue_generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
         """Start one background generate. Refuses a second concurrent job."""
         if self._infer_lock.locked():
             return {
                 "ok": False,
                 "error": "別の生成が実行中です。完了またはキャンセルを待ってください",
             }
+        if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
+            return {"ok": False, "error": "推定料金を確認してから有料生成を明示してください", "cost": self.ai_cost_status(brief)}
         thread = threading.Thread(
-            target=self.generate, args=(brief, seed), daemon=True
+            target=self.generate, args=(brief, seed, confirmed_paid), daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
 
-    def queue_regenerate(self, candidate_id: str) -> dict[str, Any]:
+    def queue_regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
         """Start one background regenerate from an existing candidate."""
         if self._infer_lock.locked():
             return {
                 "ok": False,
                 "error": "別の生成が実行中です。完了またはキャンセルを待ってください",
             }
+        current = self._lookup(candidate_id)
+        if current is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
+            return {"ok": False, "error": "推定料金を確認してから有料再生成を明示してください", "cost": self.ai_cost_status(current.brief.original_text)}
         thread = threading.Thread(
-            target=self.regenerate, args=(candidate_id,), daemon=True
+            target=self.regenerate, args=(candidate_id, confirmed_paid), daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
@@ -603,7 +617,7 @@ class StudioRuntime:
             "musical_quality_claimed": False,
         }
 
-    def generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
+    def generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
         """Interpret the brief and store a new candidate. Blocks one caller."""
         if not self._infer_lock.acquire(blocking=False):
             return {
@@ -622,6 +636,8 @@ class StudioRuntime:
         try:
             provider = provider_from_settings(self._settings)
             if isinstance(provider, OpenAIProvider):
+                if not confirmed_paid:
+                    raise InterpretationError("推定料金を確認してから有料生成を明示してください")
                 cost = self.ai_cost_status(brief)
                 if not cost["allowed"]:
                     raise InterpretationError("月間AI利用上限を超えるため、OpenAI APIを実行しません")
@@ -697,13 +713,13 @@ class StudioRuntime:
                 self._client = None
             self._infer_lock.release()
 
-    def regenerate(self, candidate_id: str) -> dict[str, Any]:
+    def regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
         """Build a new candidate from the same brief with a new seed."""
         current = self._lookup(candidate_id)
         if current is None:
             return {"ok": False, "error": "指定した候補がありません"}
         next_seed = current.seed + 1
-        return self.generate(current.brief.original_text, seed=next_seed)
+        return self.generate(current.brief.original_text, seed=next_seed, confirmed_paid=confirmed_paid)
 
     def cancel(self) -> dict[str, Any]:
         """Ask the in-flight Ollama request to stop."""

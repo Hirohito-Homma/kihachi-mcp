@@ -645,7 +645,8 @@
           <label class="inline">月間上限（円） <input type="number" id="setting-ai-limit" min="100" step="100" style="width:9ch"></label>
         </div>
         <div class="actions">
-          <button id="ollama-test" class="secondary" type="button">接続テスト</button>
+          <button id="ollama-test" class="secondary" type="button">Ollama接続テスト</button>
+          <button id="openai-test" class="secondary" type="button">OpenAI接続テスト</button>
           <button id="settings-save" class="secondary" type="button">保存</button>
         </div>
         <p id="settings-line" role="status" class="sub">導入済みのモデルだけを選べます。KIHACHIはモデルをダウンロードしません。</p>
@@ -1871,19 +1872,35 @@
       refreshHealth();
     }
 
-    $("generate").onclick = async () => {
-      const result = await getJson("/api/generate", {
+    async function startGeneration(path, payload) {
+      let result = await getJson(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief: $("brief").value })
+        body: JSON.stringify(payload)
       });
+      if (!result.ok && result.cost) {
+        if (!result.cost.allowed) { $("job-line").textContent = result.error; return result; }
+        const estimate = Number(result.cost.estimate?.estimated_jpy || 0).toFixed(2);
+        const approved = window.confirm(`OpenAI ${result.cost.estimate?.model || ""} で有料生成します。今回推定 約${estimate}円、今月 ${Number(result.cost.spent_jpy || 0).toFixed(2)}円、上限 ${result.cost.limit_jpy}円。実行しますか？`);
+        if (!approved) { $("job-line").textContent = "有料生成を取り消しました。"; return { ok: false, error: "有料生成を取り消しました。" }; }
+        result = await getJson(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({...payload, confirmed_paid: true})
+        });
+      }
       if (!result.ok) {
         $("job-line").textContent = result.error;
-        return;
+        return result;
       }
       $("job-line").textContent = "生成を開始しました";
       state.poll = setInterval(pollJob, 700);
       pollJob();
+      return result;
+    }
+
+    $("generate").onclick = async () => {
+      await startGeneration("/api/generate", { brief: $("brief").value });
     };
 
     $('generate-from-live').onclick = async () => {
@@ -1923,17 +1940,7 @@
 
     $("regenerate").onclick = async () => {
       if (!state.candidate) return;
-      const result = await getJson("/api/regenerate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
-      });
-      if (!result.ok) {
-        $("job-line").textContent = result.error;
-        return;
-      }
-      state.poll = setInterval(pollJob, 700);
-      pollJob();
+      await startGeneration("/api/regenerate", { candidate_id: state.candidate.candidate_id });
     };
 
     $("preview-apply").onclick = async () => {
@@ -2495,6 +2502,11 @@
       $("settings-line").textContent = "接続を確認中…";
       const o = await getJson("/api/ollama");
       $("settings-line").textContent = `${o.ok ? "READY" : "OFFLINE"}: ${o.message || ""}（導入済み: ${(o.installed_models || []).join(", ") || "なし"}）`;
+    };
+    $("openai-test").onclick = async () => {
+      $("settings-line").textContent = "OpenAIの認証を確認中…";
+      const result = await getJson("/api/ai/connection");
+      $("settings-line").textContent = `${result.ok ? "READY" : "ERROR"}: ${result.message || "確認できませんでした"}`;
     };
     $("settings-save").onclick = async () => {
       const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value, openai_model: $("setting-openai-model").value, monthly_ai_limit_jpy: Number($("setting-ai-limit").value) } });

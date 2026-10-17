@@ -732,11 +732,11 @@ def _handler_for(app: StudioApp):
                 brief = str(body.get("brief") or "")
                 seed = body.get("seed")
                 seed = int(seed) if seed is not None else None
-                self._send_json(runtime.queue_generate(brief, seed=seed))
+                self._send_json(runtime.queue_generate(brief, seed=seed, confirmed_paid=bool(body.get("confirmed_paid"))))
                 return
             if parsed.path == "/api/regenerate":
                 candidate_id = str(body.get("candidate_id") or "")
-                self._send_json(runtime.queue_regenerate(candidate_id))
+                self._send_json(runtime.queue_regenerate(candidate_id, confirmed_paid=bool(body.get("confirmed_paid"))))
                 return
             if parsed.path == "/api/cancel":
                 self._send_json(runtime.cancel())
@@ -838,6 +838,8 @@ def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
         handler._send_json({"ok": True, "settings": runtime.settings()})
     elif parsed.path == "/api/ai/cost":
         handler._send_json(runtime.ai_cost_status((query.get("brief") or [""])[0]))
+    elif parsed.path == "/api/ai/connection":
+        handler._send_json(runtime.openai_connection_status())
     elif parsed.path == "/api/ollama":
         handler._send_json(runtime.ollama_status())
     elif parsed.path == "/api/diagnostics":

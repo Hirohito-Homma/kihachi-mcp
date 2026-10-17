@@ -191,6 +191,42 @@ class OpenAIProvider:
     def list_models(self) -> list[str]:
         return list(self.ALLOWED_MODELS)
 
+    def test_connection(self) -> dict[str, Any]:
+        """Check credentials and model access without creating a paid response."""
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            return {"ok": False, "model": self.model, "message": "OPENAI_API_KEYが設定されていません。GPT-6用ランチャーからStudioを起動してください。"}
+        connection = HTTPSConnection("api.openai.com", timeout=10)
+        try:
+            connection.request("GET", f"/v1/models/{self.model}", headers={"Authorization": f"Bearer {key}"})
+            response = connection.getresponse()
+            raw = response.read()
+        except OSError:
+            return {"ok": False, "model": self.model, "message": "OpenAI APIに接続できません。ネットワークを確認してください。"}
+        finally:
+            connection.close()
+        try:
+            error_data = json.loads(raw)
+        except json.JSONDecodeError:
+            error_data = {}
+        error = error_data.get("error") if isinstance(error_data, dict) else None
+        error_code = error.get("code") if isinstance(error, dict) else None
+        if response.status == 401 and error_code == "ip_not_authorized":
+            message = "接続元IPがOpenAIプロジェクトの許可リストにありません（HTTP 401）。"
+        elif response.status == 401:
+            message = "APIキーが認証されませんでした（HTTP 401）。キー・プロジェクト・権限を確認してください。"
+        elif response.status == 403:
+            message = "このキーではモデルにアクセスできません（HTTP 403）。プロジェクトの権限を確認してください。"
+        elif response.status == 404:
+            message = "選択モデルが見つからないか、利用できません（HTTP 404）。"
+        elif response.status >= 400:
+            message = f"OpenAI APIが応答を拒否しました（HTTP {response.status}）。"
+        else:
+            if isinstance(error_data, dict) and error_data.get("id") == self.model:
+                return {"ok": True, "model": self.model, "message": "APIキーとモデルへのアクセスを確認しました。生成は実行していません。"}
+            message = "OpenAI APIのモデル情報を確認できませんでした。"
+        return {"ok": False, "model": self.model, "message": message}
+
     DEFAULT_MAX_OUTPUT_TOKENS = 1_000
     MAX_STRUCTURED_OUTPUT_TOKENS = 32_768
     TOKENS_PER_SCHEMA_ITEM = 30

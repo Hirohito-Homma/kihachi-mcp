@@ -38,3 +38,6 @@ ai-company-os/**/data/
 
 # Generated audio artifacts
 outputs/
+
+# Ableton analysis sidecars
+*.asd

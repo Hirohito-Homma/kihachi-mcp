@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P1 Residual Risk Resolution Test Suite.
 
 Covers:
@@ -12,12 +11,10 @@ Covers:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
-
-import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -25,8 +22,7 @@ if str(TESTS_DIR) not in sys.path:
 
 from live_fixtures import gate
 
-from kihachi_mcp.models.live_contract import managed_track_name
-from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
+from kihachi_mcp.models.midi_candidate import MidiCandidate
 from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import LiveStateInspector
@@ -41,7 +37,7 @@ from kihachi_mcp.services.live_transport_fake import (
 )
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
 from kihachi_mcp.services.studio_interpreter import assemble_brief
-from kihachi_mcp.services.studio_runtime import DRY_RUN_TTL_SECONDS, StudioRuntime
+from kihachi_mcp.services.studio_runtime import StudioRuntime
 
 
 class MockClock:
@@ -119,7 +115,7 @@ def _setup_runtime(
 
 def test_task1_target_confirmation_api_and_flow(tmp_path: Path) -> None:
     """Task 1: Explicit target confirmation works via confirm_target_live_set and is verified."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, set_name="")  # set_name empty -> "UNKNOWN"
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, set_name="")  # set_name empty -> "UNKNOWN"
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -174,7 +170,7 @@ def test_task1_fingerprint_change_invalidates_target_confirmation(tmp_path: Path
 
 def test_task2_delivery_audit_persisted_before_write(tmp_path: Path) -> None:
     """Task 2: APPLYING state is persisted to disk before any Live write operations start."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -210,7 +206,7 @@ def test_task2_delivery_audit_persisted_before_write(tmp_path: Path) -> None:
 
 def test_task2_persistence_failure_aborts_write(tmp_path: Path) -> None:
     """Task 2: If persisting the audit record fails before writing, write is aborted immediately."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
     cid = candidate.candidate_id
     runtime.approve(cid)
     runtime.dry_run(cid)
@@ -253,7 +249,7 @@ def test_task2_crash_recovery_restores_applying_as_unknown(tmp_path: Path) -> No
     )
 
     # Now create runtime simulating restart
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, candidate=candidate, set_name="Mutant Dub Circuit")
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, candidate=candidate, set_name="Mutant Dub Circuit")
 
     # Status loaded from disk
     status = runtime.get_delivery_status(candidate.candidate_id)
@@ -274,7 +270,7 @@ def test_task2_crash_recovery_restores_applying_as_unknown(tmp_path: Path) -> No
 
 def test_task2_partial_status_blocks_resend_and_provides_recovery_report(tmp_path: Path) -> None:
     """Task 2: PARTIAL status blocks auto-resend and recover_delivery provides read-back report without rollback."""
-    runtime, live_set, transport, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
+    runtime, _live_set, transport, candidate = _setup_runtime(tmp_path, set_name="Mutant Dub Circuit")
     cid = candidate.candidate_id
     runtime.approve(cid)
 

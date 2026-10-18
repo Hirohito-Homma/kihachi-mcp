@@ -18,10 +18,14 @@ The order of checks matters and is intentional:
    ``verification_failed``.
 """
 
+from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
+    OP_CREATE_LOCATOR,
+    OP_PLACE_ARRANGEMENT_CLIP,
     STATUS_APPROVAL_REQUIRED,
     STATUS_BLOCKED,
     STATUS_PARTIALLY_APPLIED,
@@ -53,6 +57,9 @@ from kihachi_mcp.services.live_transport import (
 )
 
 _FLOAT_TOLERANCE = 1e-6
+LOCATORS_UNREPORTED_FIELD = "locators_reported"
+ARRANGEMENT_UNREPORTED_FIELD = "arrangement_clips_reported"
+AMBIGUOUS_MATCH_FIELD = "unique_match"
 
 
 class LiveExecutionService:
@@ -146,19 +153,17 @@ class LiveExecutionService:
                 STATUS_UNAVAILABLE,
                 error=f"{exc.code}: {exc.message}",
             )
-        completed = set(receipt.completed_operations)
-        mismatches: list[LiveReadbackMismatch] = []
-        for operation in plan.operations:
-            if operation.operation_id not in completed:
-                continue
-            mismatches.extend(_verify_against_snapshot(operation, current))
+        mismatches = readback_mismatches(plan, receipt, current)
         if mismatches:
             return self._rebuild(
                 receipt,
                 STATUS_VERIFICATION_FAILED,
                 mismatches=mismatches,
                 fingerprint_after=current.set_fingerprint,
-                error="Live state no longer matches the receipt",
+                error=(
+                    unconfirmed_reason(mismatches)
+                    or "Live state no longer matches the receipt"
+                ),
             )
         return self._rebuild(
             receipt,
@@ -372,8 +377,42 @@ def _compare_readback(
     return mismatches
 
 
+def readback_mismatches(
+    plan: LiveMutationPlan,
+    receipt: LiveExecutionReceipt,
+    snapshot: LiveStateSnapshot,
+) -> list[LiveReadbackMismatch]:
+    """Compare every completed operation of a receipt with one Live snapshot."""
+    completed = set(receipt.completed_operations)
+    operations = [op for op in plan.operations if op.operation_id in completed]
+    pairs = _pair_arrangement(operations, snapshot)
+    mismatches: list[LiveReadbackMismatch] = []
+    for operation in operations:
+        mismatches.extend(_verify_against_snapshot(operation, snapshot, pairs))
+    return mismatches
+
+
+def unconfirmed_reason(mismatches: list[LiveReadbackMismatch]) -> str:
+    """Explain mismatches that mean "Live did not tell us", not "Live differs"."""
+    fields = {item.field_name for item in mismatches}
+    reasons = []
+    if LOCATORS_UNREPORTED_FIELD in fields:
+        reasons.append(
+            "Live did not report locators, so the created locators are "
+            "unconfirmed; update the KIHACHI Live Device"
+        )
+    if ARRANGEMENT_UNREPORTED_FIELD in fields:
+        reasons.append(
+            "Live did not report a readable Arrangement clip list, so the "
+            "placed clips are unconfirmed"
+        )
+    return "; ".join(reasons)
+
+
 def _verify_against_snapshot(
-    operation: LiveMutationOperation, snapshot: LiveStateSnapshot
+    operation: LiveMutationOperation,
+    snapshot: LiveStateSnapshot,
+    pairs: dict[str, Any],
 ) -> list[LiveReadbackMismatch]:
     """Check one applied operation against a freshly read Live snapshot."""
     expected = operation.expected_readback
@@ -387,7 +426,12 @@ def _verify_against_snapshot(
                 operation.operation_id, "tempo", expected["tempo"], snapshot.tempo
             )
         )
-    if track_index is not None and scene_index is None and "name" in expected:
+    if (
+        track_index is not None
+        and scene_index is None
+        and "name" in expected
+        and operation.op != OP_PLACE_ARRANGEMENT_CLIP
+    ):
         track = snapshot.track_by_index(int(track_index))
         observed_name = track.name if track is not None else None
         if not _values_match(expected["name"], observed_name):
@@ -447,4 +491,150 @@ def _verify_against_snapshot(
                         observed,
                     )
                 )
+    if operation.op == OP_PLACE_ARRANGEMENT_CLIP:
+        # note_count is not compared: Live's Arrangement summary does not
+        # count notes, so only the first, per-operation readback confirms it.
+        mismatches.extend(
+            _compare_paired(
+                operation,
+                pairs.get(operation.operation_id),
+                ARRANGEMENT_UNREPORTED_FIELD,
+                ("track_index", "name", "start_beats", "length_beats"),
+            )
+        )
+    if operation.op == OP_CREATE_LOCATOR:
+        mismatches.extend(
+            _compare_paired(
+                operation,
+                pairs.get(operation.operation_id),
+                LOCATORS_UNREPORTED_FIELD,
+                ("name", "beats"),
+            )
+        )
+    return mismatches
+
+
+@dataclass(frozen=True)
+class _Ambiguous:
+    count: int
+
+
+_UNREPORTED = object()
+
+
+def _pair_arrangement(
+    operations: list[LiveMutationOperation], snapshot: LiveStateSnapshot
+) -> dict[str, Any]:
+    """Pair each placed clip and created locator with at most one Live element."""
+    pairs: dict[str, Any] = {}
+    clips = [op for op in operations if op.op == OP_PLACE_ARRANGEMENT_CLIP]
+    if clips and not snapshot.arrangement_clips_reported:
+        pairs.update({op.operation_id: _UNREPORTED for op in clips})
+    elif clips:
+        pairs.update(
+            _pair_unique(
+                clips,
+                list(snapshot.arrangement_clips),
+                (
+                    lambda want, clip: _same_track(want, clip)
+                    and _values_match(want.get("name"), clip.name)
+                    and _values_match(want.get("start_beats"), clip.start_beats),
+                    lambda want, clip: _same_track(want, clip)
+                    and _values_match(want.get("start_beats"), clip.start_beats),
+                    lambda want, clip: _same_track(want, clip)
+                    and _values_match(want.get("name"), clip.name),
+                ),
+            )
+        )
+    locators = [op for op in operations if op.op == OP_CREATE_LOCATOR]
+    if locators and snapshot.locators is None:
+        pairs.update({op.operation_id: _UNREPORTED for op in locators})
+    elif locators:
+        pairs.update(
+            _pair_unique(
+                locators,
+                list(snapshot.locators or []),
+                (
+                    lambda want, item: _values_match(want.get("name"), item.name)
+                    and _values_match(want.get("beats"), item.beats),
+                    lambda want, item: _values_match(want.get("beats"), item.beats),
+                    lambda want, item: _values_match(want.get("name"), item.name),
+                ),
+            )
+        )
+    return pairs
+
+
+def _same_track(expected: dict[str, Any], clip: Any) -> bool:
+    return _values_match(expected.get("track_index"), clip.track_index)
+
+
+def _pair_unique(
+    operations: list[LiveMutationOperation],
+    observed: list[Any],
+    tiers: tuple[Callable[[dict[str, Any], Any], bool], ...],
+) -> dict[str, Any]:
+    """Assign observed elements to operations, strictest rule first.
+
+    An element is never given to two operations. When an exact match is not
+    unique the operation is reported as ambiguous; a looser rule that is not
+    unique leaves the operation unmatched, which reads as missing.
+    """
+    pairs: dict[str, Any] = {}
+    claimed: set[int] = set()
+    for tier_index, matches in enumerate(tiers):
+        wanted = {
+            op.operation_id: [
+                index
+                for index, item in enumerate(observed)
+                if index not in claimed and matches(op.expected_readback, item)
+            ]
+            for op in operations
+            if op.operation_id not in pairs
+        }
+        demand = Counter(index for hits in wanted.values() for index in hits)
+        for operation_id, hits in wanted.items():
+            if len(hits) == 1 and demand[hits[0]] == 1:
+                pairs[operation_id] = observed[hits[0]]
+                claimed.add(hits[0])
+            elif tier_index == 0 and hits:
+                pairs[operation_id] = _Ambiguous(
+                    max(len(hits), max(demand[index] for index in hits))
+                )
+    for operation in operations:
+        pairs.setdefault(operation.operation_id, None)
+    return pairs
+
+
+def _compare_paired(
+    operation: LiveMutationOperation,
+    paired: Any,
+    unreported_field: str,
+    fields: tuple[str, ...],
+) -> list[LiveReadbackMismatch]:
+    if paired is _UNREPORTED:
+        return [
+            LiveReadbackMismatch(operation.operation_id, unreported_field, True, False)
+        ]
+    if isinstance(paired, _Ambiguous):
+        return [
+            LiveReadbackMismatch(
+                operation.operation_id, AMBIGUOUS_MATCH_FIELD, 1, paired.count
+            )
+        ]
+    expected = operation.expected_readback
+    mismatches: list[LiveReadbackMismatch] = []
+    for field_name in fields:
+        if field_name not in expected:
+            continue
+        observed = getattr(paired, field_name) if paired is not None else None
+        if not _values_match(expected[field_name], observed):
+            mismatches.append(
+                LiveReadbackMismatch(
+                    operation.operation_id,
+                    field_name,
+                    expected[field_name],
+                    observed,
+                )
+            )
     return mismatches

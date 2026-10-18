@@ -423,7 +423,10 @@ def test_funky_slap_bass_turnaround_bar_is_strictly_monophonic_with_kick_avoidan
 
 
 def test_openai_provider_aligns_structured_max_output_tokens_with_midi_schema(monkeypatch) -> None:
-    from kihachi_mcp.services.midi_composer import MAX_COMPOSED_MIDI_NOTES, midi_composition_schema
+    from kihachi_mcp.services.midi_composer import (
+        MAX_COMPOSED_MIDI_NOTES,
+        midi_composition_schema,
+    )
     from kihachi_mcp.services.studio_interpreter import STUDIO_SCHEMA
 
     captured_payloads: list[dict] = []
@@ -592,6 +595,7 @@ def test_midi_composer_cost_estimate_matches_structured_limit_and_guards_monthly
     tmp_path, monkeypatch
 ) -> None:
     import json
+
     from kihachi_mcp.services.ai_provider import _structured_max_output_tokens
     from kihachi_mcp.services.midi_composer import midi_composition_schema
 

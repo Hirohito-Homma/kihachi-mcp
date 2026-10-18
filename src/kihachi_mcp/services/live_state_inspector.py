@@ -42,7 +42,7 @@ class LiveStateInspector:
         self._transport: LiveTransport = transport or NullLiveTransport()
         self._next_request_id = request_id_factory or _incrementing_request_ids()
 
-    def health(self) -> dict[str, Any]:
+    def health(self, *, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Return a connection health report without touching the Set.
 
         This is the first thing to run after installing the device. It proves
@@ -50,7 +50,9 @@ class LiveStateInspector:
         """
         request_id = self._next_request_id()
         try:
-            result = self._exchange(METHOD_PING, request_id)
+            result = self._exchange(
+                METHOD_PING, request_id, timeout_seconds=timeout_seconds
+            )
         except LiveTransportError as exc:
             return {
                 "schema_version": SCHEMA_VERSION,
@@ -146,9 +148,15 @@ class LiveStateInspector:
         method: str,
         request_id: str,
         payload: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         message = build_message(method, request_id, payload)
-        response = self._transport.request(message)
+        if timeout_seconds is None:
+            response = self._transport.request(message)
+        else:
+            response = self._transport.request(
+                message, timeout_seconds=timeout_seconds
+            )
         return decode_response(response, request_id)
 
 

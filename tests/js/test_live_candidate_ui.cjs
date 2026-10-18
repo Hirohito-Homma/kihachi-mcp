@@ -2,7 +2,7 @@
  * Regression tests for Live Set Overview and Live-derived Candidate UI in index.html.
  *
  * Requirements tested:
- * 1. Overview API Live Set info is truthfully displayed from live_set object.
+ * 1. Overview API Live Set info is truthfully displayed, from the flat reply or a legacy live_set object.
  * 2. Overview failures / connection errors are displayed as failures without misleading info.
  * 3. Candidate generation errors (empty brief, >4000 chars, non-local AI) are clearly displayed.
  * 4. Successful candidate generation distinguishes between Live-filled tempo and user-specified tempo.
@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const html = fs.readFileSync('src/kihachi_mcp/studio/static/index.html', 'utf8');
+assert.ok(html.includes('const refreshHealth = singleFlight('), 'Health polling must coalesce in-flight requests');
 
 // Markup presence checks
 assert.ok(html.includes('id="live-overview-load"'), 'live-overview-load button missing');
@@ -67,7 +68,7 @@ function createMockEnv() {
   // Extract functions from html:
   // 1. live-overview-load
   const ovStart = html.indexOf("$('live-overview-load').onclick = async () => {");
-  const ovEnd = html.indexOf('    async function refreshHealth() {');
+  const ovEnd = html.indexOf('    function singleFlight(fn) {');
   assert.ok(ovStart > 0 && ovEnd > ovStart, 'Could not extract live-overview-load handler');
 
   // 2. generate-from-live
@@ -145,6 +146,73 @@ console.log('--- 1. Live Set Overview (/api/live/overview) ---');
     assert.ok(out.innerHTML.includes('Live は変更していません'), 'Truthful non-destructive notice');
     assert.ok(out.innerHTML.includes('キーは推定していません'), 'Key estimation prevented notice');
     console.log('  PASS: Successful overview renders accurate live_set facts');
+  });
+}
+
+{
+  // The flat shape GET /api/live/overview actually returns.
+  const env = createMockEnv();
+  env.setNextGet({
+    ok: true,
+    live_changed: false,
+    set_name: 'KIHACHI_TEST016',
+    tempo: 120.0,
+    time_signature: { numerator: 4, denominator: 4 },
+    tracks: [
+      { index: 0, name: '1-Audio', track_type: 'audio', device_names: ['KIHACHI Live Device'] },
+    ],
+    scenes: [{ index: 0, name: '', color: '' }],
+    note_counts_included: false,
+  });
+
+  const btn = env.nodes['live-overview-load'];
+  const out = env.nodes['live-overview'];
+
+  btn.onclick();
+  setImmediate(() => {
+    assert.equal(btn.disabled, false);
+    assert.ok(out.innerHTML.includes('KIHACHI_TEST016'), 'Set name must be shown');
+    assert.ok(out.innerHTML.includes('120 BPM'), 'Tempo must be shown');
+    assert.ok(!out.innerHTML.includes('? BPM'), 'Tempo must not fall back to ?');
+    assert.ok(out.innerHTML.includes('4/4拍子'), 'Meter object must render as 4/4');
+    assert.ok(out.innerHTML.includes('トラック 1'), 'Track count must match');
+    assert.ok(out.innerHTML.includes('シーン 1'), 'Scene count must come from scenes');
+    assert.ok(out.innerHTML.includes('1-Audio（audio）'), 'Track name and track_type displayed');
+    assert.ok(!out.innerHTML.includes('クリップ'), 'Clip count must not be invented when clips are not reported');
+    console.log('  PASS: Flat overview reply renders set name, tempo, meter, tracks and scenes');
+  });
+}
+
+{
+  // Flat reply with clip lists: clips are counted per track, Live strings are escaped.
+  const env = createMockEnv();
+  env.setNextGet({
+    ok: true,
+    live_changed: false,
+    set_name: '<img src=x onerror=alert(1)>',
+    tempo: 124,
+    time_signature: { numerator: 3, denominator: 4 },
+    tracks: [
+      { index: 0, name: 'Drums', track_type: 'midi' },
+      { index: 1, name: 'Pad', track_type: 'midi' },
+    ],
+    scenes: [],
+    session_clips: [{ track_index: 0, scene_index: 0, name: 'Beat' }],
+    arrangement_clips: [{ track_index: 0, name: 'Beat A' }, { track_index: 1, name: 'Pad A' }],
+  });
+
+  const btn = env.nodes['live-overview-load'];
+  const out = env.nodes['live-overview'];
+
+  btn.onclick();
+  setImmediate(() => {
+    assert.ok(out.innerHTML.includes('&lt;img src=x onerror=alert(1)&gt;'), 'Set name safely HTML escaped');
+    assert.ok(!out.innerHTML.includes('<img'), 'Raw markup from Live must not reach the DOM');
+    assert.ok(out.innerHTML.includes('3/4拍子'), 'Meter object rendered');
+    assert.ok(out.innerHTML.includes('シーン 0'), 'Empty scene list counted');
+    assert.ok(out.innerHTML.includes('Drums（midi / クリップ: 2）'), 'Session and Arrangement clips counted for Drums');
+    assert.ok(out.innerHTML.includes('Pad（midi / クリップ: 1）'), 'Arrangement clip counted for Pad');
+    console.log('  PASS: Flat overview reply escapes Live strings and counts clips per track');
   });
 }
 
@@ -310,3 +378,32 @@ console.log('--- 2. Live-derived Candidate Generation (/api/live/candidate) ---'
 setTimeout(() => {
   console.log('\nAll Live candidate UI regression tests passed successfully!');
 }, 50);
+
+{
+  const start = html.indexOf('    function singleFlight(fn) {');
+  const end = html.indexOf('    const refreshHealth = singleFlight', start);
+  assert.ok(start >= 0 && end > start, 'Could not extract singleFlight helper');
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(html.slice(start, end), context);
+
+  let calls = 0;
+  let release;
+  const wrapped = context.singleFlight(() => {
+    calls += 1;
+    if (calls > 1) return Promise.resolve('again');
+    return new Promise((resolve) => { release = resolve; });
+  });
+  const first = wrapped('first');
+  const second = wrapped('second');
+
+  setImmediate(async () => {
+    assert.equal(calls, 1, 'Concurrent health polls must share one request');
+    release('done');
+    assert.equal(await first, 'done');
+    assert.equal(await second, 'done');
+    assert.equal(await wrapped('third'), 'again');
+    assert.equal(calls, 2, 'A new request may start after the first completes');
+    console.log('  PASS: Concurrent health polls share one in-flight request');
+  });
+}

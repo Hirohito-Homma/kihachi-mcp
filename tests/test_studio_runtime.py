@@ -140,10 +140,12 @@ def test_kick_replacement_uses_compact_snapshot_for_plan_and_execute(
             super().__init__(FakeLiveSet(live_version="12.4.3", tempo=125))
             self.state_payloads: list[dict] = []
 
-        def request(self, message: dict) -> dict:
+        def request(
+            self, message: dict, *, timeout_seconds: float | None = None
+        ) -> dict:
             if message.get("method") == "get_state":
                 self.state_payloads.append(dict(message.get("payload") or {}))
-            return super().request(message)
+            return super().request(message, timeout_seconds=timeout_seconds)
 
     transport = RecordingTransport()
     runtime = StudioRuntime(
@@ -477,3 +479,287 @@ def test_skip_instruments_leaves_the_tracks_for_another_loader(tmp_path: Path) -
     assert len(kihachi) == len(candidate.parts)
     assert all(track["device_names"] == [] for track in kihachi)
     assert result["sound_coverage"]["has_missing_sounds"] is True
+
+
+def _expanded(tmp_path: Path, candidate_dir: Path | None = None):
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=candidate_dir)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is True, result
+    return runtime, candidate, transport
+
+
+def _arrangement_check(runtime: StudioRuntime, candidate_id: str) -> tuple[dict, dict]:
+    report = runtime.verify(candidate_id)
+    line = next(item for item in report["lines"] if item["name"] == "Arrangement")
+    return report, line
+
+
+def test_expansion_is_confirmed_by_a_second_independent_readback(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    reads_before = transport.request_count
+
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+
+    assert result["ok"] is True
+    assert result["execution_status"] == "verified"
+    assert result["receipt"]["status"] == "verified"
+    placements = len(_arrangement_placements(transport))
+    locators = len(transport.live_set.locators)
+    # preview read + execution read + one call per operation + fingerprint
+    # read after execution + the independent re-read.
+    assert transport.request_count - reads_before == placements + locators + 4
+
+
+def test_an_untouched_arrangement_passes_with_counts(tmp_path: Path) -> None:
+    runtime, candidate, _transport = _expanded(tmp_path)
+
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "PASS", line
+    assert f"クリップ {len(candidate.clips)} 個" in line["detail"]
+    assert f"ロケーター {len(candidate.brief.sections)} 個" in line["detail"]
+    assert report["status"] == "PROJECT READY"
+
+
+def _first_managed_clip(transport: FakeLiveTransport):
+    return min(_arrangement_placements(transport), key=lambda c: (c.track_index, c.start_beats))
+
+
+def test_a_renamed_arrangement_clip_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    clip = _first_managed_clip(transport)
+    original = clip.name
+    clip.name = "renamed by hand"
+
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"name: 計画 {original} / Live renamed by hand" in line["detail"]
+    assert report["status"] == "VERIFICATION FAILED"
+
+
+def test_a_moved_arrangement_clip_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    clip = _first_managed_clip(transport)
+    original = clip.start_beats
+    clip.start_beats = original + 0.5
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"start_beats: 計画 {original} / Live {original + 0.5}" in line["detail"]
+
+
+def test_a_shortened_arrangement_clip_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    clip = _first_managed_clip(transport)
+    original = clip.length_beats
+    clip.length_beats = original - 4.0
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"length_beats: 計画 {original} / Live {original - 4.0}" in line["detail"]
+
+
+def test_a_deleted_arrangement_clip_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    clip = _first_managed_clip(transport)
+    transport.live_set.arrangement_clips.remove(clip)
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"name: 計画 {clip.name} / Live なし" in line["detail"]
+
+
+def test_a_renamed_locator_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    locator = transport.live_set.locators[-1]
+    original = locator["name"]
+    locator["name"] = "my marker"
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"name: 計画 {original} / Live my marker" in line["detail"]
+
+
+def test_a_moved_locator_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    locator = transport.live_set.locators[-1]
+    original = locator["beats"]
+    locator["beats"] = original + 2.0
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"beats: 計画 {original} / Live {original + 2.0}" in line["detail"]
+
+
+def test_a_deleted_locator_fails(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    removed = transport.live_set.locators.pop()
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert f"name: 計画 {removed['name']} / Live なし" in line["detail"]
+
+
+def test_unreported_locators_are_unconfirmed_not_passed(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    transport.reports_locators = False
+
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert "未確認: Liveがロケーター一覧を返しません" in line["detail"]
+    assert report["ok"] is False
+
+
+def test_an_unreadable_arrangement_list_is_unconfirmed_not_passed(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    honest = transport.snapshot_payload
+
+    def damaged(options=None):
+        payload = honest(options)
+        # Lenient parsing reads None as beat 0.0, which is where the first
+        # clip really is; only the strict check stops it from matching.
+        first = min(payload["arrangement_clips"], key=lambda clip: clip["start_beats"])
+        assert first["start_beats"] == 0.0
+        first["start_beats"] = None
+        return payload
+
+    transport.snapshot_payload = damaged
+
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert "未確認: LiveがArrangementクリップ一覧を読める形で返しません" in line["detail"]
+    assert report["ok"] is False
+
+
+def test_a_duplicated_clip_cannot_stand_in_for_the_planned_one(tmp_path: Path) -> None:
+    from kihachi_mcp.services.live_transport_fake import FakeArrangementClip
+
+    runtime, candidate, transport = _expanded(tmp_path)
+    clip = _first_managed_clip(transport)
+    transport.live_set.arrangement_clips.append(
+        FakeArrangementClip(clip.track_index, clip.name, clip.start_beats, clip.length_beats)
+    )
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert "1 件は同じ名前・位置の候補が複数あり特定できません" in line["detail"]
+
+
+def test_an_expansion_without_its_record_is_not_passed(tmp_path: Path) -> None:
+    runtime, candidate, _transport = _expanded(tmp_path)
+    runtime._arrangement_records.clear()
+
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert "未確認: 展開時の計画と結果の記録がない" in line["detail"]
+    assert report["ok"] is False
+
+
+def test_the_arrangement_record_survives_a_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _runtime_before, candidate, transport = _expanded(tmp_path, candidate_dir=saved)
+    assert (saved / f"{candidate.candidate_id}.arrangement.json").is_file()
+
+    restarted = _restarted(tmp_path, transport, saved)
+    _report, line = _arrangement_check(restarted, candidate.candidate_id)
+
+    assert line["status"] == "PASS", line
+
+
+def test_expansion_reports_failure_when_the_independent_readback_cannot_confirm(
+    tmp_path: Path,
+) -> None:
+    runtime, candidate, _transport = _runtime(tmp_path, reports_locators=False)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+
+    assert result["execution_status"] == "verified"
+    assert result["ok"] is False
+    assert result["receipt"]["status"] == "verification_failed"
+    assert "did not report locators" in result["receipt"]["error"]
+    assert {item["field_name"] for item in result["receipt"]["mismatches"]} == {
+        "locators_reported"
+    }
+
+
+def test_a_partial_expansion_never_passes(tmp_path: Path) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    operations = runtime.arrangement_preview(candidate.candidate_id)["plan"]["operations"]
+    transport.failures[operations[1]["operation_id"]] = ("operation_failed", "simulated")
+
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+    report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert result["ok"] is False and result["partial"] is True
+    assert result["receipt"]["status"] == "partially_applied"
+    assert line["status"] == "FAIL"
+    assert line["detail"].startswith("展開は partially_applied で終わっています（成功 1 / 試行 2")
+    assert report["ok"] is False
+
+
+def test_a_record_that_cannot_be_saved_is_reported_and_never_passes_after_restart(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kihachi_mcp.services import studio_runtime
+
+    saved = tmp_path / "candidates"
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    runtime.apply(candidate.candidate_id, confirmed=True)
+    honest_write = studio_runtime._write_json_atomic
+
+    def failing_write(path, payload):
+        if path.name.endswith(".arrangement.json"):
+            raise OSError("disk full")
+        honest_write(path, payload)
+
+    monkeypatch.setattr(studio_runtime, "_write_json_atomic", failing_write)
+
+    result = runtime.expand_arrangement(candidate.candidate_id, confirmed=True)
+
+    assert result["ok"] is False
+    assert result["receipt"]["status"] == "verified"
+    assert "展開記録を保存できませんでした" in result["error"]
+    assert not (saved / f"{candidate.candidate_id}.arrangement.json").exists()
+    restarted = _restarted(tmp_path, transport, saved)
+    report, line = _arrangement_check(restarted, candidate.candidate_id)
+    assert line["status"] == "FAIL"
+    assert "未確認: 展開時の計画と結果の記録がない" in line["detail"]
+    assert report["ok"] is False
+
+
+def test_a_saved_record_without_its_marker_still_counts_as_expanded(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _before, candidate, transport = _expanded(tmp_path, candidate_dir=saved)
+    (saved / f"{candidate.candidate_id}.arranged").unlink()
+
+    restarted = _restarted(tmp_path, transport, saved)
+    _report, line = _arrangement_check(restarted, candidate.candidate_id)
+    again = restarted.expand_arrangement(candidate.candidate_id, confirmed=True)
+
+    assert line["status"] == "PASS", line
+    assert again["ok"] is False and "試行済み" in again["error"]
+
+
+def test_studio_readback_ignores_note_counts_live_does_not_report(tmp_path: Path) -> None:
+    runtime, candidate, transport = _expanded(tmp_path)
+    for clip in transport.live_set.arrangement_clips:
+        clip.note_count = 0
+
+    _report, line = _arrangement_check(runtime, candidate.candidate_id)
+
+    assert line["status"] == "PASS", line

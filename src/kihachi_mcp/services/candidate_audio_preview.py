@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -118,8 +119,8 @@ def candidate_preview_wav(
 
 def measure_preview_audio(audio_bytes: bytes) -> dict[str, Any]:
     """Measure loudness (LUFS), sample peak, clipping and silence of a preview WAV."""
-    import tempfile
     import math
+    import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
@@ -132,9 +133,9 @@ def measure_preview_audio(audio_bytes: bytes) -> dict[str, Any]:
         sample_peak = report.get("sample_peak_dbfs")
         true_peak = report.get("true_peak_dbtp")
         has_lufs = integrated_lufs is not None and not math.isinf(integrated_lufs)
-    except Exception:
+    except (OSError, RuntimeError, ValueError, ArithmeticError):
         # Fallback if audio is too short or measurement fails
-        data, rate = sf.read(BytesIO(audio_bytes), dtype="float32")
+        data, _rate = sf.read(BytesIO(audio_bytes), dtype="float32")
         sample_peak = round(20 * math.log10(max(float(np.max(np.abs(data))), 1e-9)), 2)
         true_peak = sample_peak
         integrated_lufs = None

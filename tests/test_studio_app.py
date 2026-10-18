@@ -11,10 +11,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+from live_fixtures import gate
 from test_studio_workflow import SMOKE_TEST, _studio
 
+from kihachi_mcp.services.live_transport import METHOD_GET_STATE
+from kihachi_mcp.services.live_transport_fake import (
+    FakeArrangementClip,
+    FakeLiveSet,
+    FakeLiveTransport,
+)
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.sample_catalog import SampleCatalog
+from kihachi_mcp.services.studio_runtime import StudioRuntime
 from kihachi_mcp.studio.app import STATIC_DIR, StudioApp, _handler_for
 
 
@@ -30,6 +38,52 @@ def studio(tmp_path: Path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield server.server_address[1], runtime, live
+    server.shutdown()
+    server.server_close()
+
+
+class _RecordingTransport(FakeLiveTransport):
+    """Remember the get_state flags each read asked for."""
+
+    def __init__(self, live_set: FakeLiveSet) -> None:
+        super().__init__(live_set)
+        self.get_state_options: list[dict] = []
+        self.bridge_timeouts: list[float | None] = []
+
+    def request(
+        self, message: dict, *, timeout_seconds: float | None = None
+    ) -> dict:
+        self.bridge_timeouts.append(timeout_seconds)
+        if message.get("method") == METHOD_GET_STATE:
+            self.get_state_options.append(dict(message.get("payload") or {}))
+        return super().request(message, timeout_seconds=timeout_seconds)
+
+
+@pytest.fixture()
+def default_studio(tmp_path: Path):
+    """A runtime built with its own inspectors, the way the Studio launches."""
+    live = FakeLiveSet(live_version="12.4.3", tempo=124)
+    live.add_track("Bass")
+    live.arrangement_clips.append(
+        FakeArrangementClip(track_index=0, name="Bass A", start_beats=0.0, length_beats=16.0)
+    )
+    transport = _RecordingTransport(live)
+    runtime = StudioRuntime(
+        transport=transport,
+        gate=gate(tmp_path),
+        export_dir=tmp_path / "exports",
+        candidate_dir=tmp_path / "candidates",
+    )
+    runtime.update_settings({"ai_provider": "deterministic"}, persist=False)
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=SampleCatalog(tmp_path / "samples.sqlite3"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server.server_address[1], runtime, transport
     server.shutdown()
     server.server_close()
 
@@ -103,6 +157,44 @@ def test_live_candidate_rejects_empty_or_excessive_brief(studio, monkeypatch) ->
 
     assert queued == []
     assert live.tracks == []
+
+
+def test_live_overview_reads_arrangement_with_default_inspectors(default_studio) -> None:
+    port, _runtime, _transport = default_studio
+    status, overview = _call(port, "GET", "/api/live/overview")
+    assert status == 200, overview
+    assert overview["ok"] is True
+    assert overview["live_changed"] is False
+    assert [clip["name"] for clip in overview["arrangement_clips"]] == ["Bass A"]
+    assert _transport.get_state_options == [
+        {"include_arrangement": True, "count_session_notes": False, "include_session_clips": True}
+    ]
+    assert _transport.applied_operation_ids == []
+
+
+def test_health_uses_a_short_live_ping_timeout(default_studio) -> None:
+    port, _runtime, transport = default_studio
+
+    status, health = _call(port, "GET", "/api/health")
+
+    assert status == 200
+    assert health["live"]["connected"] is True
+    assert transport.bridge_timeouts == [3.0]
+
+
+def test_live_candidate_reads_arrangement_with_default_inspectors(default_studio, monkeypatch) -> None:
+    port, runtime, transport = default_studio
+    received = []
+    monkeypatch.setattr(runtime, "queue_generate", lambda brief: received.append(brief) or {"ok": True, "started": True})
+    status, result = _call(port, "POST", "/api/live/candidate", {"brief": "D minor、8小節のテクノ"})
+    assert status == 200, result
+    assert result["ok"] is True
+    assert result["live_changed"] is False
+    assert received == ["124 BPM。D minor、8小節のテクノ"]
+    assert transport.get_state_options == [
+        {"include_arrangement": True, "count_session_notes": False, "include_session_clips": True}
+    ]
+    assert transport.applied_operation_ids == []
 
 
 def test_openai_connection_route_checks_saved_provider(studio, monkeypatch) -> None:
@@ -317,6 +409,54 @@ def test_full_studio_flow_over_http(studio) -> None:
     assert sent["verification"]["status"] == "PROJECT READY"
     _status, verified = _call(port, "POST", "/api/ableton/verify", {"candidate_id": child})
     assert verified["ok"] is True
+
+
+def _sent_and_arranged(port: int, runtime) -> tuple[str, dict]:
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    _call(port, "POST", "/api/approve", {"candidate_id": candidate_id})
+    _call(port, "POST", "/api/ableton/dry-run", {"candidate_id": candidate_id, "change_tempo": True})
+    _status, sent = _call(
+        port, "POST", "/api/ableton/send", {"candidate_id": candidate_id, "confirmed": True, "change_tempo": True}
+    )
+    assert sent["verification"]["status"] == "PROJECT READY"
+    _status, arranged = _call(port, "POST", "/api/arrangement", {"candidate_id": candidate_id, "confirmed": True})
+    return candidate_id, arranged
+
+
+def _arrangement_line_via_api(port: int, candidate_id: str) -> tuple[dict, dict]:
+    _status, report = _call(port, "POST", "/api/ableton/verify", {"candidate_id": candidate_id})
+    return report, next(line for line in report["lines"] if line["name"] == "Arrangement")
+
+
+def test_arrangement_api_reports_the_independent_readback(studio) -> None:
+    port, runtime, live = studio
+    candidate_id, arranged = _sent_and_arranged(port, runtime)
+
+    assert arranged["ok"] is True
+    assert arranged["execution_status"] == "verified"
+    assert arranged["receipt"]["status"] == "verified"
+    report, line = _arrangement_line_via_api(port, candidate_id)
+    assert line["status"] == "PASS"
+    assert report["status"] == "PROJECT READY"
+
+    original = live.locators[0]["name"]
+    live.locators[0]["name"] = "moved by hand"
+    report, line = _arrangement_line_via_api(port, candidate_id)
+    assert line["status"] == "FAIL"
+    assert f"name: 計画 {original} / Live moved by hand" in line["detail"]
+    assert report["ok"] is False and report["status"] == "VERIFICATION FAILED"
+
+
+def test_arrangement_api_never_passes_locators_live_did_not_report(studio) -> None:
+    port, runtime, _live = studio
+    candidate_id, _arranged = _sent_and_arranged(port, runtime)
+    runtime._transport.reports_locators = False
+
+    report, line = _arrangement_line_via_api(port, candidate_id)
+
+    assert line["status"] == "FAIL"
+    assert line["detail"].startswith("未確認: Liveがロケーター一覧を返しません")
+    assert report["ok"] is False
 
 
 def test_bad_bar_range_is_a_readable_error(studio) -> None:

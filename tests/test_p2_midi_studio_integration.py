@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-import soundfile as sf
+
 import pytest
+import soundfile as sf
 
 from kihachi_mcp.models.midi_candidate import MidiCandidate
 from kihachi_mcp.services.brief_parser import extract_explicit
@@ -43,7 +44,7 @@ def test_candidate_preview_wav_loudness_normalized(mock_candidate: MidiCandidate
     # Full preview
     wav_all = candidate_preview_wav(mock_candidate, part_filter="all")
     assert len(wav_all) > 100
-    data_all, rate = sf.read(io.BytesIO(wav_all), dtype="float32")
+    data_all, _rate = sf.read(io.BytesIO(wav_all), dtype="float32")
     peak_all = float(abs(data_all).max())
     assert 0.80 <= peak_all <= 0.86, f"Peak not normalized: {peak_all}"
 
@@ -133,8 +134,12 @@ def test_groove_generation_preserves_parent_and_creates_new_candidate(tmp_path: 
 
     # Generate new candidate with groove adjustment (58% swing, 0.85 syncopation)
     import uuid
+
     from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-    from kihachi_mcp.models.midi_composer import MidiCompositionRequest, MusicalConstraints
+    from kihachi_mcp.models.midi_composer import (
+        MidiCompositionRequest,
+        MusicalConstraints,
+    )
     from kihachi_mcp.services.midi_composer import DeterministicMIDIComposer
     from kihachi_mcp.services.session_pattern_builder import MidiNote
 

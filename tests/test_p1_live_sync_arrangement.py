@@ -1,14 +1,9 @@
-# -*- coding: utf-8 -*-
 """P1 Test Suite: Live Set synchronization, 37-track audit, and strict Dry Run integrity verification."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import sys
-from typing import Any
-
-import pytest
+from pathlib import Path
 
 # Ensure kihachi_mcp is importable
 TESTS_DIR = Path(__file__).resolve().parent
@@ -19,7 +14,6 @@ from live_fixtures import gate
 
 from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-from kihachi_mcp.models.production_brief import ProductionBrief
 from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import LiveStateInspector
@@ -106,7 +100,7 @@ def _setup_runtime(
 def test_p1_task1_live_set_identification_and_unknown(tmp_path: Path) -> None:
     """Verify Live Set name retrieval and UNKNOWN fallback when name is empty."""
     # Case A: Live Set name is known
-    runtime1, live_set1, _, candidate1 = _setup_runtime(
+    runtime1, _live_set1, _, candidate1 = _setup_runtime(
         tmp_path / "c1", set_name="Mutant Dub Circuit"
     )
     cid1 = candidate1.candidate_id
@@ -118,7 +112,7 @@ def test_p1_task1_live_set_identification_and_unknown(tmp_path: Path) -> None:
     assert diff1["candidate_id"] == cid1
 
     # Case B: Live Set name is empty -> must be UNKNOWN
-    runtime2, live_set2, _, candidate2 = _setup_runtime(
+    runtime2, _live_set2, _, candidate2 = _setup_runtime(
         tmp_path / "c2", set_name=""
     )
     cid2 = candidate2.candidate_id
@@ -133,7 +127,7 @@ def test_p1_task1_live_set_identification_and_unknown(tmp_path: Path) -> None:
 # -----------------------------------------------------------------------------
 def test_p1_send_refused_without_dry_run(tmp_path: Path) -> None:
     """Requirement 1: Refuse write if Dry Run was never executed."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path)
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path)
     cid = candidate.candidate_id
     runtime.approve(cid)
     assert runtime.is_approved(cid) is True
@@ -194,7 +188,7 @@ def test_p1_send_refused_when_dry_run_unknown(tmp_path: Path) -> None:
 
 def test_p1_send_refused_when_candidate_modified_after_dry_run(tmp_path: Path) -> None:
     """Requirement 3 & 5: Refuse write if candidate content_hash changed after Dry Run."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path)
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path)
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -255,7 +249,7 @@ def test_p1_send_refused_when_live_state_modified_after_dry_run(tmp_path: Path) 
 
 def test_p1_send_refused_when_apply_options_mismatch(tmp_path: Path) -> None:
     """Requirement 5 & 6: Refuse write if apply options differ from Dry Run options."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path)
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path)
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -271,7 +265,7 @@ def test_p1_send_refused_when_apply_options_mismatch(tmp_path: Path) -> None:
 
 def test_p1_send_conditions_established_on_dry_run_pass(tmp_path: Path) -> None:
     """Requirement 7: Verify write conditions pass and execute safely when all preconditions match."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path)
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path)
     cid = candidate.candidate_id
     runtime.approve(cid)
 

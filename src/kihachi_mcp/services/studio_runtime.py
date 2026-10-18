@@ -20,9 +20,13 @@ from kihachi_mcp.knowledge.part_sounds import (
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_MIDI_TRACK,
+    LiveContractError,
     canonical_hash,
     managed_track_name,
 )
+from kihachi_mcp.models.live_mutation import LiveMutationPlan
+from kihachi_mcp.models.live_receipt import LiveExecutionReceipt
+from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
     ComposedMidiNote,
@@ -195,6 +199,7 @@ class StudioRuntime:
             request_id_factory=_unique_request_ids(),
         )
         self._arranged_ids: set[str] = set()
+        self._arrangement_records: dict[str, dict[str, Any]] = {}
         # Core Library kits need Live's browser, which only a Remote Script can
         # reach. The Studio uses AbletonGPT's when it is selected in Live.
         self._kit_loader = kit_loader or (AbletonGPTKitLoader() if start_bridge else None)
@@ -1040,10 +1045,22 @@ class StudioRuntime:
             receipt = self._arrangement_executor.execute(
                 plan, approved=True, approval_token=token
             )
-            return {
-                "ok": receipt.status == "verified",
+            record_error = ""
+            try:
+                self._remember_arrangement(candidate_id, plan, receipt)
+            except OSError as exc:
+                record_error = (
+                    f"展開記録を保存できませんでした（{exc}）。"
+                    "Studioを再起動するとArrangementを照合できません"
+                )
+            # A second, independent read of Live; the first readback only
+            # proves what each operation's own reply said.
+            checked = self._arrangement_executor.verify(plan, receipt)
+            result = {
+                "ok": checked.status == "verified" and not record_error,
                 "candidate_id": candidate_id,
-                "receipt": receipt.to_dict(),
+                "receipt": checked.to_dict(),
+                "execution_status": receipt.status,
                 "partial": receipt.status == "partially_applied",
                 "musical_quality_claimed": False,
                 "verified_means": (
@@ -1051,14 +1068,22 @@ class StudioRuntime:
                     "音楽的な良し悪しは含みません"
                 ),
             }
+            if record_error:
+                result["error"] = record_error
+            return result
         finally:
             self._apply_lock.release()
 
     def _arranged(self, candidate_id: str) -> bool:
         if candidate_id in self._arranged_ids:
             return True
-        path = self._candidate_path(candidate_id, ".arranged")
-        return path is not None and path.is_file()
+        return any(
+            path is not None and path.is_file()
+            for path in (
+                self._candidate_path(candidate_id, ".arranged"),
+                self._candidate_path(candidate_id, ".arrangement.json"),
+            )
+        )
 
     def last_apply(self) -> dict[str, Any] | None:
         """Return the most recent apply result."""
@@ -1377,7 +1402,7 @@ class StudioRuntime:
                 else:
                     record = {"candidate_id": candidate_id, "legacy": True}
                 self._approval_records[candidate_id] = record
-            except Exception:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 self.invalidate_approval(candidate_id, "corrupted_approval_file")
                 return False
 
@@ -1453,7 +1478,7 @@ class StudioRuntime:
                     data["delivery_status"] = "UNKNOWN"
                     data["recovered_from_crash"] = True
                 return data
-            except Exception:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 return None
         return None
 
@@ -1463,9 +1488,7 @@ class StudioRuntime:
             return True
         audit = self.get_delivery_status(candidate_id)
         status = audit.get("delivery_status")
-        if status in ("PARTIAL", "UNKNOWN", "VERIFIED"):
-            return True
-        return False
+        return status in ("PARTIAL", "UNKNOWN", "VERIFIED")
 
     def get_delivery_status(self, candidate_id: str) -> dict[str, Any]:
         """Return the delivery and recovery audit status for a candidate, restoring from disk if needed."""
@@ -1782,7 +1805,6 @@ class StudioRuntime:
             "operations_count": operations,
             "conflicts": all_conflicts,
             "warnings": (preview or {}).get("warnings") or [],
-            "safe_to_deliver": safe_to_deliver,
             "blockers": blockers,
             "live_tracks_audit": (
                 track_mapping.get("live_tracks_audit", []) if track_mapping else []
@@ -1982,7 +2004,7 @@ class StudioRuntime:
         }
         try:
             self._save_delivery_audit(candidate_id, applying_record)
-        except Exception as exc:
+        except (OSError, TypeError, ValueError) as exc:
             # If persistence fails, refuse write immediately to prevent untracked mutations
             return {
                 "ok": False,
@@ -2037,7 +2059,7 @@ class StudioRuntime:
         }
         try:
             self._save_delivery_audit(candidate_id, final_audit_record)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             self._delivery_audit_records[candidate_id] = final_audit_record
 
         result["delivery_status"] = delivery_status
@@ -2067,12 +2089,14 @@ class StudioRuntime:
         except LiveVersionUnsupportedError as exc:
             return {"ok": False, "status": "EXTERNAL VERIFICATION REQUIRED", "error": str(exc), "lines": []}
         expected = self._load_expected(candidate_id)
+        arranged = self._arranged(candidate_id)
         report = readback_verification(
             candidate,
             snapshot,
             (expected or {}).get("tracks"),
             tempo_changed=bool((expected or {}).get("change_tempo")),
-            arranged=self._arranged(candidate_id),
+            arranged=arranged,
+            arrangement=self._load_arrangement(candidate_id) if arranged else None,
         )
         report["candidate_id"] = candidate_id
         report["checked_at"] = time.time()
@@ -2087,6 +2111,38 @@ class StudioRuntime:
         path = self._candidate_path(candidate_id, ".expected.json")
         if path is not None:
             _write_json_atomic(path, record)
+
+    def _remember_arrangement(
+        self,
+        candidate_id: str,
+        plan: LiveMutationPlan,
+        receipt: LiveExecutionReceipt,
+    ) -> None:
+        record = {"plan": plan.to_dict(), "receipt": receipt.to_dict()}
+        self._arrangement_records[candidate_id] = record
+        path = self._candidate_path(candidate_id, ".arrangement.json")
+        if path is not None:
+            _write_json_atomic(path, record)
+
+    def _load_arrangement(
+        self, candidate_id: str
+    ) -> tuple[LiveMutationPlan, LiveExecutionReceipt] | None:
+        record = self._arrangement_records.get(candidate_id)
+        path = self._candidate_path(candidate_id, ".arrangement.json")
+        if record is None and path is not None and path.is_file():
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+        if not isinstance(record, dict):
+            return None
+        try:
+            return (
+                LiveMutationPlan.from_dict(record["plan"]),
+                LiveExecutionReceipt.from_dict(record["receipt"]),
+            )
+        except (KeyError, TypeError, ValueError, LiveContractError):
+            return None
 
     def _load_expected(self, candidate_id: str) -> dict[str, Any] | None:
         if candidate_id in self._expected:
@@ -2676,7 +2732,7 @@ class StudioRuntime:
                 "message": "Liveブリッジが起動していません",
             }
         try:
-            report = self._inspector.health()
+            report = self._inspector.health(timeout_seconds=3.0)
         except Exception as exc:  # noqa: BLE001 - health must never raise to the UI
             return {
                 "connected": False,

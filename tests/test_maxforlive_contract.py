@@ -112,6 +112,15 @@ def test_drum_chain_loading_with_liveapi_model() -> None:
     subprocess.run([node, str(fixture)], check=True, timeout=10)
 
 
+def test_get_state_reports_locators_only_when_it_reads_the_arrangement() -> None:
+    """An omitted list must stay distinguishable from a Set with no locators."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable for the Max JavaScript smoke test")
+    fixture = Path(__file__).with_name("maxforlive_locator_state_smoke.js")
+    subprocess.run([node, str(fixture)], check=True, timeout=10)
+
+
 def test_node_bridge_uses_raw_loopback_udp() -> None:
     source = BRIDGE_SOURCE.read_text(encoding="utf-8")
     assert 'require("dgram")' in source

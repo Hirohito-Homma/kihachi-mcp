@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P2 Pre-Integration Verification Test Suite.
 
 Covers:
@@ -21,15 +20,8 @@ Covers:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
-import threading
-import time
-from typing import Any
-import urllib.request
-import urllib.error
-
-import pytest
+from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -109,7 +101,7 @@ def test_task1_studio_ui_api_flow(tmp_path: Path) -> None:
 
     dry run diff report, and invalidation upon Live fingerprint mutation.
     """
-    app, runtime, live_set = _create_app(tmp_path, set_name="")  # set_name empty -> UNKNOWN
+    _app, runtime, live_set = _create_app(tmp_path, set_name="")  # set_name empty -> UNKNOWN
     candidate = _make_candidate("p2candui001")
     runtime._store(candidate)
     cid = candidate.candidate_id
@@ -200,7 +192,7 @@ def test_task2_crash_recovery_flow(tmp_path: Path) -> None:
     )
 
     # 2. Restart Studio runtime (new instance reading candidate_dir)
-    app, runtime, live_set = _create_app(tmp_path, set_name="Recovery Set")
+    _app, runtime, _live_set = _create_app(tmp_path, set_name="Recovery Set")
 
     # 3. Verify restoration as UNKNOWN with crash recovery marker
     audit = runtime.get_delivery_status(cid)

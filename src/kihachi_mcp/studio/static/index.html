@@ -1799,12 +1799,25 @@
           output.textContent = (result && result.error) || 'Live を読み取れませんでした。';
           return;
         }
-        const liveSet = result.live_set || {};
-        const tracks = liveSet.tracks || [];
-        const trackNames = tracks.map((track) => `<li>${escapeHtml(track.name || '名称なし')}（${escapeHtml(track.kind || '不明')} / クリップ: ${track.clip_count ?? 0}）</li>`).join('');
+        // The API answers flat (set_name, tempo, tracks, scenes); older replies nested them in live_set.
+        const liveSet = result.live_set || result;
+        const tracks = Array.isArray(liveSet.tracks) ? liveSet.tracks : [];
+        const meter = liveSet.time_signature;
+        const meterText = meter && typeof meter === 'object'
+          ? `${meter.numerator ?? '?'}/${meter.denominator ?? '?'}`
+          : (meter || '?');
+        const sceneCount = Array.isArray(liveSet.scenes) ? liveSet.scenes.length : (liveSet.scene_count ?? 0);
+        const clipLists = [liveSet.session_clips, liveSet.arrangement_clips].filter(Array.isArray);
+        const clipCount = (track) => track.clip_count ?? (clipLists.length
+          ? clipLists.reduce((sum, clips) => sum + clips.filter((clip) => clip.track_index === track.index).length, 0)
+          : null);
+        const trackNames = tracks.map((track) => {
+          const clips = clipCount(track);
+          return `<li>${escapeHtml(track.name || '名称なし')}（${escapeHtml(track.track_type || track.kind || '不明')}${clips === null ? '' : ` / クリップ: ${clips}`}）</li>`;
+        }).join('');
         const changedNotice = result.live_changed ? '（警告: Liveが変更されました）' : 'Live は変更していません。';
-        output.innerHTML = `<p><b>Live Set</b> — ${escapeHtml(liveSet.tempo ?? '?')} BPM / ${escapeHtml(liveSet.time_signature || '4/4')}拍子</p>
-          <p>トラック ${tracks.length}、シーン ${liveSet.scene_count ?? 0}。ノート数は取得していません。${changedNotice}</p>
+        output.innerHTML = `<p><b>Live Set</b> ${escapeHtml(liveSet.set_name || '名称未設定')} — ${escapeHtml(liveSet.tempo ?? '?')} BPM / ${escapeHtml(meterText)}拍子</p>
+          <p>トラック ${tracks.length}、シーン ${sceneCount}。ノート数は取得していません。${changedNotice}</p>
           ${tracks.length > 0 ? `<details><summary>トラック一覧（${tracks.length}）</summary><ul>${trackNames}</ul></details>` : ''}
           <p class="sub">テンポ・拍子・トラック名のみ読み取りました。ノート内容・キーは推定していません。Live は変更していません。</p>`;
       } catch {
@@ -1814,7 +1827,18 @@
         button.disabled = false;
       }
     };
-    async function refreshHealth() {
+    function singleFlight(fn) {
+      let pending = null;
+      return (...args) => {
+        if (pending) return pending;
+        pending = Promise.resolve().then(() => fn(...args)).finally(() => {
+          pending = null;
+        });
+        return pending;
+      };
+    }
+
+    const refreshHealth = singleFlight(async () => {
       const health = await getJson("/api/health");
       if (!health.statuses) return health;
       for (const item of health.statuses) {
@@ -1827,7 +1851,7 @@
       setPill("job-pill", job.state === "done" ? true : job.state === "error" || job.state === "cancelled" ? false : null, "生成: " + job.state);
       if ($('jarvis-live')) renderJarvisConnections(health);
       return health;
-    }
+    });
 
     function sourceLabel(item) {
       return { user: "指定", ai: "AI補完", default: "既定", genre: "ジャンル基準" }[item.source] || item.source;
@@ -2358,12 +2382,12 @@
       });
       const s = result.summary || {};
       $("arrange-summary").innerHTML = `
-        ${result.error ? `<p class="bad">${result.error}</p>` : ""}
-        <p>対象Set: ${s.set_name || "（未保存）"} / クリップ ${s.clip_count || 0} 個 / ${s.bars || 0} 小節</p>
-        <p>ロケーター: ${(s.locators || []).join(", ") || "なし"}</p>
+        ${result.error ? `<p class="bad">${esc(result.error)}</p>` : ""}
+        <p>対象Set: ${esc(s.set_name || "（未保存）")} / クリップ ${esc(s.clip_count || 0)} 個 / ${esc(s.bars || 0)} 小節</p>
+        <p>ロケーター: ${esc((s.locators || []).join(", ") || "なし")}</p>
         ${s.already_expanded ? `<p class="bad">この候補はすでに展開を試行済みです</p>` : ""}
-        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
-        <ul>${(result.warnings || []).map((x) => `<li class="warn">${x}</li>`).join("")}</ul>
+        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${esc(x.detail)}</li>`).join("")}</ul>
+        <ul>${(result.warnings || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul>
       `;
       $("arrange").disabled = !(result.ok && !s.already_expanded);
     };
@@ -2380,9 +2404,11 @@
       state.applying = false;
       const receipt = result.receipt || {};
       $("arrange-result").innerHTML = `
-        <p>結果: <b>${receipt.status || ""}</b>${result.error ? ` <span class="bad">${result.error}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
-        <p>${result.verified_means || ""}</p>
+        <p>結果: <b>${esc(receipt.status || "")}</b>${result.error ? ` <span class="bad">${esc(result.error)}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
+        ${receipt.error ? `<p class="bad">${esc(receipt.error)}</p>` : ""}
+        <p>${esc(result.verified_means || "")}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+        <ul>${(receipt.mismatches || []).map((m) => `<li class="warn">${esc(m.operation_id)} ${esc(m.field_name)}: 計画 ${esc(JSON.stringify(m.expected))} / Live ${esc(JSON.stringify(m.observed))}</li>`).join("")}</ul>
       `;
     };
 

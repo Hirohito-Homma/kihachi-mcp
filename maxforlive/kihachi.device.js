@@ -374,7 +374,7 @@ function readState(options) {
     var includeArrangement = !options || options.include_arrangement !== false;
     var countSessionNotes = !options || options.count_session_notes !== false;
     var includeSessionClips = !options || options.include_session_clips !== false;
-    return {
+    var state = {
         schema_version: SCHEMA_VERSION,
         live_version: liveVersionString(),
         set_name: String(getProperty(song, "name") || ""),
@@ -393,6 +393,11 @@ function readState(options) {
         devices: readDevices(),
         master_device_names: readMasterDevices()
     };
+    /* Omitted, never empty, when not read: an empty list means "no locators". */
+    if (includeArrangement) {
+        state.locators = readLocatorSummary();
+    }
+    return state;
 }
 
 function readMasterDevices() {

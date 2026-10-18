@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import traceback
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +49,7 @@ from kihachi_mcp.studio import reference_routes
 HOST = "127.0.0.1"
 PORT = 8765
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOGGER = logging.getLogger(__name__)
 
 
 class StudioApp:
@@ -80,8 +82,12 @@ class StudioApp:
             try:
                 data = json.loads(self._eval_path.read_text("utf-8"))
                 return data if isinstance(data, dict) else {}
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                LOGGER.warning(
+                    "Could not load Studio evaluations from %s",
+                    self._eval_path,
+                    exc_info=True,
+                )
         return {}
 
     def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> None:
@@ -89,8 +95,12 @@ class StudioApp:
         try:
             self._eval_path.parent.mkdir(parents=True, exist_ok=True)
             self._eval_path.write_text(json.dumps(self._evaluations, ensure_ascii=False, indent=2), "utf-8")
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning(
+                "Could not save Studio evaluations to %s",
+                self._eval_path,
+                exc_info=True,
+            )
 
     def hold_music_plan(
         self,
@@ -369,11 +379,7 @@ def _handler_for(app: StudioApp):
                     self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
                     return
                 try:
-                    snapshot = runtime._inspector.snapshot(
-                        include_arrangement=True,
-                        count_session_notes=False,
-                        include_session_clips=True,
-                    )
+                    snapshot = runtime._arrangement_inspector.snapshot()
                 except Exception as exc:  # noqa: BLE001 - report read failures without a retry
                     self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
                     return
@@ -390,6 +396,9 @@ def _handler_for(app: StudioApp):
                     "arrangement_clips": [clip.to_dict() for clip in snapshot.arrangement_clips],
                     "note_counts_included": False,
                 })
+                return
+            if parsed.path == "/api/approvals":
+                self._send_json(app.pending_actions())
                 return
             if parsed.path == "/api/dialogue/voice/status":
                 self._send_json(voice_status())
@@ -459,7 +468,9 @@ def _handler_for(app: StudioApp):
                         part_filter=part_filter,
                         swing_override=swing_override,
                     )
-                    from kihachi_mcp.services.candidate_audio_preview import measure_preview_audio
+                    from kihachi_mcp.services.candidate_audio_preview import (
+                        measure_preview_audio,
+                    )
                     metrics = measure_preview_audio(wav_data)
                     metrics["candidate_id"] = candidate.candidate_id
                     metrics["content_hash"] = candidate.note_fingerprint
@@ -534,8 +545,15 @@ def _handler_for(app: StudioApp):
                     return
                 import time as _time
                 import uuid as _uuid
-                from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-                from kihachi_mcp.models.midi_composer import MidiCompositionRequest, MusicalConstraints
+
+                from kihachi_mcp.models.midi_candidate import (
+                    CandidateClip,
+                    MidiCandidate,
+                )
+                from kihachi_mcp.models.midi_composer import (
+                    MidiCompositionRequest,
+                    MusicalConstraints,
+                )
                 from kihachi_mcp.services.midi_composer import DeterministicMIDIComposer
                 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
@@ -874,11 +892,7 @@ def _handler_for(app: StudioApp):
                     self._send_json({"ok": False, "error": "Liveからの候補生成はローカルAI設定で実行してください"}, 400)
                     return
                 try:
-                    snapshot = runtime._inspector.snapshot(
-                        include_arrangement=True,
-                        count_session_notes=False,
-                        include_session_clips=True,
-                    )
+                    snapshot = runtime._arrangement_inspector.snapshot()
                     context = brief_from_live(snapshot, str(body.get("brief") or ""))
                 except ValueError as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)

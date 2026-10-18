@@ -103,7 +103,7 @@ CI と `uv run pytest` は fake transport のみを使います。**Ableton Live
 - [ ] Locator が指定小節に作られている
 - [ ] Arrangement Clip が指定小節範囲に置かれている
 - [ ] 既存の Arrangement Clip が移動・トリムされていない
-- [ ] 意図的に既存 Clip と重なる範囲を要求 → `blocked` になり、既存が保持される
+- [x] 意図的に既存 Clip と重なる範囲をプレビュー → `blocked`。既存 Clip の状態保持を読戻し確認（2026-10-18、下記記録）
 
 **弱点**: 既存配置への影響が大きい段階です。必ずテスト専用 Set で先に確認してください。
 
@@ -126,3 +126,18 @@ CI と `uv run pytest` は fake transport のみを使います。**Ableton Live
 ### 記録
 
 実施したら、日付・Live バージョン・OS・各段階の結果を残してください。実施していない段階は「未検証」と明記してください。部分成功を完全成功として報告しないでください。
+
+#### 2026-10-18 実機確認（段階9・10）
+
+- Live: Ableton Live 12.4.5。テスト Set: `KIHACHI_TEST016`（120 BPM、4/4）。OS バージョン: 未確認。
+- デバイス: User Library に更新版 `kihachi.device.js` を導入し、Locator 一覧の読み取りに対応していることを確認。
+- Session 適用: 12 トラック、58 クリップ、1616 MIDI ノート。Live の読戻しは verified。
+- 段階9 Arrangement 展開: verified（64/64 操作成功）。Live 画面で12トラックのクリップとセクション配置を目視確認。Locator は Intro 1小節、Build 5小節、Drop 9小節、Break 17小節、Drop 21小節、Outro 29小節。
+- 段階10 読戻し: Tempo、Tracks、Clips、Notes、Arrangement がすべて PASS。Arrangement は58クリップ・6 Locator が計画どおり（1〜32小節）。
+- Locator 改名検出: 1小節目の Intro Locator を一時改名し、Arrangement が FAIL、計画名と Live 名の不一致が表示されることを確認。その後計画名 `Intro d9e778c9 [KIHACHI]` に戻し、再読戻しで全項目 PASS に復帰。
+- Set はユーザー申告により保存完了。再生・試聴は未実施。
+
+#### 2026-10-18 既存 Clip との衝突プレビュー確認
+
+- 既存 Arrangement Clip の衝突拒否（preview）: `KIHACHI_TEST017` のトラック index 1・1小節目にユーザーが1小節の一時 MIDI Clip を配置。候補 `f6a6001cc36648949a56c4cca81691ca` の読み取り専用プレビューが `blocked`、`arrangement_range_occupied`、計画操作 0 件を返した。前後の Live 読戻しで Arrangement Clip は1件のまま、開始位置 0 beats・長さ 4 beats で保持されていることを確認。KIHACHI はLiveへ書き込んでいない。
+- 未実施: Live 終了後の unavailable 判定、音楽的な聴感評価、衝突状態での execute API 呼出し。今回は preview が0件の操作を計画して `blocked` にしたため、実機への送信経路は呼んでいない。段階9・10以外の手順書上の全項目を完了したとは扱わない。

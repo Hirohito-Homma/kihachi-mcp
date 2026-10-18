@@ -16,6 +16,7 @@ the token lifecycle so the secret never has to be typed into Max.
 
 import json
 import logging
+import math
 import os
 import secrets
 import socket
@@ -216,7 +217,9 @@ class LocalhostBridgeTransport:
             )
         return self._channel
 
-    def request(self, message: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
         """Send one message to the Max device and return its raw reply.
 
         The session token is attached here, so no caller above the transport
@@ -241,9 +244,20 @@ class LocalhostBridgeTransport:
                 f"{self._max_request_bytes} byte loopback limit; "
                 "split the plan into smaller operations",
             )
+        request_timeout = self._timeout
+        if timeout_seconds is not None:
+            try:
+                requested_timeout = float(timeout_seconds)
+            except (TypeError, ValueError) as exc:
+                raise LiveTransportError(ERROR_TIMEOUT, "timeout must be positive") from exc
+            if not math.isfinite(requested_timeout) or requested_timeout <= 0:
+                raise LiveTransportError(ERROR_TIMEOUT, "timeout must be positive")
+            request_timeout = min(self._timeout, requested_timeout)
         with self._io_lock:
             channel = self._ensure_channel()
-            return self._exchange_locked(channel, request_id, payload, message)
+            return self._exchange_locked(
+                channel, request_id, payload, message, request_timeout
+            )
 
     def _exchange_locked(
         self,
@@ -251,6 +265,7 @@ class LocalhostBridgeTransport:
         request_id: str,
         payload: bytes,
         message: dict[str, Any],
+        timeout_seconds: float,
     ) -> dict[str, Any]:
         self._seen_request_ids.add(request_id)
         _logger.info(
@@ -262,13 +277,13 @@ class LocalhostBridgeTransport:
             },
         )
         channel.send(payload)
-        deadline = time.monotonic() + self._timeout
+        deadline = time.monotonic() + timeout_seconds
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LiveTransportError(
                     ERROR_TIMEOUT,
-                    f"the Max for Live device did not reply within {self._timeout:g}s",
+                    f"the Max for Live device did not reply within {timeout_seconds:g}s",
                 )
             raw = channel.receive(remaining)
             try:

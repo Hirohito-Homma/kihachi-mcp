@@ -73,11 +73,23 @@ class AudioLive:
             store = self.arrangement if params["view"] == "arrangement" else self.session
             return {"clips": list(store.get(params["track_index"], []))}
         if command == "import_audio_clip":
-            clip = {"location": "session", "index": 0, "warping": self.warping}
+            clip = {
+                "location": "session",
+                "index": 0,
+                "warping": self.warping,
+                "file_path": params["file_path"],
+            }
             self.session.setdefault(params["track_index"], []).append(clip)
             return {"clip_index": 0, "length": 4.0}
         if command == "copy_session_clip_to_arrangement":
-            clip = {"location": "arrangement", "index": 0, "is_audio_clip": True, "warping": True}
+            session_clip = self.session[params["track_index"]][params["clip_index"]]
+            clip = {
+                "location": "arrangement",
+                "index": 0,
+                "is_audio_clip": True,
+                "warping": True,
+                "file_path": session_clip["file_path"],
+            }
             self.arrangement.setdefault(params["track_index"], []).append(clip)
             return {"is_audio_clip": True}
         raise AssertionError(command)
@@ -229,6 +241,66 @@ def test_warped_audio_is_copied_and_unwarped_audio_is_not(
     configure_ableton_client(playing)
     assert place_indexed_sample(sample_id, title="SONG", role="fx", confirm=True)["status"] == "blocked"
     assert playing.calls == ["get_state"]
+    configure_ableton_client(None)
+
+
+def test_sample_placement_refuses_a_different_sample_in_the_existing_session_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "splice"
+    _wav(root / "fx_impact_a_oneshot.wav")
+    _wav(root / "fx_impact_b_oneshot.wav")
+    _isolate(monkeypatch, tmp_path, root)
+    index_library()
+    sample_ids = {item["filename"]: item["sample_id"] for item in search_indexed(role="fx")}
+    assert len(sample_ids) == 2
+
+    live = AudioLive(warping=True)
+    configure_ableton_client(live)
+    first = place_indexed_sample(
+        sample_ids["fx_impact_a_oneshot.wav"], title="SAMPLE TEST", role="fx", confirm=True
+    )
+    assert first["ok"] is True
+    imports_before = live.calls.count("import_audio_clip")
+
+    refused = place_indexed_sample(
+        sample_ids["fx_impact_b_oneshot.wav"], title="SAMPLE TEST", role="fx", confirm=True
+    )
+    assert refused["ok"] is False
+    assert refused["status"] == "FAILED"
+    assert refused["arrangement"] == "SKIPPED"
+    assert live.calls.count("import_audio_clip") == imports_before
+    configure_ableton_client(None)
+
+
+def test_sample_placement_refuses_a_different_sample_already_in_arrangement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "splice"
+    first_path = root / "fx_impact_a_oneshot.wav"
+    second_path = root / "fx_impact_b_oneshot.wav"
+    _wav(first_path)
+    _wav(second_path)
+    _isolate(monkeypatch, tmp_path, root)
+    index_library()
+    sample_ids = {item["filename"]: item["sample_id"] for item in search_indexed(role="fx")}
+
+    live = AudioLive(warping=True)
+    configure_ableton_client(live)
+    placed = place_indexed_sample(
+        sample_ids[first_path.name], title="SAMPLE TEST", role="fx", confirm=True
+    )
+    assert placed["ok"] is True
+    track_index = placed["track_index"]
+    live.arrangement[track_index][0]["file_path"] = str(second_path)
+    copies_before = live.calls.count("copy_session_clip_to_arrangement")
+
+    refused = place_indexed_sample(
+        sample_ids[first_path.name], title="SAMPLE TEST", role="fx", confirm=True
+    )
+    assert refused["ok"] is False
+    assert refused["arrangement"] == "FAILED"
+    assert live.calls.count("copy_session_clip_to_arrangement") == copies_before
     configure_ableton_client(None)
 
 

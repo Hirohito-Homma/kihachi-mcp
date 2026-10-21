@@ -6,6 +6,7 @@ unwarped audio, and this gateway has no command that turns warping on.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from kihachi_mcp.gateway.calls import invoke
@@ -78,7 +79,7 @@ def place_indexed_sample(
             "error": imported or import_status,
             "arrangement": "SKIPPED",
         }
-    arranged, arrange_status = _ensure_arrangement(track_index, track_name)
+    arranged, arrange_status = _ensure_arrangement(track_index, track_name, audio)
     body = {
         "ok": arrange_status == "ok",
         "status": "SUCCESS" if arrange_status == "ok" else "FAILED",
@@ -94,7 +95,7 @@ def place_indexed_sample(
     return body
 
 
-def _ensure_session_clip(track_index: int, audio: object, name: str) -> tuple[str | None, str]:
+def _ensure_session_clip(track_index: int, audio: Path, name: str) -> tuple[str | None, str]:
     current, error = invoke(
         "get_audio_clip_paths",
         timeout=_READ_TIMEOUT,
@@ -105,6 +106,8 @@ def _ensure_session_clip(track_index: int, audio: object, name: str) -> tuple[st
         return error, "failed"
     existing = _clip_at(current, "session", 0)
     if existing:
+        if not _same_file(existing.get("file_path"), audio):
+            return "Session スロット 0 には別のサンプルがあります", "failed"
         return None, "ok"
     imported, import_error = invoke(
         "import_audio_clip",
@@ -116,10 +119,19 @@ def _ensure_session_clip(track_index: int, audio: object, name: str) -> tuple[st
     )
     if import_error or imported is None:
         return import_error or "unconfirmed", "failed"
+    read_back, read_error = invoke(
+        "get_audio_clip_paths",
+        timeout=_READ_TIMEOUT,
+        track_index=track_index,
+        view="session",
+    )
+    clip = _clip_at(read_back, "session", 0)
+    if read_error or clip is None or not _same_file(clip.get("file_path"), audio):
+        return read_error or "Session スロット 0 のサンプルを読み戻せません", "failed"
     return None, "ok"
 
 
-def _ensure_arrangement(track_index: int, name: str) -> tuple[str | None, str]:
+def _ensure_arrangement(track_index: int, name: str, audio: Path) -> tuple[str | None, str]:
     session, error = invoke(
         "get_audio_clip_paths",
         timeout=_READ_TIMEOUT,
@@ -139,8 +151,15 @@ def _ensure_arrangement(track_index: int, name: str) -> tuple[str | None, str]:
     )
     if arrange_error:
         return arrange_error, "failed"
-    if _arranged(arranged):
-        return None, "ok"
+    if not isinstance(arranged, dict) or not isinstance(arranged.get("clips"), list):
+        return "Arrangement の既存クリップを読めません", "failed"
+    existing = _arranged_clip(arranged)
+    if existing is not None:
+        if _same_file(existing.get("file_path"), audio):
+            return None, "ok"
+        return "Arrangement に別サンプルのクリップが既にあります", "failed"
+    if arranged and arranged.get("clips"):
+        return "Arrangement の既存クリップを識別できません", "failed"
     copied, copy_error = invoke(
         "copy_session_clip_to_arrangement",
         timeout=_WRITE_TIMEOUT,
@@ -151,6 +170,15 @@ def _ensure_arrangement(track_index: int, name: str) -> tuple[str | None, str]:
     )
     if copy_error or copied is None or not copied.get("is_audio_clip"):
         return copy_error or "unconfirmed", "failed"
+    read_back, read_error = invoke(
+        "get_audio_clip_paths",
+        timeout=_READ_TIMEOUT,
+        track_index=track_index,
+        view="arrangement",
+    )
+    clip = _arranged_clip(read_back)
+    if read_error or clip is None or not _same_file(clip.get("file_path"), audio):
+        return read_error or "Arrangement のサンプルを読み戻せません", "failed"
     return None, "ok"
 
 
@@ -166,10 +194,26 @@ def _clip_at(payload: dict[str, Any] | None, location: str, index: int) -> dict[
     return None
 
 
-def _arranged(payload: dict[str, Any] | None) -> bool:
+def _arranged_clip(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not payload or not isinstance(payload.get("clips"), list):
+        return None
+    return next(
+        (
+            clip
+            for clip in payload["clips"]
+            if isinstance(clip, dict) and clip.get("location") == "arrangement"
+        ),
+        None,
+    )
+
+
+def _same_file(reported: Any, audio: Path) -> bool:
+    if not isinstance(reported, str) or not reported:
         return False
-    return any(isinstance(clip, dict) and clip.get("location") == "arrangement" for clip in payload["clips"])
+    try:
+        return Path(reported).resolve() == audio.resolve()
+    except OSError:
+        return False
 
 
 def _failed(detail: str) -> dict[str, Any]:

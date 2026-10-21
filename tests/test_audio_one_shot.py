@@ -154,6 +154,7 @@ class NormalLive:
         self.copy_params: list[dict[str, Any]] = []
         self.tracks: list[dict[str, Any]] = []
         self.session: dict[int, list[dict[str, Any]]] = {}
+        self.arrangement: dict[int, list[dict[str, Any]]] = {}
 
     def call(self, command: str, timeout: float, **params: Any) -> dict[str, Any]:
         self.calls.append(command)
@@ -164,7 +165,8 @@ class NormalLive:
             self.tracks.append(track)
             return track
         if command == "get_audio_clip_paths":
-            return {"clips": list(self.session.get(params["track_index"], []))}
+            store = self.arrangement if params["view"] == "arrangement" else self.session
+            return {"clips": list(store.get(params["track_index"], []))}
         if command == "import_audio_clip":
             clip = {
                 "location": "session",
@@ -176,6 +178,14 @@ class NormalLive:
             return {"clip_index": 0}
         if command == "copy_session_clip_to_arrangement":
             self.copy_params.append(params)
+            session_clip = self.session[params["track_index"]][params["clip_index"]]
+            self.arrangement.setdefault(params["track_index"], []).append(
+                {
+                    "location": "arrangement",
+                    "index": 0,
+                    "file_path": session_clip["file_path"],
+                }
+            )
             return {"is_audio_clip": True, "warping": True}
         raise AssertionError(command)
 

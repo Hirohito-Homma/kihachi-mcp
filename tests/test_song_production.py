@@ -105,6 +105,7 @@ class FakeLive:
                 "length_beats": clip["length"],
                 "notes": [dict(note) for note in clip["notes"]],
                 "note_count": len(clip["notes"]),
+                "notes_fingerprint": "v1:" + "0" * 64,
                 "truncated": False,
             }
         if command == "create_midi_clip":
@@ -122,6 +123,8 @@ class FakeLive:
             clip = self.session[key]
             if params.get("expected_source_note_count") != len(clip["notes"]):
                 raise AbletonCommandError("source MIDI clip note count changed before apply")
+            if params.get("expected_source_notes_fingerprint") != "v1:" + "0" * 64:
+                raise AbletonCommandError("source MIDI clip notes changed before apply")
             clip["notes"] = [dict(note) for note in params["notes"]]
             return {"note_count": len(clip["notes"]), "source_note_count": params["expected_source_note_count"]}
         if command == "get_arrangement_clips":

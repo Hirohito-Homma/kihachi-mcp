@@ -202,6 +202,14 @@ def ableton_add_notes(
         return _failed("ableton_error")
     if not isinstance(source_count, int) or isinstance(source_count, bool) or source_count != len(existing):
         return _rejected("ノート数を確認できないので追加しません")
+    notes_fingerprint = current.get("notes_fingerprint")
+    if (
+        not isinstance(notes_fingerprint, str)
+        or len(notes_fingerprint) != 67
+        or not notes_fingerprint.startswith("v1:")
+        or any(char not in "0123456789abcdef" for char in notes_fingerprint[3:])
+    ):
+        return _failed("AbletonGPT が有効なノート指紋を返さないので追加しません")
     if any(note["start"] >= float(length) for note in incoming):
         return _rejected("start がクリップの長さを超えています")
     if len(existing) + len(incoming) > MAX_NOTES_PER_CLIP:
@@ -227,6 +235,7 @@ def ableton_add_notes(
         notes=merged,
         allow_note_count_change=True,
         expected_source_note_count=source_count,
+        expected_source_notes_fingerprint=notes_fingerprint,
     )
     if apply_error or applied is None:
         return _failed(apply_error or "unconfirmed")

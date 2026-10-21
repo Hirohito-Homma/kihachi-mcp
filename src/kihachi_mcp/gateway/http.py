@@ -74,7 +74,36 @@ class GatewayGuard:
                 extra=[(b"www-authenticate", b'Bearer realm="kihachi-mcp"')],
             )
             return
-        await self.app(scope, receive, send)
+        # Content-Length is only an early rejection hint. Count the actual
+        # streamed bytes as well so chunked or dishonest requests cannot
+        # bypass the configured cap.
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self.settings.max_body_bytes:
+                logger.info(
+                    "http_rejected",
+                    extra={"event": "http_rejected", "reason": "request_too_large"},
+                )
+                await _json(send, 413, {"error": "request_too_large"})
+                return
+            body.extend(chunk)
+            if not message.get("more_body", False):
+                break
+
+        replayed = False
+
+        async def replay_receive() -> dict[str, object]:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
 def http_middleware(settings: GatewaySettings) -> list[Middleware]:

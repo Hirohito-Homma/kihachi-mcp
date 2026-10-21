@@ -1892,7 +1892,7 @@
         if (x.genre_default && x.genre_default.length) parts.push(...x.genre_default);
         if (x.out_of_scope && x.out_of_scope.length) parts.push(...x.out_of_scope);
         const detail = parts.length ? `（${parts.join("、")}）` : "";
-        return `<li><span class="${cls}">${label}</span> ${x.text}<span class="sub">${detail}</span></li>`;
+        return `<li><span class="${esc(cls)}">${esc(label)}</span> ${esc(x.text)}<span class="sub">${esc(detail)}</span></li>`;
       }).join("");
     }
 
@@ -1912,17 +1912,17 @@
         ["長さ", brief.duration_minutes.toFixed(2) + " 分"],
         ["ムード", (brief.mood.value || "なし") + " (" + sourceLabel(brief.mood) + ")"],
         ["ドロップ", brief.drop_start_bar.value || "なし"]
-      ].map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
-      $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>";
+      ].map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+      $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${esc(x)}</li>`).join("") || "<li>なし</li>";
       renderCoverageList(coverage);
       const filled = ((coverage && coverage.model_filled) || []).map((x) =>
-        `<li>${x.label} = ${x.value}${x.affects_notes ? "" : ' <span class="warn">（今は音に影響しません）</span>'}</li>`);
+        `<li>${esc(x.label)} = ${esc(x.value)}${x.affects_notes ? "" : ' <span class="warn">（今は音に影響しません）</span>'}</li>`);
       $("filled").innerHTML = filled.join("") || "<li>AIが補った値はありません</li>";
       const extra = [].concat(brief.unhandled || [], brief.contradictions || [], brief.ambiguous || []);
-      $("unhandled").innerHTML = extra.map((x) => `<li>${x}</li>`).join("") || "<li>未対応の指示はありません</li>";
+      $("unhandled").innerHTML = extra.map((x) => `<li>${esc(x)}</li>`).join("") || "<li>未対応の指示はありません</li>";
       $("candidate-meta").textContent = `候補 ${candidate.candidate_id.slice(0, 8)} / seed ${candidate.seed} / ノート ${candidate.note_counts.total}`;
-      $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
-      $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${clip.part}</td><td>${clip.section_name}</td><td>${clip.start_bar}–${clip.start_bar + clip.length_bars - 1}</td><td>${clip.note_count}</td></tr>`).join("");
+      $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+      $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${esc(clip.part)}</td><td>${esc(clip.section_name)}</td><td>${esc(clip.start_bar)}–${esc(clip.start_bar + clip.length_bars - 1)}</td><td>${esc(clip.note_count)}</td></tr>`).join("");
       $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
       const peak = brief.sections.find((section) => ["Drop", "ChorusA"].includes(section.name)) || brief.sections[0];
       const listenBars = Math.min(8, peak.length_bars);

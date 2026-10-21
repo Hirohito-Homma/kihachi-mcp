@@ -1868,6 +1868,9 @@
     };
 
     function renderCoverageList(coverage) {
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[char]);
       if (!coverage) {
         $("coverage-line").textContent = "";
         $("coverage").innerHTML = "";
@@ -1892,7 +1895,7 @@
         if (x.genre_default && x.genre_default.length) parts.push(...x.genre_default);
         if (x.out_of_scope && x.out_of_scope.length) parts.push(...x.out_of_scope);
         const detail = parts.length ? `（${parts.join("、")}）` : "";
-        return `<li><span class="${esc(cls)}">${esc(label)}</span> ${esc(x.text)}<span class="sub">${esc(detail)}</span></li>`;
+        return `<li><span class="${escapeHtml(cls)}">${escapeHtml(label)}</span> ${escapeHtml(x.text)}<span class="sub">${escapeHtml(detail)}</span></li>`;
       }).join("");
     }
 

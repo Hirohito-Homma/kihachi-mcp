@@ -14,7 +14,7 @@ from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
 from kihachi_mcp.services.studio_interpreter import assemble_brief
 from kihachi_mcp.services.studio_runtime import StudioRuntime
-from kihachi_mcp.studio.app import StudioApp
+from kihachi_mcp.studio.app import StudioApp, _groove_role_for_part
 
 
 @pytest.fixture
@@ -147,9 +147,7 @@ def test_groove_generation_preserves_parent_and_creates_new_candidate(tmp_path: 
     composer = DeterministicMIDIComposer(seed=999)
     new_clips = []
     for clip in mock_candidate.clips:
-        role = "drums" if clip.part in {"Kick", "Snare", "Hats", "OpenHat"} else clip.part.lower()
-        if role not in {"drums", "bass", "chords"}:
-            role = "drums"
+        role = _groove_role_for_part(clip.part)
         c = MusicalConstraints(
             key=mock_candidate.brief.key.value,
             tempo=int(mock_candidate.brief.tempo.value),
@@ -194,3 +192,18 @@ def test_groove_generation_preserves_parent_and_creates_new_candidate(tmp_path: 
     assert stored_parent is not None
     assert stored_parent.candidate_id == parent_id
     assert stored_parent.note_fingerprint == parent_fingerprint
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        "Kick", "Snare", "Hats", "OpenHat", "Perc", "FX", "Sub", "Bass",
+        "Stab", "Pad", "Guitar", "Horn", "Lead", "Arp", "Vocal",
+    ],
+)
+def test_groove_regeneration_preserves_supported_studio_part_roles(part: str) -> None:
+    assert _groove_role_for_part(part) == part
+
+
+def test_groove_regeneration_falls_back_for_unknown_part_role() -> None:
+    assert _groove_role_for_part("Unknown Part") == "drums"

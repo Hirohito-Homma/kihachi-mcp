@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from kihachi_mcp.models.live_contract import OP_CREATE_MIDI_TRACK, STATUS_VERIFIED
 from kihachi_mcp.models.live_mutation import LiveMutationPlan
+from kihachi_mcp.models.midi_composer import MIDI_ROLES
 from kihachi_mcp.models.music_plan import MusicPlan
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
@@ -50,6 +51,11 @@ HOST = "127.0.0.1"
 PORT = 8765
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOGGER = logging.getLogger(__name__)
+
+
+def _groove_role_for_part(part: str) -> str:
+    """Keep supported Studio part roles intact when regenerating a groove."""
+    return part if part in MIDI_ROLES else "drums"
 
 
 class StudioApp:
@@ -568,9 +574,7 @@ def _handler_for(app: StudioApp):
                 composer = DeterministicMIDIComposer(seed=new_seed)
 
                 for clip in base.clips:
-                    engine_role = "drums" if clip.part in {"Kick", "Snare", "Hats", "OpenHat"} else clip.part.lower()
-                    if engine_role not in {"drums", "bass", "chords"}:
-                        engine_role = "drums"
+                    engine_role = _groove_role_for_part(clip.part)
                     c = MusicalConstraints(
                         key=base.brief.key.value,
                         tempo=int(base.brief.tempo.value),

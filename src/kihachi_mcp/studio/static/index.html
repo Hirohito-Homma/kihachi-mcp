@@ -1860,6 +1860,8 @@
     const COVERAGE_STATES = {
       read: ["反映", "ok"],
       partly_read: ["一部のみ", "warn"],
+      unverified: ["認識済み・適用未確認", "warn"],
+      declined: ["否定として認識（変更なし）", "ok"],
       genre_default: ["ジャンル既定で含む", "warn"],
       out_of_scope: ["対象外", "warn"],
       unread: ["未反映", "bad"]
@@ -1872,13 +1874,24 @@
         return;
       }
       const clauses = coverage.clauses || [];
-      const unread = clauses.filter((x) => x.state === "unread").length;
-      $("coverage-line").textContent = unread
-        ? `${clauses.length} 文のうち ${unread} 文は規則で読めず、音に反映されていない可能性が高いです`
-        : `${clauses.length} 文すべてに、規則で読めた部分があります`;
+      const unreadCount = clauses.filter((x) => x.state === "unread").length;
+      const unverifiedCount = clauses.filter((x) => x.state === "unverified").length;
+      if (unreadCount) {
+        $("coverage-line").textContent = `${clauses.length} 文のうち ${unreadCount} 文は規則で読めず、音に反映されていない可能性が高いです`;
+      } else if (unverifiedCount) {
+        $("coverage-line").textContent = `${clauses.length} 文のうち ${unverifiedCount} 文は認識済みですが、構成への適用は未確認です`;
+      } else {
+        $("coverage-line").textContent = `${clauses.length} 文すべてに、規則で読めた部分があります`;
+      }
       $("coverage").innerHTML = clauses.map((x) => {
         const [label, cls] = COVERAGE_STATES[x.state] || [x.state, ""];
-        const detail = x.read_as.length ? `（${x.read_as.join("、")}）` : x.out_of_scope.length ? `（${x.out_of_scope.join("、")}）` : "";
+        const parts = [];
+        if (x.read_as && x.read_as.length) parts.push(...x.read_as);
+        if (x.unverified && x.unverified.length) parts.push(...x.unverified.map((u) => u + "（適用未確認）"));
+        if (x.unapplied && x.unapplied.length) parts.push(...x.unapplied.map((u) => u + "（未反映）"));
+        if (x.genre_default && x.genre_default.length) parts.push(...x.genre_default);
+        if (x.out_of_scope && x.out_of_scope.length) parts.push(...x.out_of_scope);
+        const detail = parts.length ? `（${parts.join("、")}）` : "";
         return `<li><span class="${cls}">${label}</span> ${x.text}<span class="sub">${detail}</span></li>`;
       }).join("");
     }

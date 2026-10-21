@@ -513,6 +513,7 @@ def _handler_for(app: StudioApp):
                             candidate.brief.original_text,
                             model_filled_fields(candidate.brief),
                             str(candidate.brief.genre.value),
+                            brief=candidate.brief,
                         ),
                         "evaluation": app._evaluations.get(candidate_id, {}),
                     }

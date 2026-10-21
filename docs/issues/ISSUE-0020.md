@@ -1,6 +1,6 @@
 # ISSUE-0020 — Ableton Live 自動操作へ移行し Google Lyria を廃止
 
-Status: 完了（**実機未検証**）
+Status: 完了（**実機部分確認済み。全手順は未検証**）
 
 ADR: [adr/0006-ableton-live-automation.md](../adr/0006-ableton-live-automation.md)
 
@@ -81,7 +81,7 @@ KIHACHI MUSIC AI の成果物を「生成済み音声」から「編集可能な
 
 ## 未完了部分
 
-1. **実機未検証。** Ableton Live 実機および Max for Live 実機での実行は行っていません。[MANUAL_LIVE_TESTS.md](../MANUAL_LIVE_TESTS.md) を人間が実行するまで実機動作は主張できません。
+1. **実機確認は部分的です。** 2026-10-18 に Live 12.4.5 で Arrangement 展開・読戻しと読み取り専用の衝突プレビューを確認しました。段階1〜8を含む手順全体、Live 停止後の `unavailable`、再生・試聴、衝突範囲への execute は未確認です。確認範囲と証跡は [MANUAL_LIVE_TESTS.md](../MANUAL_LIVE_TESTS.md) を参照してください。未確認の動作を実機確認済みとは扱いません。
 2. **`.amxd` バイナリなし。** Max の独自バイナリ形式をテキストから正しく生成できないため、偽のデバイスファイルを置きませんでした。JavaScript ソース、プロトコル仕様、パッケージ化手順を提供しています。
 3. **`load_live_device` は実機未検証。** ISSUE-0023でLive 12.3以降の公式 `Track.insert_device` へ移行しました。コードと契約テストは完了していますが、実機での挿入と読戻しは未確認です。Live 11〜12.2では計画段階で拒否します。
 4. **`save_live_set` は未実装。** 設計のみ [ISSUE-0021](ISSUE-0021.md) に文書化しています。

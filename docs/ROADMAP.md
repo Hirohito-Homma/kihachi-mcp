@@ -150,7 +150,7 @@ VST3 / AU / CLAP は現在スコープ外です。将来対応する場合は明
 
 ### ISSUE-0023 — Live純正デバイスローダー（コード完了、実機未検証）
 
-Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側の非公式ブラウザー配線は不要です。Live 11〜12.2ではロード可能一覧を無効化して計画段階で拒否します。コードと契約テストは完了していますが、実機確認は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) の段階8が終わるまで未検証です。
+Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側の非公式ブラウザー配線は不要です。Live 11〜12.2ではロード可能一覧を無効化して計画段階で拒否します。コードと契約テストは完了していますが、実機確認は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) の段階8が終わるまで未検証です。[issues/ISSUE-0023.md](issues/ISSUE-0023.md)。
 
 ### さらに先
 
@@ -177,10 +177,4 @@ Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側
 
 ## 長期フェーズ
 
-[VISION.md](VISION.md) の Phase 1–6。いまは Phase 2（Ableton Integration）。**実機未検証。**
-
-### ISSUE-0007 — DAW Adapter
-
-- ProjectPlan を AbletonProjectPlan へ変換
-- TrackSpec を Ableton track、Arrangement を locator へ変換
-- Live操作やMIDI生成は行わない
+[VISION.md](VISION.md) の Phase 1–6。いまは Phase 2（Ableton Integration）。**実機は部分確認のみ。** Live 12.4.5 での Arrangement 展開・読戻しと、読み取り専用の衝突プレビューを確認しました。段階8、Live 停止後の `unavailable`、再生・試聴、衝突状態での execute は未確認です（[MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md)）。

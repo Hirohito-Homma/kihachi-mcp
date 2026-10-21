@@ -104,6 +104,8 @@ def place_audio_one_shot(
         return _stopped(event, "FAILED", before_error or "arrangement_unreadable")
     existing = _clip_at_beat(before.get("clips"), destination)
     if existing is not None:
+        if not _same_file(existing.get("file_path"), audio):
+            return _stopped(event, "rejected", "arrangement_sample_mismatch")
         return _skip(event, existing, state)
     copied, copy_error = invoke(
         "copy_session_clip_to_arrangement",

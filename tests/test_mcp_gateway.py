@@ -144,6 +144,32 @@ def test_stdio_does_not_require_a_token() -> None:
     assert settings.host == "127.0.0.1"
 
 
+def test_max_body_setting_accepts_documented_byte_limit_and_rejects_invalid_values() -> None:
+    settings = load_settings(environ={"KIHACHI_MCP_MAX_BODY_BYTES": "1048576"})
+    assert settings.max_body_bytes == 1_048_576
+    assert load_settings(environ={}).max_body_bytes == 1_048_576
+    for invalid in ("0", "-1", "not-a-number"):
+        with pytest.raises(GatewayConfigError):
+            load_settings(environ={"KIHACHI_MCP_MAX_BODY_BYTES": invalid})
+
+
+def test_production_http_start_forwards_allowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kihachi_mcp.gateway.serve import serve_http
+    from kihachi_mcp.server import mcp
+
+    captured: dict[str, Any] = {}
+
+    def run(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(mcp, "run", run)
+    settings = _http_settings(
+        KIHACHI_MCP_ALLOWED_ORIGINS="https://studio.example,https://admin.example"
+    )
+    serve_http(settings)
+    assert captured["allowed_origins"] == ["https://studio.example", "https://admin.example"]
+
+
 def test_cli_rejects_a_public_mcp_host(capsys: pytest.CaptureFixture[str]) -> None:
     from kihachi_mcp.cli import main
 

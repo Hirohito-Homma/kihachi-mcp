@@ -54,6 +54,7 @@ def serve_http(settings: GatewaySettings) -> None:
         stateless_http=settings.stateless_http,
         host_origin_protection="auto",
         allowed_hosts=list(settings.allowed_hosts) or None,
+        allowed_origins=list(settings.allowed_origins) or None,
     )
 
 

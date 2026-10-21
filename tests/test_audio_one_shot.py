@@ -282,6 +282,23 @@ def test_sample_id_path_escape_identity_confirm_and_partial_failure(
     assert again["idempotency"] == "verified"
     assert live.calls.count("copy_session_clip_to_arrangement") == 1
 
+    collision = OneShotLive()
+    sample_id = _ready(tmp_path, monkeypatch, collision)
+    collision.arrangement.append(
+        {
+            "location": "arrangement",
+            "name": "unrelated.wav",
+            "start_time": 0.0,
+            "end_time": 0.5,
+            "file_path": str(tmp_path / "other.wav"),
+        }
+    )
+    refused = _place(sample_id)
+    assert refused["status"] == "rejected"
+    assert refused["error"] == "arrangement_sample_mismatch"
+    assert refused.get("idempotency") != "verified"
+    assert "copy_session_clip_to_arrangement" not in collision.calls
+
     partial = OneShotLive(fail="Live did not create exactly one Arrangement clip")
     sample_id = _ready(tmp_path, monkeypatch, partial)
     failed = _place(sample_id)

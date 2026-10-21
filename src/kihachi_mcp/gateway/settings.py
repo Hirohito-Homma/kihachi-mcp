@@ -96,7 +96,7 @@ def load_settings(
         DEFAULT_ABLETON_TIMEOUT_SECONDS,
         "Ableton のタイムアウト",
     )
-    max_body = _port(
+    max_body = _positive_int(
         env.get("KIHACHI_MCP_MAX_BODY_BYTES"),
         DEFAULT_MAX_BODY_BYTES,
         "リクエストサイズ上限",
@@ -149,6 +149,18 @@ def _positive_float(raw: str | None, default: float, label: str) -> float:
         return default
     try:
         value = float(raw)
+    except ValueError as exc:
+        raise GatewayConfigError(f"{label} が数値ではありません") from exc
+    if value <= 0:
+        raise GatewayConfigError(f"{label} は正の数にしてください")
+    return value
+
+
+def _positive_int(raw: str | None, default: int, label: str) -> int:
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
     except ValueError as exc:
         raise GatewayConfigError(f"{label} が数値ではありません") from exc
     if value <= 0:

@@ -27,7 +27,7 @@
 ## 実機試聴結果（Ableton Live）
 
 ### 1. ベース・サブの段階変化（A vs B）
-- 試聴環境: `/Volumes/NO NAME/MUSIC AI/kihachi-mcp-codex-work/scratch/candidate_eval/AB_Comparison Project/AB_Comparison.als`
+- 試聴環境: `AB_Comparison Project/AB_Comparison.als`（この記録ディレクトリ内）
 - 配置: 12トラック（1〜96小節: 候補A、101〜196小節: 候補B）
 - ユーザー評価: **候補Bの方が良い（候補Bの段階的なBass/Sub展開を正式採用）**
 
@@ -40,7 +40,7 @@
   - E: 401〜496小節 + 497〜592小節（後半クリップの545〜592小節は空）
   - F: 601〜696小節 + 697〜792小節（後半クリップの745〜792小節は空）
 - クリップ名は複製元の `[A] <Part>` のまま（名前変更の手段がないため）
-- 候補JSON（リポジトリ外）: E `c9fb43f066bc4c238f5d0ced0b980546.json`、F `89f35706a97c434ca9432633cc258fae.json`（`/Users/user/.gemini/antigravity/brain/92e8ec50-715d-4ae8-9e2c-540288f5df2f/scratch/candidate_eval/`）
+- 候補JSON: `source_candidates/E.json`（元ID `c9fb43f066bc4c238f5d0ced0b980546`）、`source_candidates/F.json`（元ID `89f35706a97c434ca9432633cc258fae`）。リポジトリ内コピーのSHA-256はそれぞれ `73434790f2360b148c0e39eff707492b1a0e929167087e871fc42cf24f1d4602`、`9fe58ed7d207b7afd6f2c2cba1a95a37685ca63e9d518721cc5e2f6135a0a41f`
 - Live読み戻し: 全パートのノート数が候補JSONと一致（`live_placement_ef_verified.json`）。照合したのはノート数のみで、音高・位置・ベロシティは照合していない
 - 未保存: ディスク上の `AB_Comparison.als`（2026-10-21 23:48保存）はMIDIトラックを含まない（オーディオトラック2本のみ）。A〜Fの配置はディスク上のSetに保存されていない。Liveメモリ上の現在状態は未確認
 - 73〜76小節（E: 473〜476、F: 673〜676）のノート数（E→F）:

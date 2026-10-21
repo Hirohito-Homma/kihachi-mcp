@@ -53,9 +53,10 @@ def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, root: Path | None)
 
 
 class AudioLive:
-    def __init__(self, *, warping: bool = True, playing: bool = False) -> None:
+    def __init__(self, *, warping: bool = True, playing: bool = False, fail_arrangement_readback: bool = False) -> None:
         self.warping = warping
         self.playing = playing
+        self.fail_arrangement_readback = fail_arrangement_readback
         self.calls: list[str] = []
         self.tracks: list[dict[str, Any]] = []
         self.session: dict[int, list[dict[str, Any]]] = {}
@@ -70,6 +71,8 @@ class AudioLive:
             self.tracks.append(track)
             return track
         if command == "get_audio_clip_paths":
+            if params["view"] == "arrangement" and self.fail_arrangement_readback:
+                return {"clips": []}
             store = self.arrangement if params["view"] == "arrangement" else self.session
             return {"clips": list(store.get(params["track_index"], []))}
         if command == "import_audio_clip":
@@ -301,6 +304,29 @@ def test_sample_placement_refuses_a_different_sample_already_in_arrangement(
     assert refused["ok"] is False
     assert refused["arrangement"] == "FAILED"
     assert live.calls.count("copy_session_clip_to_arrangement") == copies_before
+    configure_ableton_client(None)
+
+
+def test_sample_placement_reports_partial_change_when_arrangement_readback_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "splice"
+    _wav(root / "fx_impact_a_oneshot.wav")
+    _isolate(monkeypatch, tmp_path, root)
+    index_library()
+    sample_id = search_indexed(role="fx")[0]["sample_id"]
+
+    live = AudioLive(warping=True, fail_arrangement_readback=True)
+    configure_ableton_client(live)
+    result = place_indexed_sample(sample_id, title="SAMPLE TEST", role="fx", confirm=True)
+
+    assert result["status"] == "FAILED"
+    assert result["partial"] is True
+    assert result["live_changed"] is True
+    assert result["session"] == "SUCCESS"
+    assert result["arrangement"] == "FAILED"
+    assert len(live.tracks) == 1
+    assert len(live.session[0]) == 1
     configure_ableton_client(None)
 
 

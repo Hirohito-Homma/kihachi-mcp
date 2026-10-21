@@ -390,13 +390,29 @@ def test_track_clip_and_note_tools_validate_before_calling() -> None:
     assert clip["ok"] is True
     assert clip["note_count"] == 3
     assert clip["arrangement"]["start_time"] == 0.0
+    source_notes = fake.session[(1, 0)]["notes"]
+    source_notes[0].update(
+        probability=0.65,
+        velocity_deviation=-12.0,
+        release_velocity=42.0,
+        mute=True,
+    )
     added = ableton_add_notes(
-        [{"pitch": 36, "start": 3, "duration": 0.2, "velocity": 80}, {"pitch": 38, "start": 3.5, "duration": 0.1, "velocity": 70}],
+        [
+            {"pitch": 36, "start": 3, "duration": 0.2, "velocity": 80, "probability": 0.4},
+            {"pitch": 38, "start": 3.5, "duration": 0.1, "velocity": 70},
+        ],
         track_name="KICK",
         confirm=True,
     )
     assert added["note_count"] == 5
     assert added["source_note_count"] == 3
+    written_notes = fake.session[(1, 0)]["notes"]
+    assert written_notes[0]["probability"] == 0.65
+    assert written_notes[0]["velocity_deviation"] == -12.0
+    assert written_notes[0]["release_velocity"] == 42.0
+    assert written_notes[0]["mute"] is True
+    assert written_notes[3]["probability"] == 0.4
     assert ableton_add_notes([{"pitch": True, "start": 0, "duration": 0.2, "velocity": 80}], track_name="KICK", confirm=True)["status"] == "rejected"
     assert ableton_set_volume(1.5, track_name="KICK", confirm=True)["status"] == "rejected"
     assert ableton_set_pan(1.2, track_name="KICK", confirm=True)["status"] == "rejected"

@@ -224,6 +224,10 @@ def ableton_add_notes(
             "start_time": note["start"],
             "duration": note["duration"],
             "velocity": note["velocity"],
+            "probability": note["probability"],
+            "velocity_deviation": 0.0,
+            "release_velocity": 64.0,
+            "mute": False,
         }
         for note in incoming
     )
@@ -705,6 +709,10 @@ def _remote_note(note: dict[str, Any]) -> dict[str, Any]:
         "start_time": float(note["start_time"]),
         "duration": float(note["duration"]),
         "velocity": round(float(note["velocity"])),
+        "probability": float(note.get("probability", 1.0)),
+        "velocity_deviation": float(note.get("velocity_deviation", 0.0)),
+        "release_velocity": float(note.get("release_velocity", 64.0)),
+        "mute": bool(note.get("mute", False)),
     }
 
 

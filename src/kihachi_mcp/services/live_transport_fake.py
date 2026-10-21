@@ -142,18 +142,25 @@ class FakeLiveTransport:
         readback_overrides: dict[str, dict[str, Any]] | None = None,
         disconnect_after: int | None = None,
         observed_at: str = "2026-01-01T00:00:00Z",
+        reports_locators: bool = True,
     ) -> None:
         self.live_set = live_set or FakeLiveSet()
         self.failures = dict(failures or {})
         self.readback_overrides = dict(readback_overrides or {})
         self.disconnect_after = disconnect_after
         self.observed_at = observed_at
+        #: False simulates a device built before get_state reported locators.
+        self.reports_locators = reports_locators
         self.applied_operation_ids: list[str] = []
         self.request_count = 0
+        self.request_timeouts: list[float | None] = []
 
-    def request(self, message: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
         """Handle one protocol message against the simulated Set."""
         self.request_count += 1
+        self.request_timeouts.append(timeout_seconds)
         if message.get("protocol") != PROTOCOL_NAME:
             raise LiveTransportError(ERROR_PROTOCOL, "unknown protocol")
         request_id = str(message.get("request_id") or "")
@@ -263,7 +270,7 @@ class FakeLiveTransport:
         include_arrangement = options.get("include_arrangement") is not False
         include_session_clips = options.get("include_session_clips") is not False
         count_session_notes = options.get("count_session_notes") is not False
-        return {
+        payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "live_version": live.live_version,
             "set_name": live.set_name,
@@ -312,6 +319,9 @@ class FakeLiveTransport:
                 for name in live.available_devices
             ],
         }
+        if include_arrangement and self.reports_locators:
+            payload["locators"] = [dict(locator) for locator in live.locators]
+        return payload
 
     def _apply(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         operation = payload.get("operation")

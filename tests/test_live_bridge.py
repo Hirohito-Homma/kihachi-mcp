@@ -37,6 +37,7 @@ class _RecordingChannel:
 
     def __init__(self, reply: dict | None = None, raise_on_receive=None) -> None:
         self.sent: list[bytes] = []
+        self.receive_timeouts: list[float] = []
         self.reply = reply
         self.raise_on_receive = raise_on_receive
         self.closed = False
@@ -45,6 +46,7 @@ class _RecordingChannel:
         self.sent.append(payload)
 
     def receive(self, timeout: float) -> bytes:
+        self.receive_timeouts.append(timeout)
         if self.raise_on_receive is not None:
             raise self.raise_on_receive
         return json.dumps(self.reply or {}).encode("utf-8")
@@ -209,6 +211,26 @@ def test_a_timeout_is_reported_and_not_retried(tmp_path) -> None:
         transport.request(build_message("ping", "req-1"))
 
     assert error.value.code == ERROR_TIMEOUT
+    assert len(channel.sent) == 1
+
+
+def test_a_request_can_use_a_shorter_timeout_without_changing_the_bridge_default(
+    tmp_path,
+) -> None:
+    channel = _RecordingChannel(
+        raise_on_receive=LiveTransportError(ERROR_TIMEOUT, "no reply")
+    )
+    transport = LocalhostBridgeTransport(
+        session=_session(tmp_path), channel=channel, timeout_seconds=40.0
+    )
+
+    with pytest.raises(LiveTransportError) as error:
+        transport.request(
+            build_message("ping", "quick-ping"), timeout_seconds=3.0
+        )
+
+    assert error.value.code == ERROR_TIMEOUT
+    assert channel.receive_timeouts[0] == pytest.approx(3.0)
     assert len(channel.sent) == 1
 
 

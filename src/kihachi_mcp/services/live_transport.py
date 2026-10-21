@@ -49,7 +49,9 @@ class LiveTransportError(Exception):
 class LiveTransport(Protocol):
     """One request/response channel to a Max for Live device."""
 
-    def request(self, message: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
         """Send one protocol message and return the decoded response.
 
         Implementations raise ``LiveTransportError`` instead of returning a
@@ -101,7 +103,9 @@ class NullLiveTransport:
     This is the default, so an unconfigured server can never mutate a Set.
     """
 
-    def request(self, message: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
         """Always refuse, naming the missing configuration."""
         raise LiveTransportError(
             ERROR_UNAVAILABLE,

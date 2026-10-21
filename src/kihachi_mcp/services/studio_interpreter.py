@@ -22,7 +22,13 @@ from kihachi_mcp.models.production_brief import (
     SectionIntent,
     SourcedValue,
 )
-from kihachi_mcp.services.brief_parser import explicit_swing, extract_explicit
+from kihachi_mcp.services.brief_parser import (
+    DECLINED,
+    brightness_is_scoped_or_refused,
+    explicit_swing,
+    extract_explicit,
+)
+from kihachi_mcp.services.midi_candidate_builder import scoped_request_notes
 
 DEFAULT_MODEL = "gemma4:latest"
 DEFAULT_HOST = "127.0.0.1"
@@ -243,10 +249,15 @@ def interpret_brief(
 
 
 def parse_model_json(content: Any) -> Any:
-    """Parse model JSON, repairing only code fences and text around one object."""
+    """Parse model JSON, repairing think tags, code fences, and text around one object."""
+    if isinstance(content, (dict, list)):
+        return content
     if not isinstance(content, str):
         raise InterpretationError("AI応答をJSONとして読めません")
-    text = content.strip()
+    text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -323,6 +334,17 @@ def assemble_brief(
             merged[name] = SourcedValue(model_value, SOURCE_AI)
 
     genre_notes = _apply_genre(merged, str(extracted["original_text"]))
+    brightness = merged["tone_brightness"]
+    if brightness.source == SOURCE_AI and brightness_is_scoped_or_refused(
+        str(extracted["original_text"])
+    ):
+        # The model hears 「派手」 and brightens everything, or hears
+        # 「派手じゃない」 and darkens it; neither was asked for.
+        merged["tone_brightness"] = SourcedValue(0, SOURCE_DEFAULT)
+        genre_notes.append(
+            f"AIが補った曲全体の明るさ（{int(brightness.value):+d}）は採用しません。"
+            "明るさの語は対象パート・Drop限定、または否定として扱います"
+        )
     genre_notes += _tone_notes(merged)
 
     mood_text = str(merged["mood"].value or "")
@@ -336,7 +358,32 @@ def assemble_brief(
     drop = int(merged["drop_start_bar"].value)
     if drop and drop > bars:
         raise InterpretationError("ドロップ開始小節が曲の長さを超えています")
-    sections = build_sections(bars, drop, str(merged["genre"].value))
+    mid_break_intent = user_fields.get("mid_break")
+    sections = build_sections(
+        bars,
+        drop,
+        str(merged["genre"].value),
+    )
+    mid_break_unhandled: list[str] = []
+    mid_break_notes: list[str] = []
+    if mid_break_intent == "required":
+        sections, status, br = ensure_mid_break(sections, bars, drop)
+        if status in ("fulfilled", "inserted") and br is not None:
+            mid_break_notes.append(
+                f"中間のブレイク: {br.start_bar}–{br.end_bar}小節目（{br.length_bars}小節）にBreakを配置しました"
+            )
+        elif status == "too_short":
+            mid_break_unhandled.append(
+                f"曲が短い構成（{bars}小節）のため、中間ブレイクは配置できませんでした"
+            )
+        else:
+            mid_break_unhandled.append(
+                f"指定されたドロップ位置（{drop}小節目）と干渉するため、中間ブレイクは配置できませんでした"
+            )
+    elif mid_break_intent == DECLINED:
+        mid_break_notes.append(
+            "中間にブレイクを入れない: 明示的な追加は行いません（既定構成のBreakは維持されます）"
+        )
     model_unhandled = _readable(intent.get("unhandled"))
     if explicit_swing(str(extracted["original_text"])) is not None:
         # The rule reads swing and the builder applies it to note timing.
@@ -344,8 +391,15 @@ def assemble_brief(
             item for item in model_unhandled
             if "swing" not in item.lower() and "スイング" not in item
         ]
-    unhandled = _unique(list(extracted.get("unhandled") or []) + model_unhandled)
-    interpretations = genre_notes + build_interpretations(merged, sections)
+    unhandled = _unique(
+        list(extracted.get("unhandled") or []) + mid_break_unhandled + model_unhandled
+    )
+    interpretations = (
+        genre_notes
+        + build_interpretations(merged, sections)
+        + mid_break_notes
+        + scoped_request_notes(sections, user_fields)
+    )
     return ProductionBrief(
         original_text=str(extracted["original_text"]),
         tempo=merged["tempo"],
@@ -441,7 +495,12 @@ def _tone_notes(merged: dict[str, SourcedValue]) -> list[str]:
     return [f"音色: {'、'.join(moved)}（{genre} の音色レシピに適用、曲全体で一定）"]
 
 
-def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[SectionIntent, ...]:
+def build_sections(
+    bars: int,
+    drop_start_bar: int,
+    genre: str = "",
+    mid_break_required: bool = False,
+) -> tuple[SectionIntent, ...]:
     """Build contiguous sections, honoring an explicit drop start bar.
 
     Shaped for listening to one song rather than for a DJ's mix: a short Intro
@@ -452,7 +511,10 @@ def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[Sec
             *_before_drop(drop_start_bar - 1),
             *_from_drop(bars - drop_start_bar + 1),
         ]
-        return _contiguous(lengths)
+        sections = _contiguous(lengths)
+        if mid_break_required:
+            sections, _status, _ = ensure_mid_break(sections, bars, drop_start_bar)
+        return sections
 
     if genre == "mutation_funk" and bars >= 32:
         if bars >= 96:
@@ -506,12 +568,76 @@ def build_sections(bars: int, drop_start_bar: int, genre: str = "") -> tuple[Sec
         )
 
     quarter = bars // 4
-    return (
+    sections = (
         SectionIntent("Intro", 1, quarter),
         SectionIntent("Build", 1 + quarter, quarter),
         SectionIntent("Drop", 1 + quarter * 2, quarter),
         SectionIntent("Outro", 1 + quarter * 3, bars - quarter * 3),
     )
+    if mid_break_required:
+        sections, _status, _ = ensure_mid_break(sections, bars, drop_start_bar)
+    return sections
+
+
+def is_mid_break(section: SectionIntent, bars: int) -> bool:
+    """Whether a Break section is placed around the middle of the song.
+
+    A section qualifies as a 'mid break' if its center ((start + end) / 2) is
+    within an acceptable middle window around the song's midpoint ((bars + 1) / 2).
+    Specifically, the distance between the break's center and the song's midpoint
+    must not exceed max(4.0, bars * 0.15), spanning roughly 35% to 65% of the song.
+    """
+    if section.name != "Break":
+        return False
+    mid = (bars + 1) / 2
+    break_center = (section.start_bar + section.end_bar) / 2
+    return abs(break_center - mid) <= max(4.0, bars * 0.15)
+
+
+def ensure_mid_break(
+    sections: tuple[SectionIntent, ...], bars: int, drop_start_bar: int = 0
+) -> tuple[tuple[SectionIntent, ...], str, SectionIntent | None]:
+    """Ensure a Break section sits in the middle of the arrangement, or report why it cannot."""
+    for s in sections:
+        if is_mid_break(s, bars):
+            return sections, "fulfilled", s
+    if bars < 32:
+        return sections, "too_short", None
+    mid = bars // 2
+    target_idx = None
+    for idx, s in enumerate(sections):
+        if s.start_bar <= mid <= s.end_bar:
+            target_idx = idx
+            break
+    if target_idx is None:
+        return sections, "conflict", None
+    target = sections[target_idx]
+    if target.length_bars < 12:
+        return sections, "conflict", None
+    break_len = 4
+    ideal_start = (mid // 4) * 4 + 1
+    before = max(ideal_start - target.start_bar, 4)
+    if target.length_bars - before - break_len < 4:
+        before = target.length_bars - break_len - 4
+    after = target.length_bars - before - break_len
+    if before < 4 or after < 4:
+        return sections, "conflict", None
+
+    break_start = target.start_bar + before
+    break_end = break_start + break_len - 1
+    if drop_start_bar and break_start <= drop_start_bar <= break_end:
+        return sections, "conflict", None
+
+    new_break = SectionIntent("Break", break_start, break_len)
+    if not is_mid_break(new_break, bars):
+        return sections, "conflict", None
+
+    new_secs = list(sections[:target_idx])
+    new_secs.append(SectionIntent(target.name, target.start_bar, before))
+    new_secs.append(new_break)
+    new_secs.append(SectionIntent(target.name, break_start + break_len, after))
+    new_secs.extend(sections[target_idx + 1:])
+    return tuple(new_secs), "inserted", new_break
 
 
 def _before_drop(bars: int) -> list[tuple[str, int]]:

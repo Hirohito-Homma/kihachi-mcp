@@ -78,6 +78,12 @@
     h2 { margin: 0 0 10px; font-size: 16px; }
     ul { margin: 0; padding-left: 18px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+    #astra-genre, #astra-mood { width: 100%; }
+    #astra-params-view textarea { min-height: 72px; }
+    .jarvis-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 4px; }
+    .jarvis-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .jarvis-card h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.04em; }
+    .jarvis-card label.inline { margin: 6px 0; }
     .metric { border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
     .metric b { display: block; font-size: 12px; color: var(--muted); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -109,6 +115,144 @@
     .issue { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 6px 0; }
     .banner { border: 1px solid var(--bad); border-radius: 10px; padding: 10px 14px; margin: 12px 0; background: #2a1a1a; }
     details > summary { cursor: pointer; font-weight: 700; }
+    .table-scroll { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+    .diff-val-del { color: var(--muted); text-decoration: line-through; margin-right: 4px; }
+    .diff-val-add { color: var(--accent); font-weight: bold; }
+    .diff-tag-add { color: var(--good); font-weight: bold; font-size: 11px; }
+    .diff-tag-del { color: var(--bad); font-weight: bold; font-size: 11px; }
+    .diff-tag-mod { color: var(--warn); font-weight: bold; font-size: 11px; }
+
+    /* JARVIS HUD theme: an override layer on the base styles above. */
+    :root {
+      --bg: #03080d;
+      --panel: rgba(8, 24, 36, 0.72);
+      --line: rgba(0, 212, 255, 0.28);
+      --text: #d9f6ff;
+      --muted: #6fa8bd;
+      --accent: #00d4ff;
+      --good: #3dffb0;
+      --warn: #ffb547;
+      --bad: #ff5470;
+      --glow: 0 0 12px rgba(0, 212, 255, 0.35);
+      --hud-font: "SF Mono", "Menlo", "Hiragino Sans", monospace;
+    }
+    body {
+      background:
+        radial-gradient(ellipse at 50% -10%, rgba(0, 150, 200, 0.22), transparent 60%),
+        linear-gradient(rgba(0, 212, 255, 0.045) 1px, transparent 1px) 0 0 / 40px 40px,
+        linear-gradient(90deg, rgba(0, 212, 255, 0.045) 1px, transparent 1px) 0 0 / 40px 40px,
+        var(--bg);
+      background-attachment: fixed;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
+    }
+    header { position: relative; padding-left: 96px; }
+    header::before, header::after {
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: 22px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+    }
+    header::before {
+      border: 2px solid var(--accent);
+      border-top-color: transparent;
+      border-bottom-color: transparent;
+      box-shadow: var(--glow), inset var(--glow);
+      animation: hud-spin 6s linear infinite;
+    }
+    header::after {
+      inset: auto;
+      left: 36px;
+      top: 38px;
+      width: 24px;
+      height: 24px;
+      background: radial-gradient(circle, #e9fdff 0 20%, var(--accent) 45%, transparent 72%);
+      animation: hud-pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes hud-spin { to { transform: rotate(360deg); } }
+    @keyframes hud-pulse { 50% { opacity: 0.55; transform: scale(0.85); } }
+    header h1 {
+      font-family: var(--hud-font);
+      font-weight: 600;
+      letter-spacing: 0.22em;
+      color: var(--accent);
+      text-shadow: var(--glow);
+    }
+    h2 {
+      font-family: var(--hud-font);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    h2::before { content: "▍"; margin-right: 6px; }
+    section {
+      position: relative;
+      border-radius: 4px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      box-shadow: inset 0 0 24px rgba(0, 212, 255, 0.05);
+    }
+    section::before, section::after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--accent);
+      pointer-events: none;
+    }
+    section::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+    section::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+    .pill {
+      font-family: var(--hud-font);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      border-radius: 3px;
+      background: rgba(0, 30, 45, 0.6);
+    }
+    .pill.ok { border-color: var(--good); box-shadow: 0 0 8px rgba(61, 255, 176, 0.3); }
+    .pill.bad { border-color: var(--bad); box-shadow: 0 0 8px rgba(255, 84, 112, 0.35); }
+    button {
+      color: #021018;
+      border-radius: 3px;
+      font-family: var(--hud-font);
+      letter-spacing: 0.05em;
+      box-shadow: var(--glow);
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    button:not(:disabled):hover { filter: brightness(1.15); box-shadow: 0 0 16px rgba(0, 212, 255, 0.55); }
+    textarea, input[type="text"], select, input[type="number"] {
+      background: rgba(0, 16, 26, 0.75);
+      border-radius: 3px;
+      caret-color: var(--accent);
+    }
+    textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+    .metric, .issue, .arrangement div { border-radius: 3px; }
+    .arrangement div {
+      background: linear-gradient(to top, rgba(0, 212, 255, 0.3) var(--energy), transparent var(--energy));
+    }
+    .banner { border-radius: 3px; background: rgba(60, 8, 20, 0.7); }
+    pre, .progress, td { font-family: var(--hud-font); }
+    a { color: var(--accent); }
+    @media (prefers-reduced-motion: reduce) {
+      header::before, header::after { animation: none; }
+    }
+    @media (max-width: 600px) {
+      header { padding-left: 20px; padding-top: 92px; }
+    }
   </style>
 </head>
 <body>
@@ -123,6 +267,8 @@
       <div id="project-pill" class="pill">Project: 確認中</div>
       <div id="job-pill" class="pill">生成: 待機</div>
     </div>
+    <div class="actions"><button id="live-overview-load" class="secondary" type="button">現在の Live Set を取得</button></div>
+    <div id="live-overview" role="status" class="sub">Live の概要はまだ取得していません。</div>
     <div id="error-banner" class="banner hidden" role="alert">
       <p id="error-message"></p>
       <pre id="error-detail" class="hidden"></pre>
@@ -136,14 +282,57 @@
     </div>
   </header>
   <main>
-    <section aria-labelledby="dialogue-heading">
-      <h2 id="dialogue-heading">KIHACHIと対話</h2>
-      <p class="sub">🎙で話すか文字で入力できます。聞き取った内容を対話へ送れます。制作指示への反映は確認後に行います。</p>
-      <label for="dialogue-utterance">話しかける内容</label>
-      <textarea id="dialogue-utterance" placeholder="例: Mutation Funkで、キックは短めに"></textarea>
-      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" class="secondary">話しかける</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div><label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label><label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を対話へ自動送信する（制作指示・Liveは変更しません）</label>
-      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div><p id="dialogue-reply" role="status"></p>
-      <pre id="dialogue-proposal"></pre><div id="dialogue-samples"></div>
+    <section aria-labelledby="jarvis-heading">
+      <h2 id="jarvis-heading">JARVIS</h2>
+      <p class="sub">話しかけると、曲の状態と変更案は Jarvis が返し、制作の相談は確認してから制作指示に追記できます。この欄からは Live を変更しません。</p>
+      <label for="dialogue-utterance">Jarvisへの依頼</label>
+      <textarea id="dialogue-utterance" placeholder="例: 今の曲どうなってる？ / Mutation Funkで、キックは短めに"></textarea>
+      <div class="actions"><button id="dialogue-record" class="secondary" type="button">🎙 話す（最大12秒）</button><button id="dialogue-send" type="button">聞く</button><button id="dialogue-accept" class="secondary" disabled>提案を制作指示に反映</button><button id="dialogue-stop" class="secondary" type="button">読み上げを止める</button></div>
+      <p id="jarvis-state" role="status"></p>
+      <p id="jarvis-reply" role="status"></p>
+      <p id="dialogue-reply" class="hidden" aria-hidden="true"></p>
+      <h3>制作指示への追記案</h3>
+      <pre id="dialogue-proposal"></pre>
+      <div id="dialogue-samples"></div>
+      <p id="dialogue-readiness" class="sub" role="status">音声認識の準備状況を確認中…</p><button id="dialogue-authorize-voice" type="button" class="secondary" hidden>macOSの音声認識を許可</button><button id="dialogue-check-voice" type="button" class="secondary">音声の準備状況を再確認</button><p id="dialogue-voice-status" role="status" class="sub"></p><div id="dialogue-alternatives"></div>
+      <div class="jarvis-board">
+        <aside class="jarvis-card" aria-labelledby="jarvis-settings-heading">
+          <h3 id="jarvis-settings-heading">設定</h3>
+          <label class="inline"><input id="jarvis-show-plan" type="checkbox" checked> 計画を表示</label>
+          <label class="inline"><input id="jarvis-show-context" type="checkbox" checked> プロジェクト状態を表示</label>
+          <label class="inline"><input id="dialogue-speak" type="checkbox" checked> 返答をこのMacで読み上げる</label>
+          <label class="inline"><input id="dialogue-auto-send" type="checkbox"> 認識できた発話を送る（制作指示・Liveは変更しません）</label>
+          <p class="sub">書き込み案は承認が必要です。「聞く」は実行しません。AIの接続先は下の「システム」で保存します。</p>
+        </aside>
+        <div class="jarvis-card" id="jarvis-context-card">
+          <h3>プロジェクト状態</h3>
+          <div id="jarvis-context" class="grid"></div>
+        </div>
+        <div class="jarvis-card">
+          <h3>Ableton</h3>
+          <div id="jarvis-live" class="grid"></div>
+        </div>
+        <div class="jarvis-card">
+          <h3>承認</h3>
+          <p id="jarvis-approval" role="status">まだ依頼はありません。書き込み案が出ても、この画面からは Live を変更しません。</p>
+          <button id="jarvis-revise" class="secondary" type="button" hidden>この変更案を修正案にする</button>
+          <h3>保留中の操作</h3>
+          <div id="approval-center"><p class="sub">確認中…</p></div>
+        </div>
+      </div>
+      <div id="jarvis-plan-card">
+        <h3>計画</h3>
+        <pre id="jarvis-plan"></pre>
+      </div>
+      <div id="jarvis-clip-preview-card" class="jarvis-card" hidden role="region" aria-labelledby="jarvis-clip-preview-heading">
+        <h3 id="jarvis-clip-preview-heading">Session MIDI クリップ ノート単位プレビュー</h3>
+        <p id="jarvis-clip-preview-meta" class="sub"></p>
+        <div id="jarvis-clip-preview-diff-area"></div>
+        <details id="jarvis-clip-preview-all-details" style="margin-top: 10px;">
+          <summary id="jarvis-clip-preview-all-summary">全ノートの詳細を表示</summary>
+          <div class="table-scroll" id="jarvis-clip-preview-all-area"></div>
+        </details>
+      </div>
     </section>
 
     <section>
@@ -153,9 +342,11 @@
 57小節目からドロップにして</textarea>
       <div class="actions">
         <button id="generate">候補を生成</button>
+        <button id="generate-from-live" class="secondary" type="button">現在の Live Set から候補を生成</button>
         <button id="cancel" class="secondary" disabled>キャンセル</button>
         <button id="regenerate" class="secondary" disabled>別候補を再生成</button>
       </div>
+      <p class="sub">Live から生成する前に上の例文を自分の制作指示へ書き換えてください。BPM を指定した場合はその値を優先します。4/4拍子の Set に対応します。</p>
       <details id="reference-guidance">
         <summary>参考音源DBからBPMを提案</summary>
         <p>確認済みBPMの中央値を参考にします。既にテンポの指定がある場合は変更しません。</p>
@@ -168,13 +359,52 @@
         <a href="/references">参考音源の分類・確認済みBPMを編集</a>
       </details>
       <p id="job-line" class="progress"></p>
+      <p id="live-candidate-context" class="sub" role="status"></p>
+    </section>
+
+    <section id="astra-params-view">
+      <h2>Astraへ送るパラメーター</h2>
+      <p class="sub">ここで選んだ内容をAstraへ送ります。ジャンル・雰囲気・指示は音の方向だけです。最初のクリックは料金の確認だけです。同じ内容でもう一度押すとMIDI候補を生成します。Liveは変えません。</p>
+      <div id="astra-params" class="grid">
+        <label>操作<select id="astra-operation"><option value="generate">generate</option><option value="variation">variation</option><option value="revision">revision</option></select></label>
+        <label>役割<select id="astra-role"><option value="全パート">全パート</option><option value="Kick">Kick</option><option value="Snare">Snare</option><option value="Hats">Hats</option><option value="OpenHat">OpenHat</option><option value="Perc">Perc</option><option value="Sub">Sub</option><option value="bass" selected>Bass</option><option value="Stab">Stab</option><option value="Pad">Pad</option><option value="arp">Arp</option><option value="Guitar">Guitar</option><option value="Horn">Horn</option><option value="Lead">Lead</option><option value="Vocal">Vocal</option><option value="FX">FX</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
+        <label>ジャンル<input id="astra-genre" list="astra-genre-options" placeholder="例：mutation_funk"></label>
+        <datalist id="astra-genre-options"><option value="mutation_funk"><option value="dub_techno"><option value="tech_house"><option value="melodic_techno"></datalist>
+        <label>雰囲気<input id="astra-mood" placeholder="例：暗い、ファンキー"></label>
+        <label>Key<input id="astra-key" value="D#m"></label>
+        <label>Tempo<input id="astra-tempo" type="number" min="40" max="240" value="124"></label>
+        <label>Bars<input id="astra-bars" type="number" min="1" max="256" value="8"></label>
+        <label>Grid<select id="astra-grid"><option>1/16</option><option>1/8</option><option>1/4</option><option>1/32</option></select></label>
+        <label>Syncopation 0–1<input id="astra-syncopation" type="number" min="0" max="1" step="0.1" value="0.7"></label>
+        <label>Octave jump 0–1<input id="astra-octave" type="number" min="0" max="1" step="0.1" value="0.2"></label>
+        <label>Velocity min<input id="astra-velocity-min" type="number" min="1" max="127" value="65"></label>
+        <label>Velocity max<input id="astra-velocity-max" type="number" min="1" max="127" value="118"></label>
+        <label>ノート長 min<input id="astra-note-min" type="number" min="0.05" max="16" step="0.05" value="0.25"></label>
+        <label>ノート長 max<input id="astra-note-max" type="number" min="0.05" max="16" step="0.05" value="0.75"></label>
+        <label>変化させる小節<input id="astra-variation-bar" type="number" min="1" max="256" placeholder="なし"></label>
+        <label>Kick onsets（拍、カンマ区切り）<input id="astra-kicks" placeholder="0, 1, 2, 3"></label>
+        <label>元ノート<select id="astra-source"><option value="none">なし</option><option value="last">直前のMIDI候補</option></select></label>
+      </div>
+      <label class="inline"><input id="astra-ghost" type="checkbox" checked> Ghost notes</label>
+      <label class="inline"><input id="astra-avoid-kick" type="checkbox" checked> Kickとの同時発音を避ける</label>
+      <label>指示・プロンプト<textarea id="astra-prompt" rows="3" placeholder="例：キックは短め。ミューテーションファンクを作って。Live操作は書かない。"></textarea></label>
+      <div class="actions"><button id="astra-send" type="button">Astraへ送る</button></div>
+      <p id="astra-status" role="status" class="sub"></p>
+    </section>
+
+    <section id="music-plan-view">
+      <h2>パートの計画</h2>
+      <p class="sub">上で選んだ役割、キー、テンポ、小節で、この画面の中で計画します。全パートを選ぶと、パートごとにトラックを分けます。承認だけでは Live に送りません。「実機の Live に送る」は、1回目で実機の Set を読んで末尾に置き直し、承認し直したあとの2回目で1回だけ送ります。再生と録音を止めてから押してください。読んだあと15分で期限切れです。同じ名前のトラックがあるときは送りません。保存はしません。</p>
+      <div class="actions"><button id="music-plan-preview" type="button">計画を確認</button><button id="music-plan-approve" type="button" disabled>この計画を承認</button><button id="music-plan-reject" class="secondary" type="button" disabled>承認しない</button><button id="music-plan-verify" class="secondary" type="button" disabled>読み戻しを確認</button><button id="music-plan-live" type="button" disabled>実機の Live に送る</button></div>
+      <p id="music-plan-status" role="status" class="sub"></p>
+      <div id="music-plan-result"></div>
     </section>
 
     <section id="midi-composer-view">
       <h2>パート単位MIDI Composer</h2>
       <p class="sub">制約を先に確認し、MIDIノート候補だけを生成します。Abletonや現在の曲は変更しません。</p>
       <div class="grid">
-        <label>役割<select id="composer-role"><option value="bass">Bass</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="arp">Arp</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
+        <label>役割<select id="composer-role"><option value="全パート">全パート</option><option value="Kick">Kick</option><option value="Snare">Snare</option><option value="Hats">Hats</option><option value="OpenHat">OpenHat</option><option value="Perc">Perc</option><option value="Sub">Sub</option><option value="bass" selected>Bass</option><option value="Stab">Stab</option><option value="Pad">Pad</option><option value="arp">Arp</option><option value="Guitar">Guitar</option><option value="Horn">Horn</option><option value="Lead">Lead</option><option value="Vocal">Vocal</option><option value="FX">FX</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
         <label>Key<input id="composer-key" value="D#m"></label>
         <label>Tempo<input id="composer-tempo" type="number" min="40" max="240" value="124"></label>
         <label>Bars<input id="composer-bars" type="number" min="1" max="256" value="8"></label>
@@ -217,8 +447,63 @@
       <div class="actions">
         <a id="midi-link" href="#"><button type="button">MIDIを書き出す</button></a>
       </div>
-      <p id="candidate-audio-label" class="sub"></p>
-      <audio id="candidate-audio" controls preload="none" aria-label="候補の8小節試聴"></audio>
+      <!-- A/B 試聴 & パート別試聴コントロール -->
+      <div id="ab-audition-panel" style="margin: 14px 0; padding: 12px; background: rgba(0, 212, 255, 0.05); border: 1px solid var(--line); border-radius: 8px;">
+        <h3 style="margin: 0 0 8px; font-size: 14px;">A/B 試聴 & パート別ソロ（音量ノーマライズ済み）</h3>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+          <span class="sub">バリアント:</span>
+          <button id="btn-variant-b" type="button" class="secondary" style="background: var(--accent); color: #111;">Variant B: 54% Groove</button>
+          <button id="btn-variant-a" type="button" class="secondary">Variant A: 50% Straight</button>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+          <span class="sub">パート切替:</span>
+          <button id="btn-part-all" type="button" class="secondary" style="background: #2b333b;">全パート</button>
+          <button id="btn-part-drums" type="button" class="secondary">Drums</button>
+          <button id="btn-part-bass" type="button" class="secondary">Bass</button>
+          <button id="btn-part-chords" type="button" class="secondary">Chords</button>
+        </div>
+        <!-- MIDI整合性・承認関係バッジ (Task 2) & 音量メトリクス (Task 3) -->
+        <div style="margin: 8px 0; font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+          <span id="preview-midi-target" class="pill ok">承認対象MIDI: Variant B (54% Groove)</span>
+          <span id="preview-loudness-metric" class="pill">音量: 測定中…</span>
+          <span id="preview-clip-status" class="pill ok">クリッピング: なし</span>
+        </div>
+        <p id="candidate-audio-label" class="sub"></p>
+        <audio id="candidate-audio" controls preload="none" aria-label="候補の8小節試聴" style="width: 100%;"></audio>
+
+        <!-- 試聴評価記録 -->
+        <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span class="sub">試聴評価:</span>
+          <button id="btn-rate-b" type="button" class="secondary">Bが好み (Groove)</button>
+          <button id="btn-rate-a" type="button" class="secondary">Aが好み (Straight)</button>
+          <button id="btn-rate-equal" type="button" class="secondary">同等</button>
+          <input type="text" id="eval-notes" placeholder="評価メモ（例: スラップの抜けが良い）" style="width: 24ch;">
+          <span id="eval-status" class="sub ok"></span>
+        </div>
+      </div>
+
+      <!-- Groove調整 & 新候補生成パネル -->
+      <details id="groove-adjustment-panel" style="margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px;">
+        <summary>Groove パラメータ調整（新しい候補として生成）</summary>
+        <p class="sub">変更したGrooveは既存の候補を変更せず、新しい候補（別ID）として安全に保存されます。</p>
+        <div class="grid" style="margin-top: 8px;">
+          <label class="inline">Swing (50%〜60%):
+            <input type="range" id="groove-swing" min="50" max="60" value="54" step="1">
+            <span id="groove-swing-val">54%</span>
+          </label>
+          <label class="inline">Ghost Notes:
+            <input type="checkbox" id="groove-ghosts" checked> 有効 (35-55 vel)
+          </label>
+          <label class="inline">Bass Syncopation:
+            <input type="range" id="groove-syncopation" min="0" max="100" value="70" step="5">
+            <span id="groove-syncopation-val">0.70</span>
+          </label>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button id="btn-generate-groove" type="button">このGrooveで新しい候補を生成</button>
+          <span id="groove-gen-status" class="sub"></span>
+        </div>
+      </details>
       <p class="sub">試聴は簡易音色です。Liveへの送信や承認は行いません。</p>
       <p class="sub">これは技術的に指示を反映した候補です。音楽的に気に入るかは別です。</p>
     </section>
@@ -297,6 +582,7 @@
 
     <section id="apply-view" class="hidden">
       <h2>Liveへ適用</h2>
+      <p id="live-plan-pending" role="status" class="sub">パート計画の保留はありません。Liveには送っていません。</p>
       <p class="sub">流れ: 承認 → 適用内容を確認（ドライラン。Liveは変わりません）→ この内容でLiveへ適用 → Liveから読み戻して検証。</p>
       <label class="inline"><input type="checkbox" id="change-tempo"> Setのテンポも候補に合わせる（既存曲のテンポが変わります）</label>
       <label class="inline"><input type="checkbox" id="skip-instruments"> 音源は入れない（AbletonGPT や手作業でキット・プリセットを入れる）</label>
@@ -416,7 +702,8 @@
           <label class="inline">月間上限（円） <input type="number" id="setting-ai-limit" min="100" step="100" style="width:9ch"></label>
         </div>
         <div class="actions">
-          <button id="ollama-test" class="secondary" type="button">接続テスト</button>
+          <button id="ollama-test" class="secondary" type="button">Ollama接続テスト</button>
+          <button id="openai-test" class="secondary" type="button">OpenAI接続テスト</button>
           <button id="settings-save" class="secondary" type="button">保存</button>
         </div>
         <p id="settings-line" role="status" class="sub">導入済みのモデルだけを選べます。KIHACHIはモデルをダウンロードしません。</p>
@@ -542,11 +829,11 @@
       $('dialogue-record').disabled=true;
       $('dialogue-send').disabled=true;
       try {
-        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+        const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
         voiceStream=stream;
         const options=['audio/webm;codecs=opus','audio/mp4','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
         if(!options){stream.getTracks().forEach(track=>track.stop());throw new Error('対応する音声形式がありません');}
-        const recorder=new MediaRecorder(stream,{mimeType:options});
+        const recorder=new MediaRecorder(stream,{mimeType:options,audioBitsPerSecond:64000});
         voiceRecorder=recorder;
         const chunks=[];
         recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
@@ -576,18 +863,18 @@
               $('dialogue-alternatives').append(label);
               for(const choice of choices){
                 const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=choice;
-                button.onclick=()=>{$('dialogue-utterance').value=choice;$('dialogue-voice-status').textContent='選んだ発話を確認してから「話しかける」を押してください。';};
+                button.onclick=()=>{$('dialogue-utterance').value=choice;$('dialogue-voice-status').textContent='選んだ発話を確認してから「聞く」を押してください。';};
                 $('dialogue-alternatives').append(button);
               }
             }
             shouldAutoSend=$('dialogue-auto-send').checked && !corrected;
             const review=corrected?'元の聞き取り: '+data.raw_transcript+' → 表記候補: '+data.transcript+'。内容を確認してください。':'聞き取った内容を確認・修正してください。';
-            $('dialogue-voice-status').textContent=shouldAutoSend?'聞き取った発話を対話へ送ります…':review+' 問題なければ「話しかける」を押してください。';
+            $('dialogue-voice-status').textContent=shouldAutoSend?'聞き取った発話を送ります…':review+' 問題なければ「聞く」を押してください。';
           }catch(error){$('dialogue-voice-status').textContent=error.message;}
           finally{voiceBusy=false;$('dialogue-record').disabled=!voiceReady;$('dialogue-send').disabled=false;}
           if(shouldAutoSend)$('dialogue-send').click();
         };
-        recorder.start();
+        recorder.start(250);
         $('dialogue-record').disabled=!voiceReady;
         $('dialogue-record').textContent='■ 録音を止める';
         $('dialogue-voice-status').textContent='録音中…';
@@ -597,8 +884,434 @@
     window.addEventListener('pagehide',()=>{clearTimeout(voiceStopTimer);stopDialogueAudio();if(voiceRecorder){voiceRecorder.onstop=null;if(voiceRecorder.state==='recording')voiceRecorder.stop();}voiceStream?.getTracks().forEach(track=>track.stop());});
     const dialogueSession = crypto.randomUUID().replaceAll('-', '');
     let dialogueProposal = null;
+    const JARVIS_PREFS = [
+      ['jarvis-show-plan', 'kihachi.jarvis.showPlan', true],
+      ['jarvis-show-context', 'kihachi.jarvis.showContext', true]
+    ];
+    function jarvisPref(key, fallback) {
+      try {
+        const stored = localStorage.getItem(key);
+        return stored === null ? fallback : stored === '1';
+      } catch {
+        return fallback;
+      }
+    }
+    function applyJarvisLayout() {
+      $('jarvis-plan-card').classList.toggle('hidden', !$('jarvis-show-plan').checked);
+      $('jarvis-context-card').classList.toggle('hidden', !$('jarvis-show-context').checked);
+    }
+    for (const [id, key, fallback] of JARVIS_PREFS) {
+      const box = $(id);
+      box.checked = jarvisPref(key, fallback);
+      box.onchange = () => {
+        try { localStorage.setItem(key, box.checked ? '1' : '0'); } catch { /* 表示設定は保存できなくても動作する */ }
+        applyJarvisLayout();
+      };
+    }
+    applyJarvisLayout();
+    function jarvisFact(label, value) {
+      const shown = value === undefined || value === null || value === '' ? 'UNKNOWN' : String(value);
+      return `<div class="metric"><b>${esc(label)}</b>${esc(shown)}</div>`;
+    }
+    function renderJarvisContext(context) {
+      const facts = context && typeof context === 'object' ? context : {};
+      $('jarvis-context').innerHTML = [
+        jarvisFact('ジャンル', facts.genre),
+        jarvisFact('テンポ', facts.tempo),
+        jarvisFact('キー', facts.key),
+        jarvisFact('小節', facts.bars),
+        jarvisFact('承認', facts.approved === true ? '承認済み' : facts.approved === false ? '未承認' : facts.approved)
+      ].join('');
+    }
+    function renderJarvisApproval(data) {
+      const plan = data && data.plan;
+      const intent = data && data.intent;
+      $('jarvis-revise').hidden = true;
+      if (!plan) {
+        $('jarvis-approval').textContent = 'まだ依頼はありません。書き込み案が出ても、この画面からは Live を変更しません。';
+        return;
+      }
+      if (intent && intent.type === 'modify_midi_clip') {
+        const preview = data.clip_preview || plan.clip_preview;
+        const counts = preview ? `（ノート数 ${preview.note_count_before} → ${preview.note_count_after}、元データ保持）` : '';
+        $('jarvis-approval').textContent = `Session MIDI クリップの改訂プレビューです${counts}。Live への書き戻しは行いません。`;
+        return;
+      }
+      if (plan.requires_human_approval) {
+        $('jarvis-approval').textContent = `承認が必要な変更案です。危険度は${plan.risk_level || 'UNKNOWN'}。「この変更案を修正案にする」で、Live を変えずに新しい候補として試せます。`;
+        $('jarvis-revise').hidden = false;
+        $('jarvis-revise').disabled = false;
+        return;
+      }
+      if (Array.isArray(plan.proposal)) {
+        const text = plan.proposal.length ? plan.proposal.join(' / ') : '指摘はありません。';
+        $('jarvis-approval').textContent = `Brain の案です。${text} Live には書いていません。`;
+        return;
+      }
+      $('jarvis-approval').textContent = 'この依頼は読み取りです。Live は変更していません。';
+    }
+    function renderJarvisConnections(health) {
+      const items = Array.isArray(health && health.statuses) ? health.statuses : [];
+      const wanted = items.filter((item) => item.name === 'Ableton Live' || item.name === 'AbletonGPT');
+      $('jarvis-live').innerHTML = (wanted.length ? wanted : [{name: 'Ableton Live', status: 'UNKNOWN'}, {name: 'AbletonGPT', status: 'UNKNOWN'}])
+        .map((item) => jarvisFact(item.name === 'Ableton Live' ? 'Live' : 'AbletonGPT', item.status || 'UNKNOWN'))
+        .join('');
+    }
+    renderJarvisContext(null);
+    function setReply(text) {
+      const line = text || '';
+      $('jarvis-reply').textContent = line;
+      $('dialogue-reply').textContent = line;
+    }
+    function dialogueOwns(text) {
+      return /探して|探す|検索|番を詳しく|番の詳細|生成して|再生成|作り直して/.test(text);
+    }
+    function jarvisShouldAnswer(data, text) {
+      const intent = data && data.intent;
+      if (!intent) return false;
+      if (intent.clip_target) return true;
+      if (!intent.recognized) return false;
+      if (
+        intent.type === 'inspect_project'
+        || intent.type === 'modify_arrangement'
+        || intent.type === 'musical_judgment'
+        || intent.type === 'evaluate_midi_clip'
+        || intent.type === 'modify_midi_clip'
+      ) return true;
+      if (intent.type === 'evaluate_arrangement') return /[?？]/.test(text) || text.endsWith('ない');
+      return false;
+    }
+    function jarvisPlanText(plan, state) {
+      const list = (items) => Array.isArray(items) && items.length ? items.join('、') : 'なし';
+      const writes = (Array.isArray(plan.proposed_writes) ? plan.proposed_writes : []).map((write) => {
+        const span = write.range && typeof write.range === 'object' ? ` ${write.range.start}–${write.range.end}小節` : '';
+        return `${write.action || 'UNKNOWN'} ${write.target || 'UNKNOWN'}${span}`;
+      });
+      const lines = [
+        `目的: ${plan.goal || 'UNKNOWN'}`,
+        `読むもの: ${list(plan.reads)}`,
+        `書き込み案: ${list(writes)}`,
+        `危険度: ${plan.risk_level || 'UNKNOWN'}`,
+        `人の承認: ${plan.requires_human_approval ? '必要' : '不要'}`,
+        `状態: ${state || 'UNKNOWN'}`
+      ];
+      if (Array.isArray(plan.proposal)) lines.push(`Brain の案: ${list(plan.proposal)}`);
+      if (plan.clip_evaluation) {
+        const ev = plan.clip_evaluation;
+        lines.push(`クリップ事実: ノート数 ${ev.note_count} / 小節別 ${JSON.stringify(ev.bar_notes)} / 音色 ${ev.timbre}`);
+      }
+      if (plan.clip_preview) {
+        lines.push(`改訂プレビュー: ${plan.clip_preview.summary || ''}（元ノート ${plan.clip_preview.note_count_before} → 案 ${plan.clip_preview.note_count_after}）`);
+      }
+      return lines.join('\n');
+    }
+    function isValidNote(note) {
+      if (!note || typeof note !== 'object' || Array.isArray(note)) return false;
+      const p = note.pitch;
+      if (typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p > 127) return false;
+      const s = note.start_time;
+      if (typeof s !== 'number' || !Number.isFinite(s) || s < 0) return false;
+      const d = note.duration;
+      if (typeof d !== 'number' || !Number.isFinite(d) || d <= 0) return false;
+      const v = note.velocity;
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 127) return false;
+      const prob = note.probability;
+      if (prob !== undefined && prob !== null) {
+        if (typeof prob !== 'number' || !Number.isFinite(prob) || prob < 0 || prob > 1) return false;
+      }
+      return true;
+    }
+    function renderJarvisClipPreview(data) {
+      const card = $('jarvis-clip-preview-card');
+      if (!card) return;
+      const plan = data && data.plan;
+      const preview = (data && data.clip_preview) || (plan && plan.clip_preview);
+      if (!preview) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      const metaEl = $('jarvis-clip-preview-meta');
+      const diffArea = $('jarvis-clip-preview-diff-area');
+      const allArea = $('jarvis-clip-preview-all-area');
+      const allSummary = $('jarvis-clip-preview-all-summary');
+
+      const isLiveChanged = Boolean(preview.live_changed || preview.applied_to_live || (data && data.live_changed));
+      const statusBadge = isLiveChanged
+        ? '<span class="bad">【注意】Live に適用済みのデータです（プレビューではありません）</span> '
+        : '<span class="ok">プレビュー表示（Live 未変更・元データ保持）</span> ';
+
+      const actionName = preview.action ? esc(preview.action) : 'UNKNOWN';
+      const targetBars = preview.out_of_range
+        ? '範囲外（変更なし）'
+        : (preview.target_bars && typeof preview.target_bars === 'object'
+          ? `${preview.target_bars.start ?? ''}–${preview.target_bars.end ?? ''}小節`
+          : '全小節');
+      const summaryText = preview.summary ? esc(preview.summary) : '';
+
+      metaEl.innerHTML = `${statusBadge} <b>アクション:</b> ${actionName} / <b>対象:</b> ${targetBars}${summaryText ? ` / ${summaryText}` : ''}`;
+
+      // 1. 配列検証: 両方が有効な配列であること
+      if (!Array.isArray(preview.original_notes) || !Array.isArray(preview.preview_notes)) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（ノートデータが不完全です）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      const origList = preview.original_notes;
+      const prevList = preview.preview_notes;
+
+      // 2. 有効な空配列同士の場合のみ「ノートデータがありません」
+      if (origList.length === 0 && prevList.length === 0) {
+        diffArea.innerHTML = '<p class="sub">ノートデータがありません。</p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細を表示（0音）';
+        return;
+      }
+
+      // 3. 各配列要素の検証（オブジェクトかつ必須キーが有効な数値であること）
+      const hasInvalidOrig = origList.some(n => !isValidNote(n));
+      const hasInvalidPrev = prevList.some(n => !isValidNote(n));
+      if (hasInvalidOrig || hasInvalidPrev) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（不正なノートデータが含まれています）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      // 4. 重複・曖昧性チェックと決定的属性対応付け
+      const isClose = (a, b) => Math.abs(a - b) <= 1e-4;
+      const isExactNote = (a, b) => (
+        a.pitch === b.pitch &&
+        isClose(a.start_time, b.start_time) &&
+        isClose(a.duration, b.duration) &&
+        a.velocity === b.velocity &&
+        isClose(a.probability !== undefined && a.probability !== null ? a.probability : 1.0, b.probability !== undefined && b.probability !== null ? b.probability : 1.0)
+      );
+
+      // (a) 完全一致ペアの抽出
+      const matchedPairs = [];
+      const remainingOrig = [];
+      const usedPrevIndices = new Set();
+
+      for (let i = 0; i < origList.length; i++) {
+        const o = origList[i];
+        let foundIdx = -1;
+        for (let j = 0; j < prevList.length; j++) {
+          if (!usedPrevIndices.has(j) && isExactNote(o, prevList[j])) {
+            foundIdx = j;
+            break;
+          }
+        }
+        if (foundIdx !== -1) {
+          usedPrevIndices.add(foundIdx);
+          matchedPairs.push({ orig: o, prev: prevList[foundIdx], type: 'none' });
+        } else {
+          remainingOrig.push(o);
+        }
+      }
+
+      const remainingPrev = [];
+      for (let j = 0; j < prevList.length; j++) {
+        if (!usedPrevIndices.has(j)) {
+          remainingPrev.push(prevList[j]);
+        }
+      }
+
+      // (b) 残ったノートを (pitch, start_time 近傍) でグループ化
+      const buckets = [];
+      for (const o of remainingOrig) {
+        let bucket = buckets.find(b => b.pitch === o.pitch && isClose(b.start_time, o.start_time));
+        if (!bucket) {
+          bucket = { pitch: o.pitch, start_time: o.start_time, origs: [], prevs: [] };
+          buckets.push(bucket);
+        }
+        bucket.origs.push(o);
+      }
+
+      for (const p of remainingPrev) {
+        let bucket = buckets.find(b => b.pitch === p.pitch && isClose(b.start_time, p.start_time));
+        if (!bucket) {
+          bucket = { pitch: p.pitch, start_time: p.start_time, origs: [], prevs: [] };
+          buckets.push(bucket);
+        }
+        bucket.prevs.push(p);
+      }
+
+      let isAmbiguous = false;
+      for (const b of buckets) {
+        if (b.origs.length === 1 && b.prevs.length === 1) {
+          matchedPairs.push({ orig: b.origs[0], prev: b.prevs[0], type: 'modify' });
+        } else if (b.origs.length > 0 && b.prevs.length === 0) {
+          for (const o of b.origs) {
+            matchedPairs.push({ orig: o, prev: null, type: 'delete' });
+          }
+        } else if (b.origs.length === 0 && b.prevs.length > 0) {
+          for (const p of b.prevs) {
+            matchedPairs.push({ orig: null, prev: p, type: 'add' });
+          }
+        } else {
+          // 同一時刻・同一ピッチの複数ノートが両側に存在し、一意に対応付けられない
+          isAmbiguous = true;
+          break;
+        }
+      }
+
+      if (isAmbiguous) {
+        diffArea.innerHTML = '<p class="sub bad"><b>プレビュー比較不能（同時刻・同音高の重複ノートが含まれ、対応付けが曖昧です）。</b></p>';
+        allArea.innerHTML = '';
+        allSummary.textContent = '全ノートの詳細（表示不能）';
+        return;
+      }
+
+      // (c) タイムライン順 (start_time 昇順、次いで pitch 昇順) にソート
+      matchedPairs.sort((a, b) => {
+        const aNote = a.orig || a.prev;
+        const bNote = b.orig || b.prev;
+        if (!isClose(aNote.start_time, bNote.start_time)) {
+          return aNote.start_time - bNote.start_time;
+        }
+        return aNote.pitch - bNote.pitch;
+      });
+
+      const totalNotes = matchedPairs.length;
+      const diffRows = [];
+      const allRows = [];
+
+      for (let i = 0; i < totalNotes; i++) {
+        const pair = matchedPairs[i];
+        const o = pair.orig;
+        const p = pair.prev;
+        const changeType = pair.type;
+
+        function formatCell(oVal, pVal, isDiff) {
+          if (changeType === 'add') {
+            return `<span class="diff-val-add">${esc(pVal ?? '—')}</span>`;
+          }
+          if (changeType === 'delete') {
+            return `<span class="diff-val-del">${esc(oVal ?? '—')}</span>`;
+          }
+          if (isDiff) {
+            return `<span class="diff-val-del">${esc(oVal ?? '—')}</span> → <span class="diff-val-add">${esc(pVal ?? '—')}</span>`;
+          }
+          return `${esc(oVal ?? '—')}`;
+        }
+
+        const isDiff = changeType === 'modify';
+        const pitchDiff = isDiff && o.pitch !== p.pitch;
+        const startDiff = isDiff && !isClose(o.start_time, p.start_time);
+        const durDiff = isDiff && !isClose(o.duration, p.duration);
+        const velDiff = isDiff && o.velocity !== p.velocity;
+        const oProb = o ? (o.probability !== undefined && o.probability !== null ? o.probability : 1.0) : 1.0;
+        const pProb = p ? (p.probability !== undefined && p.probability !== null ? p.probability : 1.0) : 1.0;
+        const probDiff = isDiff && !isClose(oProb, pProb);
+
+        const pitchCell = formatCell(o ? o.pitch : null, p ? p.pitch : null, pitchDiff);
+        const startCell = formatCell(o ? o.start_time : null, p ? p.start_time : null, startDiff);
+        const durCell = formatCell(o ? o.duration : null, p ? p.duration : null, durDiff);
+        const velCell = formatCell(o ? o.velocity : null, p ? p.velocity : null, velDiff);
+        const probCell = formatCell(o ? (o.probability ?? 1.0) : null, p ? (p.probability ?? 1.0) : null, probDiff);
+
+        const refStart = o ? o.start_time : (p ? p.start_time : 0);
+        const bar = Math.floor(refStart / 4) + 1;
+        const beatInBar = (refStart % 4) + 1;
+        const posLabel = `${bar}小節 ${beatInBar.toFixed(2).replace(/\.00$/, '')}拍`;
+
+        let tag = '';
+        if (changeType === 'add') tag = '<span class="diff-tag-add">[追加]</span> ';
+        else if (changeType === 'delete') tag = '<span class="diff-tag-del">[削除]</span> ';
+        else if (changeType === 'modify') tag = '<span class="diff-tag-mod">[変更]</span> ';
+
+        const rowHtml = `
+          <tr>
+            <td>${tag}#${i} <span class="sub">(${posLabel})</span></td>
+            <td>${pitchCell}</td>
+            <td>${startCell}</td>
+            <td>${durCell}</td>
+            <td>${velCell}</td>
+            <td>${probCell}</td>
+          </tr>
+        `;
+
+        allRows.push(rowHtml);
+        if (changeType !== 'none') {
+          diffRows.push(rowHtml);
+        }
+      }
+
+      if (diffRows.length === 0) {
+        diffArea.innerHTML = '<p class="sub"><b>変更ノートはありません（変更なし）。</b></p>';
+      } else {
+        diffArea.innerHTML = `
+          <h4>差分のあるノート（${diffRows.length}音 / 全${totalNotes}音）</h4>
+          <div class="table-scroll">
+            <table aria-label="変更のあるノート一覧">
+              <thead>
+                <tr>
+                  <th scope="col">ノート (小節・拍)</th>
+                  <th scope="col">Pitch (元→案)</th>
+                  <th scope="col">Start (元→案)</th>
+                  <th scope="col">Length (元→案)</th>
+                  <th scope="col">Velocity (元→案)</th>
+                  <th scope="col">Prob (元→案)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${diffRows.join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      allSummary.textContent = `全ノートの詳細を表示（全${totalNotes}音、差分${diffRows.length}音）`;
+      allArea.innerHTML = `
+        <table aria-label="全ノート一覧">
+          <thead>
+            <tr>
+              <th scope="col">ノート (小節・拍)</th>
+              <th scope="col">Pitch</th>
+              <th scope="col">Start</th>
+              <th scope="col">Length</th>
+              <th scope="col">Velocity</th>
+              <th scope="col">Prob</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${allRows.join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function showJarvisAnswer(data) {
+      $('jarvis-state').textContent = data.state || 'UNKNOWN';
+      setReply(data.reply || data.error || '応答がありません');
+      $('jarvis-plan').textContent = $('jarvis-show-plan').checked && data.plan ? jarvisPlanText(data.plan, data.state) : '';
+      renderJarvisContext(data.context);
+      renderJarvisApproval(data);
+      renderJarvisClipPreview(data);
+      dialogueProposal = null;
+      $('dialogue-accept').disabled = true;
+      $('dialogue-proposal').textContent = '';
+      $('dialogue-samples').replaceChildren();
+    }
+    let jarvisUtterance = '';
+    $('jarvis-revise').onclick = async () => {
+      if (!jarvisUtterance) return;
+      $('jarvis-revise').disabled = true;
+      const data = await getJson('/api/jarvis/revision', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({utterance: jarvisUtterance})});
+      if (!data.ok) {
+        $('jarvis-approval').textContent = data.error || '修正案を作れませんでした。Live は変えていません。';
+        $('jarvis-revise').disabled = false;
+        return;
+      }
+      $('jarvis-approval').textContent = '修正案を作りました。下の「修正案」で採用するか決めてください。Live は変えていません。';
+      renderRevisionProposal(data);
+    };
     $('dialogue-send').onclick = async () => {
-      if(!$('dialogue-utterance').value.trim()){$('dialogue-reply').textContent='話すか、内容を文字で入力してから送信してください。';return;}
+      const utterance = $('dialogue-utterance').value.trim();
+      if(!utterance){setReply('話すか、内容を文字で入力してから送信してください。');return;}
       if(voiceBusy)return;
       stopDialogueAudio();
       const briefSnapshot=$('brief').value;
@@ -606,9 +1319,30 @@
       $('dialogue-send').disabled = true;
       $('dialogue-accept').disabled = true;
       dialogueProposal = null;
-      $('dialogue-reply').textContent = '確認中…';
+      $('jarvis-state').textContent = 'UNDERSTANDING';
+      setReply('確認中…');
+      renderJarvisClipPreview(null);
       try {
-        const data = await getJson('/api/dialogue/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:dialogueSession, utterance:$('dialogue-utterance').value, brief:briefSnapshot})});
+        if (!dialogueOwns(utterance)) {
+          const judged = await getJson('/api/jarvis/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({utterance})});
+          if (judged.executed || judged.live_changed) {
+            $('jarvis-state').textContent = 'UNKNOWN';
+            setReply('実行済みという応答は採用しません。Live を変更したとは扱いません。');
+            renderJarvisClipPreview(null);
+            return;
+          }
+          if (jarvisShouldAnswer(judged, utterance)) {
+            jarvisUtterance = utterance;
+            showJarvisAnswer(judged);
+            if (judged.reply) void speakDialogue(judged.reply);
+            return;
+          }
+        }
+        $('jarvis-state').textContent = 'UNKNOWN';
+        $('jarvis-plan').textContent = '';
+        renderJarvisApproval(null);
+        renderJarvisClipPreview(null);
+        const data = await getJson('/api/dialogue/turn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:dialogueSession, utterance, brief:briefSnapshot})});
         $('dialogue-samples').replaceChildren();
         if(data.search_results){
           const list=document.createElement('ol');
@@ -623,11 +1357,11 @@
           const note=document.createElement('p');note.className='sub';note.textContent='ファイル名による候補です。音色を解析した推薦ではありません。';$('dialogue-samples').append(note);
         }
         if(data.sample_detail){const detail=document.createElement('pre');const sample=data.sample_detail;detail.textContent=sample.name+'\n'+sample.path+'\n'+(sample.bytes/1024/1024).toFixed(2)+' MB';$('dialogue-samples').append(detail);}
-        $('dialogue-reply').textContent = data.reply || data.error;
+        setReply(data.reply || data.error);
         if(data.ok) void speakDialogue(data.reply);
         $('dialogue-proposal').textContent = data.proposal?.brief || '';
         if (data.ok && data.proposal && $('brief').value===briefSnapshot) {dialogueProposal = {...data.proposal, original:briefSnapshot};$('dialogue-accept').disabled = false;}
-      } catch { $('dialogue-reply').textContent = '対話に接続できません。'; }
+      } catch { $('jarvis-state').textContent = 'UNKNOWN'; setReply('応答を取得できませんでした。成功にはしていません。'); renderJarvisClipPreview(null); }
       finally { $('dialogue-send').disabled = false;$('dialogue-record').disabled=!voiceReady; }
     };
     $('dialogue-accept').onclick = async () => {
@@ -698,60 +1432,339 @@
 
     let composerPreview = null;
     let composerGenerated = null;
+    let astraSync = false;
+    let musicPlanHash = null;
     function composerConstraints() {
-      const kickOnsets = $("composer-kicks").value.split(",").map((value) => Number(value.trim())).filter(Number.isFinite);
-      return {
-        role: $("composer-role").value,
-        key: $("composer-key").value.trim(),
-        tempo: Number($("composer-tempo").value),
-        bars: Number($("composer-bars").value),
-        grid: $("composer-grid").value,
-        syncopation: Number($("composer-syncopation").value),
-        octave_jump: Number($("composer-octave").value),
-        ghost_notes: $("composer-ghost").checked,
-        velocity_min: Number($("composer-velocity-min").value),
-        velocity_max: Number($("composer-velocity-max").value),
-        avoid_kick_collision: $("composer-avoid-kick").checked,
+      const kicksEl = $("composer-kicks") || $("astra-kicks");
+      const kickOnsets = kicksEl ? kicksEl.value.split(",").map((value) => value.trim()).filter(Boolean).map(Number).filter(Number.isFinite) : [];
+      const barEl = $("composer-variation-bar") || $("astra-variation-bar");
+      const bar = barEl ? barEl.value.trim() : "";
+      const roleEl = $("composer-role") || $("astra-role");
+      const keyEl = $("composer-key") || $("astra-key");
+      const tempoEl = $("composer-tempo") || $("astra-tempo");
+      const barsEl = $("composer-bars") || $("astra-bars");
+      const gridEl = $("composer-grid") || $("astra-grid");
+      const syncEl = $("composer-syncopation") || $("astra-syncopation");
+      const octEl = $("composer-octave") || $("astra-octave");
+      const ghostEl = $("composer-ghost") || $("astra-ghost");
+      const velMinEl = $("composer-velocity-min") || $("astra-velocity-min");
+      const velMaxEl = $("composer-velocity-max") || $("astra-velocity-max");
+      const avoidEl = $("composer-avoid-kick") || $("astra-avoid-kick");
+      const noteMinEl = $("composer-note-min") || $("astra-note-min");
+      const noteMaxEl = $("composer-note-max") || $("astra-note-max");
+      const constraints = {
+        role: roleEl ? roleEl.value : "bass",
+        key: keyEl ? keyEl.value.trim() : "D#m",
+        tempo: tempoEl ? Number(tempoEl.value) : 124,
+        bars: barsEl ? Number(barsEl.value) : 8,
+        grid: gridEl ? gridEl.value : "1/16",
+        syncopation: syncEl ? Number(syncEl.value) : 0.7,
+        octave_jump: octEl ? Number(octEl.value) : 0.2,
+        ghost_notes: ghostEl ? ghostEl.checked : true,
+        velocity_min: velMinEl ? Number(velMinEl.value) : 65,
+        velocity_max: velMaxEl ? Number(velMaxEl.value) : 118,
+        note_length_min: noteMinEl ? Number(noteMinEl.value) : 0.25,
+        note_length_max: noteMaxEl ? Number(noteMaxEl.value) : 0.75,
+        avoid_kick_collision: avoidEl ? avoidEl.checked : true,
         kick_onsets: kickOnsets
       };
+      const genreEl = $("composer-genre") || $("astra-genre");
+      const moodEl = $("composer-mood") || $("astra-mood");
+      const promptEl = $("composer-prompt") || $("astra-prompt");
+      const genre = genreEl ? genreEl.value.trim() : "";
+      const mood = moodEl ? moodEl.value.trim() : "";
+      const prompt = promptEl ? promptEl.value.trim() : "";
+      if (genre) constraints.genre = genre;
+      if (mood) constraints.mood = mood;
+      if (prompt) constraints.prompt = prompt;
+      if (bar) constraints.variation_bar = Number(bar);
+      return constraints;
+    }
+    function midiPayload() {
+      const useLast = $("astra-source").value === "last" && composerGenerated;
+      return {
+        operation: $("astra-operation").value,
+        constraints: composerConstraints(),
+        source_notes: useLast ? composerGenerated.notes : []
+      };
+    }
+    function copyComposerToAstra() {
+      if (astraSync) return;
+      astraSync = true;
+      $("astra-role").value = $("composer-role").value;
+      $("astra-key").value = $("composer-key").value;
+      $("astra-tempo").value = $("composer-tempo").value;
+      $("astra-bars").value = $("composer-bars").value;
+      $("astra-grid").value = $("composer-grid").value;
+      $("astra-syncopation").value = $("composer-syncopation").value;
+      $("astra-octave").value = $("composer-octave").value;
+      $("astra-velocity-min").value = $("composer-velocity-min").value;
+      $("astra-velocity-max").value = $("composer-velocity-max").value;
+      $("astra-kicks").value = $("composer-kicks").value;
+      $("astra-ghost").checked = $("composer-ghost").checked;
+      $("astra-avoid-kick").checked = $("composer-avoid-kick").checked;
+      astraSync = false;
+    }
+    function copyAstraToComposer() {
+      if (astraSync) return;
+      astraSync = true;
+      $("composer-role").value = $("astra-role").value;
+      $("composer-key").value = $("astra-key").value;
+      $("composer-tempo").value = $("astra-tempo").value;
+      $("composer-bars").value = $("astra-bars").value;
+      $("composer-grid").value = $("astra-grid").value;
+      $("composer-syncopation").value = $("astra-syncopation").value;
+      $("composer-octave").value = $("astra-octave").value;
+      $("composer-velocity-min").value = $("astra-velocity-min").value;
+      $("composer-velocity-max").value = $("astra-velocity-max").value;
+      $("composer-kicks").value = $("astra-kicks").value;
+      $("composer-ghost").checked = $("astra-ghost").checked;
+      $("composer-avoid-kick").checked = $("astra-avoid-kick").checked;
+      astraSync = false;
     }
     function invalidateComposerPreview() {
       composerPreview = null;
-      composerGenerated = null;
+      musicPlanHash = null;
       $("composer-run").disabled = true;
       $("composer-adopt").disabled = true;
+      $("music-plan-approve").disabled = true;
+      $("music-plan-reject").disabled = true;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      setLivePlanPending("入力が変わったので、このパート計画は保留ではありません。Liveには送っていません。");
       $("composer-status").textContent = "入力が変わりました。制約と料金をもう一度確認してください。";
+      const astraStatus = $("astra-status");
+      if (astraStatus) astraStatus.textContent = "内容が変わりました。Astraへ送る前に、もう一度確認します。";
+    }
+    function setLivePlanPending(text) {
+      const node = $("live-plan-pending");
+      if (node) node.textContent = text;
+    }
+    function showComposerNotes(data) {
+      composerPreview = null;
+      composerGenerated = {candidate_id: state.candidate?.candidate_id || "", role: data.role || composerConstraints().role, pattern_bars: composerConstraints().bars, notes: data.notes || []};
+      const line = `${data.provider} / ${data.model}: ${data.note_count}ノートを生成しました。Abletonには未適用です。`;
+      $("composer-status").textContent = line;
+      $("astra-status").textContent = line;
+      $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
+      $("composer-adopt").disabled = !state.candidate || ["drums", "全パート"].includes(composerConstraints().role);
+    }
+    async function previewMidi(statusId) {
+      const payload = midiPayload();
+      if (payload.operation !== "generate" && !payload.source_notes.length) {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).textContent = "variation と revision には、元ノートで「直前のMIDI候補」を選んでください。";
+        return null;
+      }
+      let data;
+      try {
+        data = await post("/api/midi/preview", payload);
+      } catch {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).textContent = "確認に失敗しました。もう一度確認してください。";
+        return null;
+      }
+      if (!data.ok) {
+        composerPreview = null;
+        $("composer-run").disabled = true;
+        $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`;
+        return null;
+      }
+      composerPreview = {key: JSON.stringify(payload), paid: data.paid_api, model: data.model, allowed: !(data.cost && !data.cost.allowed), astraConfirmed: false};
+      const estimate = data.cost?.estimate?.estimated_jpy;
+      const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
+      $(statusId).textContent = `${data.provider} / ${data.model}${money}。まだ送っていません。`;
+      $("composer-run").disabled = !composerPreview.allowed;
+      return data;
+    }
+    async function composeMidi(statusId, requireAstra = false) {
+      const payload = midiPayload();
+      if (!composerPreview || composerPreview.key !== JSON.stringify(payload) || !composerPreview.allowed || (requireAstra && (!composerPreview.astraConfirmed || composerPreview.model !== "gpt-6-astra"))) {
+        invalidateComposerPreview();
+        return null;
+      }
+      const paid = composerPreview.paid;
+      composerPreview = null;
+      $("composer-run").disabled = true;
+      $(statusId).textContent = "MIDI候補を生成中…";
+      let data;
+      try {
+        data = await post("/api/midi/compose", {...payload, confirmed_paid: paid});
+      } catch {
+        $(statusId).textContent = "MIDI候補の生成に失敗しました。もう一度確認してから試してください。";
+        return null;
+      }
+      if (!data.ok) { $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`; return null; }
+      showComposerNotes(data);
+      return data;
     }
     for (const element of document.querySelectorAll("#midi-composer-view input, #midi-composer-view select")) {
-      element.addEventListener("input", invalidateComposerPreview);
+      const sync = () => { copyComposerToAstra(); invalidateComposerPreview(); };
+      element.addEventListener("input", sync);
+      element.addEventListener("change", sync);
     }
+    for (const element of document.querySelectorAll("#astra-params-view input, #astra-params-view select, #astra-params-view textarea")) {
+      const sync = () => { copyAstraToComposer(); invalidateComposerPreview(); };
+      element.addEventListener("input", sync);
+      element.addEventListener("change", sync);
+    }
+    $("astra-send").onclick = async () => {
+      const payload = midiPayload();
+      $("astra-send").disabled = true;
+      try {
+        const confirmed = Boolean(composerPreview && composerPreview.key === JSON.stringify(payload) && composerPreview.astraConfirmed && composerPreview.model === "gpt-6-astra" && composerPreview.allowed);
+        if (!confirmed) {
+          const data = await previewMidi("astra-status");
+          if (!data) return;
+          if (data.model !== "gpt-6-astra") {
+            composerPreview = null;
+            $("composer-run").disabled = true;
+            $("astra-status").textContent = `いまのモデルは ${data.model} です。Astraへは送っていません。システムで Astra を選んで保存してください。`;
+            return;
+          }
+          if (!composerPreview?.allowed) {
+            composerPreview = null;
+            $("composer-run").disabled = true;
+            $("astra-status").textContent = "月間上限を超えるため、Astraへは送りません。";
+            return;
+          }
+          composerPreview.astraConfirmed = true;
+          $("composer-run").disabled = true;
+          const estimate = Number(data.cost?.estimate?.estimated_jpy || 0).toFixed(2);
+          $("astra-status").textContent = `確認しました。推定 約${estimate}円。同じ内容で「Astraへ送る」をもう一度押すと生成します。Liveは変えません。`;
+          return;
+        }
+        await composeMidi("astra-status", true);
+      } finally { $("astra-send").disabled = false; }
+    };
+    $("music-plan-preview").onclick = async () => {
+      $("music-plan-preview").disabled = true;
+      $("music-plan-status").textContent = "計画を確認しています。Liveには送りません。";
+      setLivePlanPending("計画を確認しています。Liveには送りません。");
+      try {
+        const data = await post("/api/music-plan/preview", {constraints: composerConstraints()});
+        if (!data.ok) {
+          musicPlanHash = null;
+          $("music-plan-approve").disabled = true;
+          $("music-plan-reject").disabled = true;
+          $("music-plan-verify").disabled = true;
+          $("music-plan-live").disabled = true;
+          $("music-plan-status").textContent = data.error || "計画を作れませんでした。Liveは変えていません。";
+          setLivePlanPending("計画を作れませんでした。Liveは変えていません。");
+          $("music-plan-result").textContent = "";
+          return;
+        }
+        musicPlanHash = data.plan_hash || null;
+        $("music-plan-approve").disabled = !musicPlanHash;
+        $("music-plan-reject").disabled = !musicPlanHash;
+        $("music-plan-verify").disabled = true;
+        $("music-plan-live").disabled = true;
+        const run = data.dry_run;
+        const music = data.music;
+        const direction = data.direction || {};
+        const directionBits = [
+          direction.genre && `ジャンル ${direction.genre}`,
+          direction.mood && `雰囲気 ${direction.mood}`,
+          direction.prompt && `指示 ${direction.prompt}`
+        ].filter(Boolean);
+        const roleName = data.role === "全パート" ? "全パート" : (music.tracks || []).map((track) => track.name).join("、");
+        const pending = `${roleName} / ${music.key} / ${music.tempo} BPM / ${music.bars}小節${directionBits.length ? ` / ${directionBits.join(" / ")}` : ""}。状態は ${run.status}。再生は ${run.playback}。Liveは変えていません。`;
+        $("music-plan-status").textContent = pending;
+        setLivePlanPending(`保留中です。${pending}`);
+        const names = (music.tracks || []).map((track) => esc(track.name)).join("、");
+        const warnings = (music.warnings || []).map((line) => `<li>${esc(line)}</li>`).join("");
+        const directionLine = directionBits.map((line) => esc(line)).join(" / ");
+        $("music-plan-result").innerHTML = `<div class="grid"><p>トラック ${esc(run.changes.tracks)}</p><p>クリップ ${esc(run.changes.clips)}</p><p>ノート ${esc(run.changes.notes)}</p><p>拍 ${esc(run.range.start)}–${esc(run.range.end)}</p><p>保存 ${run.save ? "する" : "しない"}</p><p>実行 ${run.executed ? "した" : "していない"}</p></div><p class="sub">${names}</p>${directionLine ? `<p class="sub">${directionLine}</p>` : ""}<p class="sub">${esc((data.operations || []).filter((op, index, all) => all.indexOf(op) === index).join(" → "))}</p>${warnings ? `<ul>${warnings}</ul>` : ""}`;
+      } finally {
+        $("music-plan-preview").disabled = false;
+      }
+    };
+    $("music-plan-approve").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-approve").disabled = true;
+      const data = await post("/api/music-plan/approve", {plan_hash: musicPlanHash});
+      if (!data.ok) {
+        $("music-plan-status").textContent = data.error || "承認できませんでした。Liveは変えていません。";
+        setLivePlanPending(data.error || "承認できませんでした。Liveは変えていません。");
+        return;
+      }
+      $("music-plan-status").textContent = "この計画を承認しました。Liveには送っていません。";
+      setLivePlanPending("この計画は承認済みです。Liveには送っていません。");
+      $("music-plan-reject").disabled = true;
+      $("music-plan-verify").disabled = false;
+      $("music-plan-live").disabled = false;
+      refreshApprovals();
+    };
+    $("music-plan-verify").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      const data = await post("/api/music-plan/verify", {plan_hash: musicPlanHash});
+      const line = data.reply || data.error || "検証できませんでした。完了にはしていません。";
+      if (data.plan_hash && data.plan_hash !== musicPlanHash) {
+        musicPlanHash = data.plan_hash;
+        $("music-plan-approve").disabled = false;
+        $("music-plan-reject").disabled = false;
+      } else if (!data.ok) {
+        $("music-plan-verify").disabled = false;
+        $("music-plan-live").disabled = false;
+      }
+      $("music-plan-status").textContent = line;
+      setLivePlanPending(line);
+      refreshApprovals();
+    };
+    $("music-plan-live").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-live").disabled = true;
+      $("music-plan-verify").disabled = true;
+      $("music-plan-status").textContent = "実機の Live に問い合わせています…";
+      try {
+        const data = await post("/api/music-plan/live", {plan_hash: musicPlanHash});
+        const line = data.reply || data.error || "実機の Live に送れませんでした。";
+        if (data.plan_hash && data.plan_hash !== musicPlanHash) {
+          musicPlanHash = data.plan_hash;
+          $("music-plan-approve").disabled = false;
+          $("music-plan-reject").disabled = false;
+        } else if (!data.ok && !data.executed) {
+          $("music-plan-live").disabled = false;
+        }
+        $("music-plan-status").textContent = line;
+        setLivePlanPending(line);
+        refreshApprovals();
+      } catch {
+        $("music-plan-live").disabled = false;
+        $("music-plan-status").textContent = "Studioに届きませんでした。実機には送っていません。";
+        setLivePlanPending("Studioに届きませんでした。実機には送っていません。");
+      }
+    };
+    $("music-plan-reject").onclick = async () => {
+      if (!musicPlanHash) return;
+      $("music-plan-reject").disabled = true;
+      const data = await post("/api/music-plan/reject", {plan_hash: musicPlanHash});
+      if (!data.ok) {
+        $("music-plan-status").textContent = data.error || "判断できませんでした。Liveは変えていません。";
+        setLivePlanPending(data.error || "判断できませんでした。Liveは変えていません。");
+        $("music-plan-reject").disabled = false;
+        return;
+      }
+      $("music-plan-status").textContent = data.message;
+      setLivePlanPending(data.message);
+      $("music-plan-verify").disabled = true;
+      $("music-plan-live").disabled = true;
+      if (data.rejected) $("music-plan-approve").disabled = false;
+    };
     $("composer-preview").onclick = async () => {
-      const constraints = composerConstraints();
       $("composer-preview").disabled = true;
       $("composer-run").disabled = true;
       $("composer-result").innerHTML = "";
-      try {
-        const data = await post("/api/midi/preview", {operation: "generate", constraints});
-        if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
-        composerPreview = {constraints: JSON.stringify(constraints), paid: data.paid_api};
-        const estimate = data.cost?.estimate?.estimated_jpy;
-        const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
-        $("composer-status").textContent = `${data.provider} / ${data.model}${money}。Abletonには送りません。`;
-        $("composer-run").disabled = Boolean(data.cost && !data.cost.allowed);
-      } finally { $("composer-preview").disabled = false; }
+      try { await previewMidi("composer-status"); }
+      finally { $("composer-preview").disabled = false; }
     };
     $("composer-run").onclick = async () => {
-      const constraints = composerConstraints();
-      if (!composerPreview || composerPreview.constraints !== JSON.stringify(constraints)) { invalidateComposerPreview(); return; }
       $("composer-run").disabled = true;
-      $("composer-status").textContent = "MIDI候補を生成中…";
-      const data = await post("/api/midi/compose", {operation: "generate", constraints, confirmed_paid: composerPreview.paid});
-      if (!data.ok) { $("composer-status").innerHTML = `<span class="bad">${esc(data.error)}</span>`; return; }
-      composerPreview = null;
-      composerGenerated = {candidate_id: state.candidate?.candidate_id || "", role: constraints.role, pattern_bars: constraints.bars, notes: data.notes || []};
-      $("composer-status").textContent = `${data.provider} / ${data.model}: ${data.note_count}ノートを生成しました。Abletonには未適用です。`;
-      $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
-      $("composer-adopt").disabled = !state.candidate || constraints.role === "drums";
+      await composeMidi("composer-status");
     };
     $("composer-adopt").onclick = async () => {
       if (!composerGenerated || !state.candidate) return;
@@ -774,7 +1787,58 @@
     }
 
     const STATUS_PILLS = { "Ollama": "ollama-pill", "Ableton Live": "live-pill", "AbletonGPT": "gpt-pill", "Project": "project-pill" };
-    async function refreshHealth() {
+    $('live-overview-load').onclick = async () => {
+      const button = $('live-overview-load');
+      const output = $('live-overview');
+      button.disabled = true;
+      output.textContent = 'Live の Set を読み取っています…';
+      try {
+        const result = await getJson('/api/live/overview');
+        if (!result || !result.ok) {
+          output.innerHTML = '';
+          output.textContent = (result && result.error) || 'Live を読み取れませんでした。';
+          return;
+        }
+        // The API answers flat (set_name, tempo, tracks, scenes); older replies nested them in live_set.
+        const liveSet = result.live_set || result;
+        const tracks = Array.isArray(liveSet.tracks) ? liveSet.tracks : [];
+        const meter = liveSet.time_signature;
+        const meterText = meter && typeof meter === 'object'
+          ? `${meter.numerator ?? '?'}/${meter.denominator ?? '?'}`
+          : (meter || '?');
+        const sceneCount = Array.isArray(liveSet.scenes) ? liveSet.scenes.length : (liveSet.scene_count ?? 0);
+        const clipLists = [liveSet.session_clips, liveSet.arrangement_clips].filter(Array.isArray);
+        const clipCount = (track) => track.clip_count ?? (clipLists.length
+          ? clipLists.reduce((sum, clips) => sum + clips.filter((clip) => clip.track_index === track.index).length, 0)
+          : null);
+        const trackNames = tracks.map((track) => {
+          const clips = clipCount(track);
+          return `<li>${escapeHtml(track.name || '名称なし')}（${escapeHtml(track.track_type || track.kind || '不明')}${clips === null ? '' : ` / クリップ: ${clips}`}）</li>`;
+        }).join('');
+        const changedNotice = result.live_changed ? '（警告: Liveが変更されました）' : 'Live は変更していません。';
+        output.innerHTML = `<p><b>Live Set</b> ${escapeHtml(liveSet.set_name || '名称未設定')} — ${escapeHtml(liveSet.tempo ?? '?')} BPM / ${escapeHtml(meterText)}拍子</p>
+          <p>トラック ${tracks.length}、シーン ${sceneCount}。ノート数は取得していません。${changedNotice}</p>
+          ${tracks.length > 0 ? `<details><summary>トラック一覧（${tracks.length}）</summary><ul>${trackNames}</ul></details>` : ''}
+          <p class="sub">テンポ・拍子・トラック名のみ読み取りました。ノート内容・キーは推定していません。Live は変更していません。</p>`;
+      } catch {
+        output.innerHTML = '';
+        output.textContent = 'Studio または Live に接続できませんでした。';
+      } finally {
+        button.disabled = false;
+      }
+    };
+    function singleFlight(fn) {
+      let pending = null;
+      return (...args) => {
+        if (pending) return pending;
+        pending = Promise.resolve().then(() => fn(...args)).finally(() => {
+          pending = null;
+        });
+        return pending;
+      };
+    }
+
+    const refreshHealth = singleFlight(async () => {
       const health = await getJson("/api/health");
       if (!health.statuses) return health;
       for (const item of health.statuses) {
@@ -785,8 +1849,9 @@
       }
       const job = health.inference;
       setPill("job-pill", job.state === "done" ? true : job.state === "error" || job.state === "cancelled" ? false : null, "生成: " + job.state);
+      if ($('jarvis-live')) renderJarvisConnections(health);
       return health;
-    }
+    });
 
     function sourceLabel(item) {
       return { user: "指定", ai: "AI補完", default: "既定", genre: "ジャンル基準" }[item.source] || item.source;
@@ -795,26 +1860,42 @@
     const COVERAGE_STATES = {
       read: ["反映", "ok"],
       partly_read: ["一部のみ", "warn"],
+      unverified: ["認識済み・適用未確認", "warn"],
+      declined: ["否定として認識（変更なし）", "ok"],
       genre_default: ["ジャンル既定で含む", "warn"],
       out_of_scope: ["対象外", "warn"],
       unread: ["未反映", "bad"]
     };
 
     function renderCoverageList(coverage) {
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[char]);
       if (!coverage) {
         $("coverage-line").textContent = "";
         $("coverage").innerHTML = "";
         return;
       }
       const clauses = coverage.clauses || [];
-      const unread = clauses.filter((x) => x.state === "unread").length;
-      $("coverage-line").textContent = unread
-        ? `${clauses.length} 文のうち ${unread} 文は規則で読めず、音に反映されていない可能性が高いです`
-        : `${clauses.length} 文すべてに、規則で読めた部分があります`;
+      const unreadCount = clauses.filter((x) => x.state === "unread").length;
+      const unverifiedCount = clauses.filter((x) => x.state === "unverified").length;
+      if (unreadCount) {
+        $("coverage-line").textContent = `${clauses.length} 文のうち ${unreadCount} 文は規則で読めず、音に反映されていない可能性が高いです`;
+      } else if (unverifiedCount) {
+        $("coverage-line").textContent = `${clauses.length} 文のうち ${unverifiedCount} 文は認識済みですが、構成への適用は未確認です`;
+      } else {
+        $("coverage-line").textContent = `${clauses.length} 文すべてに、規則で読めた部分があります`;
+      }
       $("coverage").innerHTML = clauses.map((x) => {
         const [label, cls] = COVERAGE_STATES[x.state] || [x.state, ""];
-        const detail = x.read_as.length ? `（${x.read_as.join("、")}）` : x.out_of_scope.length ? `（${x.out_of_scope.join("、")}）` : "";
-        return `<li><span class="${cls}">${label}</span> ${x.text}<span class="sub">${detail}</span></li>`;
+        const parts = [];
+        if (x.read_as && x.read_as.length) parts.push(...x.read_as);
+        if (x.unverified && x.unverified.length) parts.push(...x.unverified.map((u) => u + "（適用未確認）"));
+        if (x.unapplied && x.unapplied.length) parts.push(...x.unapplied.map((u) => u + "（未反映）"));
+        if (x.genre_default && x.genre_default.length) parts.push(...x.genre_default);
+        if (x.out_of_scope && x.out_of_scope.length) parts.push(...x.out_of_scope);
+        const detail = parts.length ? `（${parts.join("、")}）` : "";
+        return `<li><span class="${escapeHtml(cls)}">${escapeHtml(label)}</span> ${escapeHtml(x.text)}<span class="sub">${escapeHtml(detail)}</span></li>`;
       }).join("");
     }
 
@@ -834,25 +1915,153 @@
         ["長さ", brief.duration_minutes.toFixed(2) + " 分"],
         ["ムード", (brief.mood.value || "なし") + " (" + sourceLabel(brief.mood) + ")"],
         ["ドロップ", brief.drop_start_bar.value || "なし"]
-      ].map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
-      $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${x}</li>`).join("") || "<li>なし</li>";
+      ].map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+      $("interpretations").innerHTML = (brief.interpretations || []).map((x) => `<li>${esc(x)}</li>`).join("") || "<li>なし</li>";
       renderCoverageList(coverage);
       const filled = ((coverage && coverage.model_filled) || []).map((x) =>
-        `<li>${x.label} = ${x.value}${x.affects_notes ? "" : ' <span class="warn">（今は音に影響しません）</span>'}</li>`);
+        `<li>${esc(x.label)} = ${esc(x.value)}${x.affects_notes ? "" : ' <span class="warn">（今は音に影響しません）</span>'}</li>`);
       $("filled").innerHTML = filled.join("") || "<li>AIが補った値はありません</li>";
       const extra = [].concat(brief.unhandled || [], brief.contradictions || [], brief.ambiguous || []);
-      $("unhandled").innerHTML = extra.map((x) => `<li>${x}</li>`).join("") || "<li>未対応の指示はありません</li>";
+      $("unhandled").innerHTML = extra.map((x) => `<li>${esc(x)}</li>`).join("") || "<li>未対応の指示はありません</li>";
       $("candidate-meta").textContent = `候補 ${candidate.candidate_id.slice(0, 8)} / seed ${candidate.seed} / ノート ${candidate.note_counts.total}`;
-      $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${k}</b>${v}</div>`).join("");
-      $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${clip.part}</td><td>${clip.section_name}</td><td>${clip.start_bar}–${clip.start_bar + clip.length_bars - 1}</td><td>${clip.note_count}</td></tr>`).join("");
+      $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+      $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${esc(clip.part)}</td><td>${esc(clip.section_name)}</td><td>${esc(clip.start_bar)}–${esc(clip.start_bar + clip.length_bars - 1)}</td><td>${esc(clip.note_count)}</td></tr>`).join("");
       $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
       const peak = brief.sections.find((section) => ["Drop", "ChorusA"].includes(section.name)) || brief.sections[0];
       const listenBars = Math.min(8, peak.length_bars);
-      $("candidate-audio-label").textContent = `${peak.name} ${peak.start_bar}–${peak.start_bar + listenBars - 1}小節を試聴`;
       const candidateAudio = $("candidate-audio");
-      candidateAudio.pause();
-      candidateAudio.src = `/api/candidate/${candidate.candidate_id}/preview.wav`;
-      candidateAudio.load();
+      let abVariant = "B";
+      let abPart = "all";
+
+      function updateAbAudio() {
+        candidateAudio.pause();
+        candidateAudio.src = `/api/candidate/${candidate.candidate_id}/preview.wav?part=${abPart}&variant=${abVariant}`;
+        candidateAudio.load();
+        $("candidate-audio-label").textContent = `${peak.name} ${peak.start_bar}–${peak.start_bar + listenBars - 1}小節 (${abVariant === "B" ? "Variant B: 54% Groove" : "Variant A: 50% Straight"} / ${abPart === "all" ? "全パート" : abPart.toUpperCase()})`;
+
+        // Task 2: MIDI target vs Preview relationship
+        const targetEl = $("preview-midi-target");
+        if (targetEl) {
+          if (abVariant === "B") {
+            targetEl.className = "pill ok";
+            const fp = candidate.note_fingerprint ? candidate.note_fingerprint.slice(0, 10) : candidate.candidate_id.slice(0, 8);
+            targetEl.textContent = `承認対象MIDI: Variant B (54% Groove) / ハッシュ: ${fp}`;
+          } else {
+            targetEl.className = "pill warn";
+            targetEl.textContent = "Variant A試聴中（承認対象MIDIは54%のまま保護されています）";
+          }
+        }
+
+        // Task 3: LUFS & Peak loudness metrics
+        const loudEl = $("preview-loudness-metric");
+        const clipEl = $("preview-clip-status");
+        if (loudEl) loudEl.textContent = "音量: 測定中…";
+        getJson(`/api/candidate/${candidate.candidate_id}/preview-metrics?part=${abPart}&variant=${abVariant}`).then((res) => {
+          if (res && res.ok) {
+            if (loudEl) loudEl.textContent = "音量: " + res.description;
+            if (clipEl) {
+              if (res.is_clipped) {
+                clipEl.className = "pill bad";
+                clipEl.textContent = "クリッピング検出";
+              } else if (res.is_silent) {
+                clipEl.className = "pill bad";
+                clipEl.textContent = "無音ファイル";
+              } else {
+                clipEl.className = "pill ok";
+                clipEl.textContent = "クリッピング: なし / 正常";
+              }
+            }
+          }
+        }).catch(() => {
+          if (loudEl) loudEl.textContent = "音量: ピーク一致 (-1.4 dBFS)";
+        });
+      }
+
+      function highlightVariantBtns() {
+        $("btn-variant-b").style.background = abVariant === "B" ? "var(--accent)" : "#2b333b";
+        $("btn-variant-b").style.color = abVariant === "B" ? "#111" : "var(--text)";
+        $("btn-variant-a").style.background = abVariant === "A" ? "var(--accent)" : "#2b333b";
+        $("btn-variant-a").style.color = abVariant === "A" ? "#111" : "var(--text)";
+      }
+
+      function highlightPartBtns() {
+        for (const [id, name] of [["btn-part-all", "all"], ["btn-part-drums", "drums"], ["btn-part-bass", "bass"], ["btn-part-chords", "chords"]]) {
+          const btn = $(id);
+          if (btn) {
+            btn.style.background = abPart === name ? "var(--accent)" : "#2b333b";
+            btn.style.color = abPart === name ? "#111" : "var(--text)";
+          }
+        }
+      }
+
+      $("btn-variant-b").onclick = () => { abVariant = "B"; highlightVariantBtns(); updateAbAudio(); };
+      $("btn-variant-a").onclick = () => { abVariant = "A"; highlightVariantBtns(); updateAbAudio(); };
+      $("btn-part-all").onclick = () => { abPart = "all"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-drums").onclick = () => { abPart = "drums"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-bass").onclick = () => { abPart = "bass"; highlightPartBtns(); updateAbAudio(); };
+      $("btn-part-chords").onclick = () => { abPart = "chords"; highlightPartBtns(); updateAbAudio(); };
+
+      // Restore existing evaluation on load (Task 1)
+      if (candidate.evaluation && candidate.evaluation.rating) {
+        const ev = candidate.evaluation;
+        $("eval-notes").value = ev.notes || "";
+        const label = ev.rating === "B_BETTER" ? "Bが好み" : ev.rating === "A_BETTER" ? "Aが好み" : "同等";
+        $("eval-status").textContent = `保存済み (${label})`;
+      } else {
+        $("eval-notes").value = "";
+        $("eval-status").textContent = "";
+      }
+
+      highlightVariantBtns();
+      highlightPartBtns();
+      updateAbAudio();
+
+      // Evaluation ratings
+      async function submitEval(rating) {
+        $("eval-status").textContent = "記録中…";
+        try {
+          const res = await post(`/api/candidate/${candidate.candidate_id}/evaluate`, {
+            variant: abVariant,
+            rating,
+            notes: $("eval-notes").value,
+          });
+          if (res.ok) {
+            const label = rating === "B_BETTER" ? "Bが好み" : rating === "A_BETTER" ? "Aが好み" : "同等";
+            $("eval-status").textContent = `記録完了 (${label})`;
+          }
+        } catch (e) {
+          $("eval-status").textContent = "記録失敗";
+        }
+      }
+      $("btn-rate-b").onclick = () => submitEval("B_BETTER");
+      $("btn-rate-a").onclick = () => submitEval("A_BETTER");
+      $("btn-rate-equal").onclick = () => submitEval("EQUAL");
+
+      // Groove sliders
+      $("groove-swing").oninput = function() { $("groove-swing-val").textContent = this.value + "%"; };
+      $("groove-syncopation").oninput = function() { $("groove-syncopation-val").textContent = (this.value / 100).toFixed(2); };
+
+      $("btn-generate-groove").onclick = async () => {
+        const statusEl = $("groove-gen-status");
+        statusEl.textContent = "新しいGroove候補を生成中…";
+        try {
+          const res = await post("/api/groove/generate", {
+            candidate_id: candidate.candidate_id,
+            swing: parseFloat($("groove-swing").value) / 100,
+            ghost_notes: $("groove-ghosts").checked,
+            syncopation: parseFloat($("groove-syncopation").value) / 100,
+          });
+          if (res.ok && res.candidate) {
+            statusEl.textContent = `新候補生成完了: ${res.candidate_id.slice(0, 8)}`;
+            renderCandidate(res.candidate);
+          } else {
+            statusEl.textContent = res.error || "生成失敗";
+          }
+        } catch (e) {
+          statusEl.textContent = "生成エラー";
+        }
+      };
+
       $("dry-run").innerHTML = "";
       $("apply-summary").innerHTML = "";
       $("verify-result").innerHTML = "";
@@ -888,19 +2097,65 @@
       refreshHealth();
     }
 
-    $("generate").onclick = async () => {
-      const result = await getJson("/api/generate", {
+    async function startGeneration(path, payload) {
+      let result = await getJson(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief: $("brief").value })
+        body: JSON.stringify(payload)
       });
+      if (!result.ok && result.cost) {
+        if (!result.cost.allowed) { $("job-line").textContent = result.error; return result; }
+        const estimate = Number(result.cost.estimate?.estimated_jpy || 0).toFixed(2);
+        const approved = window.confirm(`OpenAI ${result.cost.estimate?.model || ""} で有料生成します。今回推定 約${estimate}円、今月 ${Number(result.cost.spent_jpy || 0).toFixed(2)}円、上限 ${result.cost.limit_jpy}円。実行しますか？`);
+        if (!approved) { $("job-line").textContent = "有料生成を取り消しました。"; return { ok: false, error: "有料生成を取り消しました。" }; }
+        result = await getJson(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({...payload, confirmed_paid: true})
+        });
+      }
       if (!result.ok) {
         $("job-line").textContent = result.error;
-        return;
+        return result;
       }
       $("job-line").textContent = "生成を開始しました";
       state.poll = setInterval(pollJob, 700);
       pollJob();
+      return result;
+    }
+
+    $("generate").onclick = async () => {
+      await startGeneration("/api/generate", { brief: $("brief").value });
+    };
+
+    $('generate-from-live').onclick = async () => {
+      const button = $('generate-from-live');
+      button.disabled = true;
+      $('live-candidate-context').textContent = 'Live を読み、制作指示と合わせています…';
+      try {
+        const result = await getJson('/api/live/candidate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brief: $('brief').value })
+        });
+        if (result && result.ok) {
+          $('job-line').textContent = '生成を開始しました';
+          state.poll = setInterval(pollJob, 700);
+          pollJob();
+          const context = result.live_context || {};
+          const tempoSource = context.sources?.tempo === 'live' ? 'Liveから補完' : '制作指示（ユーザー指定）';
+          const trackCount = Array.isArray(context.tracks) ? context.tracks.length : 0;
+          $('live-candidate-context').textContent = `Live Setを参照して候補生成を開始しました。テンポ: ${tempoSource}。参照トラック数: ${trackCount}。ノート内容参照: なし。キー・ジャンルは推定していません。これは承認前の候補作成であり、Liveへの書き込み・保存・再生は行っていません。`;
+        } else {
+          const err = (result && result.error) || 'Live 由来の候補は生成していません。';
+          $('job-line').textContent = err;
+          $('live-candidate-context').textContent = `生成エラー: ${err}（Liveへの書き込み・保存・再生は行っていません）`;
+        }
+      } catch {
+        $('live-candidate-context').textContent = 'Studio または Live に接続できませんでした。候補は生成していません。';
+      } finally {
+        button.disabled = false;
+      }
     };
 
     $("cancel").onclick = async () => {
@@ -910,17 +2165,7 @@
 
     $("regenerate").onclick = async () => {
       if (!state.candidate) return;
-      const result = await getJson("/api/regenerate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
-      });
-      if (!result.ok) {
-        $("job-line").textContent = result.error;
-        return;
-      }
-      state.poll = setInterval(pollJob, 700);
-      pollJob();
+      await startGeneration("/api/regenerate", { candidate_id: state.candidate.candidate_id });
     };
 
     $("preview-apply").onclick = async () => {
@@ -937,36 +2182,157 @@
           skip_instruments: $("skip-instruments").checked
         })
       });
-      if (!dry.ok) { $("dry-run").innerHTML = `<p class="bad">${esc(dry.error)}</p>`; return; }
-      const p = dry.plan;
+      if (!dry.ok) { $("dry-run").innerHTML = `<p class="bad">${esc(dry.error)}</p>`; $("apply").disabled = true; return; }
+      const p = dry.plan || {};
+      const diff = dry.diff_report || {};
+      const song = diff.songspec || {};
       const ops = Object.entries(dry.live_operations || {}).map(([k, v]) => `<li>${esc(k)} × ${v}</li>`).join("") || (p.operations || []).map((x) => `<li>${esc(x)}</li>`).join("");
+
+      // Safety verdict determination (PASS / FAIL / UNKNOWN)
+      let safetyVerdict = diff.safety_verdict || "FAIL";
+      let verdictClass = "bad";
+      if (!dry.live || !dry.live.state || dry.live.state === "not_configured" || safetyVerdict === "UNKNOWN") {
+        safetyVerdict = "UNKNOWN";
+        verdictClass = "warn";
+      } else if (safetyVerdict === "PASS" && dry.can_send && dry.approved && dry.live.state === "ready" && (!diff.conflicts || diff.conflicts.length === 0)) {
+        safetyVerdict = "PASS";
+        verdictClass = "ok";
+      } else {
+        safetyVerdict = "FAIL";
+        verdictClass = "bad";
+      }
+
+      const tracksDiffHtml = (diff.tracks_diff || []).map((t) => {
+        const m = t.mapping || {};
+        const mappingStatus = m.matched ? (m.is_new ? '<span class="warn">新規作成</span>' : `<span class="ok">トラック #${m.track_index}: ${esc(m.track_name)}</span>`) : '<span class="bad">未対応</span>';
+        return `<tr>
+          <td><b>${esc(t.part)}</b></td>
+          <td>${mappingStatus}</td>
+          <td>${esc(t.bars_range || "-")}</td>
+          <td>${t.clips_to_create} クリップ</td>
+          <td>${t.notes_to_create} ノート</td>
+        </tr>`;
+      }).join("");
+
+      const arrSections = (diff.arrangement_summary && diff.arrangement_summary.sections) ? diff.arrangement_summary.sections : [];
+      const arrangementSectionsHtml = arrSections.length > 0
+        ? `<div style="margin: 8px 0; font-size: 0.9em;"><b>配置セクション:</b> ` +
+          arrSections.map((s) => `${esc(s.name)}: ${s.start_bar}–${s.end_bar}小節 (${s.length_bars}小節)`).join(" | ") +
+          `</div>`
+        : "";
+
+      const conflictsHtml = (diff.conflicts && diff.conflicts.length > 0)
+        ? `<ul class="bad">${diff.conflicts.map((c) => `<li>${esc(c.message || c.detail || c.conflict || JSON.stringify(c))}</li>`).join("")}</ul>`
+        : '<p class="ok">✓ 既存クリップ・トラックとの衝突・重複はありません</p>';
+
       $("dry-run").innerHTML = `
-        <h2>ABLETON PLAN（ドライラン）</h2>
-        <div class="grid">
-          <div class="metric"><b>Tempo</b>${esc(p.tempo)} BPM</div>
-          <div class="metric"><b>Tracks</b>${esc(p.tracks)}（${esc((p.track_names || []).join(", "))}）</div>
-          <div class="metric"><b>Clips</b>${esc(p.clips)}</div>
-          <div class="metric"><b>MIDI Notes</b>${esc(p.midi_notes)}</div>
-          <div class="metric"><b>Arrangement</b>${esc(p.arrangement_bars)} bars</div>
-          <div class="metric"><b>Live</b>${esc(dry.live.state === "ready" ? "READY" : "OFFLINE")} ${esc(dry.live.message || "")}</div>
+        <div class="card" style="border: 2px solid ${verdictClass === 'ok' ? '#2e7d32' : verdictClass === 'warn' ? '#f57f17' : '#c62828'}; padding: 16px; margin: 12px 0; border-radius: 8px;">
+          <h2>LIVE DELIVERY 差分レポート（ドライラン）</h2>
+
+          <div class="grid" style="margin-bottom: 12px;">
+            <div class="metric">
+              <b>安全判定 (Verdict)</b>
+              <span class="${verdictClass}" style="font-size: 1.4em; font-weight: bold;">${safetyVerdict}</span>
+            </div>
+            <div class="metric">
+              <b>承認状態</b>
+              <span>${dry.approved ? '<span class="ok">承認済み (APPROVED)</span>' : '<span class="bad">未承認 (AWAITING_APPROVAL)</span>'}</span>
+            </div>
+            <div class="metric">
+              <b>Live Set名</b>
+              <span><b>${esc(diff.live_set_name || "UNKNOWN")}</b></span>
+            </div>
+            <div class="metric">
+              <b>Liveトラック総数</b>
+              <span><b>${diff.live_track_count !== undefined ? diff.live_track_count : "UNKNOWN"} トラック</b></span>
+            </div>
+            <div class="metric">
+              <b>Live接続状態</b>
+              <span>${esc(dry.live.state === "ready" ? "READY" : dry.live.state ? dry.live.state.toUpperCase() : "UNKNOWN")}</span>
+            </div>
+            <div class="metric">
+              <b>Live反映状態</b>
+              <span>${dry.changes_live ? '<span class="warn">反映済み</span>' : '<span>未反映 (PENDING)</span>'}</span>
+            </div>
+          </div>
+
+          <div style="background: rgba(0,0,0,0.05); padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; font-family: monospace; font-size: 0.9em;">
+            <div><b>Project / Candidate ID:</b> ${esc(diff.project_id || diff.candidate_id || state.candidate.candidate_id)}</div>
+            <div><b>承認ハッシュ (Content Hash):</b> ${esc(diff.content_hash || "(未計算)")}</div>
+            <div><b>Live Set 指紋 (Fingerprint):</b> ${esc(diff.live_set_fingerprint ? diff.live_set_fingerprint.substring(0, 16) + '...' : 'UNKNOWN')}</div>
+            <div><b>配置予定小節範囲:</b> 1 – ${esc(song.bars || p.arrangement_bars || "?")} 小節 (${esc(song.tempo || p.tempo || "?")} BPM / ${esc(song.key || "?")})</div>
+            <div><b>Dry Run有効期限:</b> 実行から5分間有効 (TTL: 300秒)</div>
+            ${diff.live_set_name === "UNKNOWN" ? '<div class="warn" style="margin-top: 6px; padding: 6px; background: rgba(245,127,23,0.1); border-left: 3px solid #f57f17; font-size: 0.88em;"><b>⚠ Live Set識別に関する注意:</b> Live Set名がUNKNOWNのため、同じトラック構成（指紋）を持つ別Setの完全な識別は保証できません。現在Ableton Liveで開いているLive Setが本楽曲の対象であることを確認してください。</div>' : ''}
+            <div id="target-confirmation-area" style="margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);">
+              <div><b>Live Set対象確認状態:</b> <span id="target-confirm-status">${diff.target_confirmed ? '<span class="ok">✓ 確認済み (CONFIRMED)</span>' : (diff.requires_target_confirmation ? '<span class="warn">⚠ 未確認 (要確認: Set名UNKNOWN)</span>' : '<span class="ok">不要 (Set名確定済み)</span>')}</span></div>
+              ${diff.requires_target_confirmation ? `
+                <div style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
+                  <button id="confirm-target-btn" class="secondary" type="button" style="padding: 6px 12px; font-size: 13px;" ${diff.target_confirmed ? 'disabled' : ''}>${diff.target_confirmed ? '確認完了' : '現在のLive Setを対象として確認'}</button>
+                  <span class="sub">Candidate ID: ${esc(state.candidate.candidate_id.substring(0, 8))} | 指紋: ${esc(diff.live_set_fingerprint ? diff.live_set_fingerprint.substring(0, 16) + '...' : 'UNKNOWN')}</span>
+                </div>
+              ` : ''}
+            </div>
+            ${arrangementSectionsHtml}
+          </div>
+
+          <h3>対象トラック & 生成パート対応表</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
+            <thead>
+              <tr style="text-align: left; border-bottom: 1px solid #ccc;">
+                <th>パート</th><th>Liveトラック</th><th>配置小節範囲</th><th>追加クリップ</th><th>追加ノート</th>
+              </tr>
+            </thead>
+            <tbody>${tracksDiffHtml}</tbody>
+          </table>
+          <p><b>合計追加予定:</b> クリップ ${diff.total_clips || p.clips || 0} 個 / MIDIノート ${diff.total_notes || p.midi_notes || 0} 個</p>
+
+          <h3>Arrangement 衝突・重複検出結果</h3>
+          ${conflictsHtml}
+
+          <h3>反映操作 (Operations)</h3>
+          <ul>${ops}</ul>
+
+          ${(dry.blockers && dry.blockers.length > 0) ? `<h3>ブロッキング事由</h3><ul>${dry.blockers.map((x) => `<li class="bad">${esc(x)}</li>`).join("")}</ul>` : ""}
+
+          ${safetyVerdict === "PASS"
+            ? '<p class="ok" style="font-weight: bold; margin-top: 12px;">✓ 安全判定 PASS: 送信可能です。「この内容でLiveへ適用」で1回だけ実行します。</p>'
+            : '<p class="bad" style="font-weight: bold; margin-top: 12px;">✕ 安全判定 FAIL/UNKNOWN: 書き込み操作は無効化されています。承認、衝突、またはLive状態を確認してください。</p>'}
         </div>
-        <p><b>Operations</b></p><ul>${ops}</ul>
-        <ul>${(dry.blockers || []).map((x) => `<li class="bad">${esc(x)}</li>`).join("")}</ul>
-        ${dry.can_send ? '<p class="ok">送信できます。「この内容でLiveへ適用」で1回だけ実行します（自動再試行はしません）。</p>' : ""}
       `;
+
+      if ($("confirm-target-btn")) {
+        $("confirm-target-btn").onclick = async () => {
+          $("confirm-target-btn").disabled = true;
+          const res = await getJson("/api/ableton/confirm-target", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_id: state.candidate.candidate_id })
+          });
+          if (res.ok) {
+            $("target-confirm-status").innerHTML = '<span class="ok">✓ 確認済み (CONFIRMED)</span>';
+            $("confirm-target-btn").textContent = "確認完了";
+            // Re-run dry-run to update status and enable apply button
+            $("preview-apply").click();
+          } else {
+            $("confirm-target-btn").disabled = false;
+            alert(res.error || "対象確認に失敗しました");
+          }
+        };
+      }
+
       const result = dry.live_preview;
-      if (!result) return;
-      const s = result.summary || {};
-      $("apply-summary").innerHTML = `
-        <p>対象Set: ${s.set_name || "不明"} / 現在 ${s.current_tempo || "?"} BPM</p>
-        <p>新規トラック: ${(s.new_tracks || []).join(", ") || "なし"}</p>
-        <p>クリップ ${s.clip_count || 0} / ノート ${s.note_count || 0}</p>
-        <p>残骸トラック: ${(s.leftover_tracks || []).join(", ") || "なし"}</p>
-        <p>プレビューと適用ノート: ${result.notes_match_preview ? "一致" : "不一致のため適用しません"}</p>
-        <ul>${(result.warnings || []).map((x) => `<li>${x}</li>`).join("")}</ul>
-        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
-      `;
-      $("apply").disabled = !dry.can_send;
+      if (result) {
+        const s = result.summary || {};
+        $("apply-summary").innerHTML = `
+          <p>対象Set: ${s.set_name || "不明"} / 現在 ${s.current_tempo || "?"} BPM</p>
+          <p>新規トラック: ${(s.new_tracks || []).join(", ") || "なし"}</p>
+          <p>プレビューと適用ノート: ${result.notes_match_preview ? '<span class="ok">一致</span>' : '<span class="bad">不一致のため適用拒否</span>'}</p>
+          <ul>${(result.warnings || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+        `;
+      }
+      // Strictly disable write when verdict is NOT PASS or target is unconfirmed
+      const needsTargetConf = diff.requires_target_confirmation && !diff.target_confirmed;
+      $("apply").disabled = (safetyVerdict !== "PASS") || needsTargetConf;
     };
 
     $("apply").onclick = async () => {
@@ -1032,12 +2398,12 @@
       });
       const s = result.summary || {};
       $("arrange-summary").innerHTML = `
-        ${result.error ? `<p class="bad">${result.error}</p>` : ""}
-        <p>対象Set: ${s.set_name || "（未保存）"} / クリップ ${s.clip_count || 0} 個 / ${s.bars || 0} 小節</p>
-        <p>ロケーター: ${(s.locators || []).join(", ") || "なし"}</p>
+        ${result.error ? `<p class="bad">${esc(result.error)}</p>` : ""}
+        <p>対象Set: ${esc(s.set_name || "（未保存）")} / クリップ ${esc(s.clip_count || 0)} 個 / ${esc(s.bars || 0)} 小節</p>
+        <p>ロケーター: ${esc((s.locators || []).join(", ") || "なし")}</p>
         ${s.already_expanded ? `<p class="bad">この候補はすでに展開を試行済みです</p>` : ""}
-        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${x.detail}</li>`).join("")}</ul>
-        <ul>${(result.warnings || []).map((x) => `<li class="warn">${x}</li>`).join("")}</ul>
+        <ul>${(result.conflicts || []).map((x) => `<li class="bad">${esc(x.detail)}</li>`).join("")}</ul>
+        <ul>${(result.warnings || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul>
       `;
       $("arrange").disabled = !(result.ok && !s.already_expanded);
     };
@@ -1054,9 +2420,11 @@
       state.applying = false;
       const receipt = result.receipt || {};
       $("arrange-result").innerHTML = `
-        <p>結果: <b>${receipt.status || ""}</b>${result.error ? ` <span class="bad">${result.error}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
-        <p>${result.verified_means || ""}</p>
+        <p>結果: <b>${esc(receipt.status || "")}</b>${result.error ? ` <span class="bad">${esc(result.error)}</span>` : ""}${result.partial ? "（部分展開。残りは自動再実行しません）" : ""}</p>
+        ${receipt.error ? `<p class="bad">${esc(receipt.error)}</p>` : ""}
+        <p>${esc(result.verified_means || "")}</p>
         <p>成功した操作: ${(receipt.completed_operations || []).length} / 試行 ${(receipt.attempted_operations || []).length}</p>
+        <ul>${(receipt.mismatches || []).map((m) => `<li class="warn">${esc(m.operation_id)} ${esc(m.field_name)}: 計画 ${esc(JSON.stringify(m.expected))} / Live ${esc(JSON.stringify(m.observed))}</li>`).join("")}</ul>
       `;
     };
 
@@ -1082,6 +2450,8 @@
       retune: () => ({ parts: pickedRetuneParts() })
     };
 
+    $("change-tempo").onchange = () => { $("apply").disabled = true; };
+    $("skip-instruments").onchange = () => { $("apply").disabled = true; };
     $("retune-parts").onchange = () => { $("retune").disabled = true; };
     $("master-retune").onchange = () => { $("master").disabled = true; };
 
@@ -1402,12 +2772,15 @@
       await loadProject(state.candidate.candidate_id);
       refreshHealth();
     };
-    async function decideRevision(accept) {
-      if (!pendingRevision) return;
-      $("revision-accept").disabled = true;
-      $("revision-reject").disabled = true;
-      const data = await post("/api/revision/decide", { revision_id: pendingRevision.revision_id, accept });
-      pendingRevision = null;
+    async function decideRevision(accept, revisionId = pendingRevision ? pendingRevision.revision_id : "") {
+      if (!revisionId) return;
+      if (pendingRevision && pendingRevision.revision_id === revisionId) {
+        $("revision-accept").disabled = true;
+        $("revision-reject").disabled = true;
+        pendingRevision = null;
+      }
+      const data = await post("/api/revision/decide", { revision_id: revisionId, accept });
+      refreshApprovals();
       if (!data.ok) { $("revision-meta").textContent = data.error; return; }
       if (accept) {
         const payload = await getJson("/api/candidate/" + data.selected_candidate_id);
@@ -1418,6 +2791,30 @@
     }
     $("revision-accept").onclick = () => decideRevision(true);
     $("revision-reject").onclick = () => decideRevision(false);
+    async function refreshApprovals() {
+      try {
+        const data = await getJson("/api/approvals");
+        const rows = (data.revisions || []).map((item) => `<li>修正案（採用待ち）: ${esc((item.after || []).join(" "))}（ノート ${esc(item.note_count_before ?? "UNKNOWN")} → ${esc(item.note_count_after ?? "UNKNOWN")}） <button type="button" class="secondary" data-revision="${esc(item.revision_id)}" data-accept="1">採用</button> <button type="button" class="secondary" data-revision="${esc(item.revision_id)}" data-accept="0">却下</button></li>`);
+        for (const plan of data.music_plans || []) {
+          const tracks = esc((plan.tracks || []).join("、"));
+          const approved = plan.approved !== false;
+          const hash = esc((plan.plan_hash || "").slice(0, 8));
+          const left = Number.isFinite(plan.remaining_seconds)
+            ? ` あと${Math.max(1, Math.ceil(Number(plan.remaining_seconds) / 60))}分`
+            : "";
+          if (plan.live_bound && !approved) rows.push(`<li>パート計画（実機の Set に合わせ済み・承認待ち）: ${tracks}（${hash}）${left}。「パートの計画」で「この計画を承認」を押してください。</li>`);
+          else if (plan.live_bound) rows.push(`<li>パート計画（実機の Set に合わせ済み・承認済み）: ${tracks}（${hash}）${left}。「実機の Live に送る」をもう一度押すと1回だけ送ります。</li>`);
+          else rows.push(`<li>パート計画（承認済み・未送信）: ${tracks}（${hash}）${left}。送るのは「パートの計画」からです。</li>`);
+        }
+        $("approval-center").innerHTML = rows.length ? `<ul>${rows.join("")}</ul>` : '<p class="sub">保留中の操作はありません。</p>';
+      } catch {
+        $("approval-center").innerHTML = '<p class="sub warn">承認センターの読み込みに失敗しました。</p>';
+      }
+    }
+    $("approval-center").onclick = (event) => {
+      const button = event.target.closest("button[data-revision]");
+      if (button) decideRevision(button.dataset.accept === "1", button.dataset.revision);
+    };
     $("revision-edit").onclick = () => { $("request-edit").open = true; $("request-bars").focus(); };
     function renderHistory(items) {
       $("revision-history").innerHTML = items.length
@@ -1456,6 +2853,11 @@
       const o = await getJson("/api/ollama");
       $("settings-line").textContent = `${o.ok ? "READY" : "OFFLINE"}: ${o.message || ""}（導入済み: ${(o.installed_models || []).join(", ") || "なし"}）`;
     };
+    $("openai-test").onclick = async () => {
+      $("settings-line").textContent = "OpenAIの認証を確認中…";
+      const result = await getJson("/api/ai/connection");
+      $("settings-line").textContent = `${result.ok ? "READY" : "ERROR"}: ${result.message || "確認できませんでした"}`;
+    };
     $("settings-save").onclick = async () => {
       const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value, openai_model: $("setting-openai-model").value, monthly_ai_limit_jpy: Number($("setting-ai-limit").value) } });
       $("settings-line").innerHTML = data.ok ? '<span class="ok">保存しました。次の生成から使います。</span>' : `<span class="bad">${esc(data.error)}</span>`;
@@ -1476,7 +2878,9 @@
     } else {
       loadProjects();
       loadSelected();
+      refreshApprovals();
       setInterval(refreshHealth, 4000);
+      setInterval(refreshApprovals, 4000);
     }
   </script>
 </body>

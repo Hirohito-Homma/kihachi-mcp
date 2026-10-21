@@ -20,6 +20,12 @@ _AUDIO_SUFFIXES = {
     "audio/wav": ".wav",
 }
 _VOICE_TERM_CORRECTIONS = {"ミューテーションパンク": "Mutation Funk"}
+#: Speech band, then a modest level. Silence at the ends is shortened first.
+SPEECH_FILTER = (
+    "silenceremove=start_periods=1:start_duration=0.08:start_threshold=0.02:"
+    "start_silence=0.12:stop_periods=1:stop_duration=0.35:stop_threshold=0.02:"
+    "stop_silence=0.2,highpass=f=100,lowpass=f=7000,loudnorm=I=-16:TP=-1.5:LRA=11"
+)
 
 
 class VoiceError(Exception):
@@ -178,28 +184,7 @@ def transcribe_japanese_options(audio: bytes, content_type: str) -> dict:
             wav = Path(directory) / "input.wav"
             source.write_bytes(audio)
             try:
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-v",
-                        "error",
-                        "-nostdin",
-                        "-i",
-                        str(source),
-                        "-t",
-                        "15",
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "16000",
-                        "-c:a",
-                        "pcm_s16le",
-                        str(wav),
-                    ],
-                    capture_output=True,
-                    timeout=20,
-                    check=True,
-                )
+                _convert_speech_wav(source, wav)
             except subprocess.CalledProcessError as exc:
                 raise VoiceError(
                     "録音データを読み取れません。もう一度録音してください"
@@ -279,6 +264,25 @@ def transcribe_japanese_options(audio: bytes, content_type: str) -> dict:
         raise VoiceError("ローカル音声認識に失敗しました") from exc
     finally:
         _ASR_LOCK.release()
+
+
+def _convert_speech_wav(source: Path, wav: Path) -> None:
+    """Write 16 kHz mono speech. Fall back when the cleanup filter rejects the clip."""
+    base = ["ffmpeg", "-v", "error", "-nostdin", "-i", str(source), "-t", "15"]
+    tail = ["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)]
+    try:
+        subprocess.run(
+            [*base, "-af", SPEECH_FILTER, *tail],
+            capture_output=True,
+            timeout=20,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        wav.unlink(missing_ok=True)
+    if not wav.is_file() or wav.stat().st_size < 1000:
+        subprocess.run([*base, *tail], capture_output=True, timeout=20, check=True)
+    if not wav.is_file() or wav.stat().st_size < 1000:
+        raise subprocess.CalledProcessError(1, "ffmpeg")
 
 
 def synthesize_japanese(text: str) -> bytes:

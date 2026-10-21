@@ -20,6 +20,7 @@ from kihachi_mcp.services.midi_candidate_builder import (
     OPEN_HAT_PITCH,
     SAFE_UDP_REQUEST_BYTES,
     SNARE_PITCHES,
+    _rising_activity_steps,
     build_candidate,
     estimate_replace_request_bytes,
     hat_counts_by_half,
@@ -71,6 +72,242 @@ def test_candidate_keeps_explicit_values_and_drop() -> None:
 def test_hats_are_sparser_in_the_first_half() -> None:
     first, second = hat_counts_by_half(build_candidate(_brief(), seed=1))
     assert first < second
+
+
+def _notes_by_bar(candidate, part):
+    """Absolute (bar, pitch, start, duration, velocity) per bar, for one part."""
+    beats = candidate.brief.beats_per_bar
+    bars: dict[int, list[tuple]] = {}
+    for clip in candidate.clips_for_part(part):
+        for note in clip.notes:
+            start = round((clip.start_bar - 1) * beats + note.start_beats, 6)
+            bar = int(start // beats) + 1
+            bars.setdefault(bar, []).append(
+                (note.pitch, start, note.duration_beats, note.velocity)
+            )
+    return bars
+
+
+def _section_bars(candidate, name):
+    return {
+        bar
+        for section in candidate.brief.sections
+        if section.name == name
+        for bar in range(section.start_bar, section.end_bar + 1)
+    }
+
+
+#: The same brief and seed with and without one request: only the request differs.
+def _pair(extra: str, seed: int = 11):
+    plain = build_candidate(_brief(), seed=seed, candidate_id="same")
+    asked = build_candidate(_brief(BRIEF + "。" + extra), seed=seed, candidate_id="same")
+    return plain, asked
+
+
+def test_progressive_bass_steps_restore_the_pattern_over_song_time() -> None:
+    source = list(range(16))
+    early = _rising_activity_steps(source, 0.0)
+    middle = _rising_activity_steps(source, 0.5)
+    late = _rising_activity_steps(source, 1.0)
+    assert len(early) < len(middle) < len(late) == len(source)
+    assert early[0] == 0 and early[-1] == 15
+
+
+def test_progressive_bass_thins_early_bars_and_keeps_break_and_outro() -> None:
+    plain, asked = _pair("BASSは最初動き少なく徐々に動きのあるものへ変化する")
+    before, after = _notes_by_bar(plain, "Bass"), _notes_by_bar(asked, "Bass")
+    early = range(9, 41)  # the second half of the Intro and the VerseA
+    assert sum(len(after.get(bar, [])) for bar in early) < sum(
+        len(before.get(bar, [])) for bar in early
+    )
+    # A thinned bar plays some of the same notes, never other ones, so the
+    # late Drop is back to the pattern the plain song plays.
+    for bar, notes in after.items():
+        assert set(notes) <= set(before[bar])
+    assert all(after.get(bar) == before.get(bar) for bar in range(77, 93))
+    # The Break holds its two long notes and the Outro ends silent, as before.
+    for bar in _section_bars(plain, "Break") | _section_bars(plain, "Outro"):
+        assert after.get(bar) == before.get(bar)
+    for part in ("Kick", "Hats", "Stab"):
+        assert asked.clips_for_part(part) == plain.clips_for_part(part)
+
+
+def test_gradual_upper_request_moves_only_upper_parts_and_only_later() -> None:
+    plain, asked = _pair("上物は徐々に煌びやかに")
+    assert asked.brief.tone_brightness.value == 0
+    for part in ("Kick", "Snare", "Hats", "OpenHat", "Bass", "Sub", "FX"):
+        assert asked.clips_for_part(part) == plain.clips_for_part(part)
+    before, after = _notes_by_bar(plain, "Stab"), _notes_by_bar(asked, "Stab")
+    first_third = [bar for bar in before if (bar - 1) / 95 < 1 / 3]
+    assert first_third and all(after[bar] == before[bar] for bar in first_third)
+    for bar in _section_bars(plain, "Break") | _section_bars(plain, "Outro"):
+        assert after.get(bar) == before.get(bar)
+    late_drop = [bar for bar in range(77, 93) if bar in before]
+    assert late_drop
+    for bar in late_drop:
+        top = max(pitch for pitch, *_rest in before[bar])
+        assert max(pitch for pitch, *_rest in after[bar]) == top + 12
+        assert len(after[bar]) > len(before[bar])
+        written = {(pitch, start): velocity for pitch, start, _d, velocity in before[bar]}
+        for pitch, start, _duration, velocity in after[bar]:
+            if (pitch, start) in written:
+                assert velocity == min(127, written[(pitch, start)] + 5)
+    assert any("音色（フィルター等）の時間変化は未実装" in item for item in asked.brief.interpretations)
+
+
+def test_flashy_drop_changes_only_drop_bars_of_upper_parts() -> None:
+    plain, asked = _pair("ドロップは派手に")
+    assert asked.brief.tone_brightness.value == 0
+    for part in ("Kick", "Snare", "Hats", "OpenHat", "Bass", "Sub", "FX"):
+        assert asked.clips_for_part(part) == plain.clips_for_part(part)
+    drop = set(DROP_BARS)
+    for part in ("Stab", "Pad"):
+        before, after = _notes_by_bar(plain, part), _notes_by_bar(asked, part)
+        assert all(after.get(bar) == before.get(bar) for bar in set(before) - drop)
+        changed = [bar for bar in drop if after.get(bar) != before.get(bar)]
+        assert changed and all(len(after[bar]) > len(before[bar]) for bar in changed)
+    assert any("Drop 区間の上物だけ" in item for item in asked.brief.interpretations)
+
+
+def test_a_song_without_drops_does_not_take_a_chorus_for_one() -> None:
+    from kihachi_mcp.services.midi_candidate_builder import (
+        flash_sections,
+        scoped_request_notes,
+    )
+    from kihachi_mcp.services.studio_interpreter import build_sections
+
+    sections = build_sections(64, 0, "j_pop")
+    assert flash_sections(sections) == frozenset()
+    (note,) = scoped_request_notes(sections, {"drop_emphasis": "flashy"})
+    assert "Drop区間がない構成のため、ほかの区間には適用せず" in note
+
+    def song(text):
+        intent = {
+            "genre": "tech_house", "tempo": 140, "bars": 64, "key": "C", "mood": "",
+            "hats_first_half": "normal", "hats_second_half": "normal",
+            "bass_register": "mid", "note_density": "normal", "drop_start_bar": 0,
+            "unhandled": [], "ambiguous": [],
+        }
+        brief = assemble_brief(extract_explicit(text), intent)
+        return build_candidate(brief, seed=4, candidate_id="same")
+
+    plain = song("J-POP、140 BPM、Cメジャー、64小節")
+    asked = song("J-POP、140 BPM、Cメジャー、64小節。ドロップは派手に")
+    assert {section.name for section in asked.brief.sections} >= {"ChorusA", "ChorusB"}
+    assert asked.clips == plain.clips
+
+
+def test_steady_upper_request_adds_the_octave_everywhere_but_break_and_outro() -> None:
+    plain, asked = _pair("上物は煌びやか")
+    assert asked.brief.tone_brightness.value == 0
+    for part in ("Kick", "Snare", "Hats", "OpenHat", "Bass", "Sub", "FX"):
+        assert asked.clips_for_part(part) == plain.clips_for_part(part)
+    before, after = _notes_by_bar(plain, "Stab"), _notes_by_bar(asked, "Stab")
+    held_back = _section_bars(plain, "Break") | _section_bars(plain, "Outro")
+    for bar, notes in before.items():
+        if bar in held_back:
+            assert after[bar] == notes
+            continue
+        # The written notes keep their velocity; only the octave is new.
+        assert set(notes) < set(after[bar])
+        top = max(pitch for pitch, *_rest in notes)
+        assert max(pitch for pitch, *_rest in after[bar]) == top + 12
+    # 「キラキラした上物」 says the same thing in the other word order.
+    assert _pair("キラキラした上物")[1].clips == asked.clips
+    assert any("上物だけに、MIDIの音域で表現" in item for item in asked.brief.interpretations)
+
+
+def test_refused_upper_and_drop_requests_write_the_plain_song() -> None:
+    plain = build_candidate(_brief(), seed=11, candidate_id="same")
+    for extra in (
+        "上物は煌びやかにしない",
+        "煌びやかな上物にしない",
+        "派手じゃないドロップ",
+        "派手ではないドロップ",
+        "ドロップは派手にしない",
+        "派手なドロップにしない",
+    ):
+        asked = build_candidate(_brief(BRIEF + "。" + extra), seed=11, candidate_id="same")
+        assert asked.clips == plain.clips, extra
+        assert asked.brief.tone_brightness.value == 0, extra
+
+
+def test_refused_upper_request_keeps_positive_bass_activity_request() -> None:
+    plain = build_candidate(_brief(), seed=11, candidate_id="same")
+    _, bass_only = _pair("ベースは動きを増やす")
+    _, both = _pair("上物は煌びやかにしない。ベースは動きを増やす")
+    assert both.clips == bass_only.clips
+    assert both.brief.tone_brightness.value == 0
+    for part in ("Kick", "Snare", "Hats", "OpenHat", "Stab", "Pad", "Arp", "FX"):
+        assert both.clips_for_part(part) == plain.clips_for_part(part)
+    assert len(_part_notes(both, "Bass")) > len(_part_notes(plain, "Bass"))
+    assert len(_part_notes(both, "Sub")) > len(_part_notes(plain, "Sub"))
+    assert any("上物を煌びやかにしない" in item for item in both.brief.interpretations)
+    assert any("ベースの動きを増やす" in item for item in both.brief.interpretations)
+
+
+def test_a_refused_drop_leaves_the_gradual_upper_request_working() -> None:
+    _plain, rising = _pair("上物は徐々に煌びやかに")
+    _plain, both = _pair("派手じゃないドロップ。上物は徐々に煌びやかに")
+    assert both.clips == rising.clips
+    assert any("Drop専用の上乗せはしません" in item for item in both.brief.interpretations)
+
+
+def test_a_flashy_drop_after_refused_upper_parts_only_plays_louder() -> None:
+    plain, asked = _pair("上物は煌びやかにしない。ドロップは派手に")
+    for part in ("Kick", "Snare", "Hats", "OpenHat", "Bass", "Sub", "FX"):
+        assert asked.clips_for_part(part) == plain.clips_for_part(part)
+    drop = set(DROP_BARS)
+    before, after = _notes_by_bar(plain, "Stab"), _notes_by_bar(asked, "Stab")
+    assert all(after.get(bar) == before.get(bar) for bar in set(before) - drop)
+    for bar in drop & set(before):
+        assert [(p, s, d) for p, s, d, _v in after[bar]] == [
+            (p, s, d) for p, s, d, _v in before[bar]
+        ]
+        assert [v for *_rest, v in after[bar]] == [
+            min(127, v + 6) for *_rest, v in before[bar]
+        ]
+
+
+def test_scoped_brightness_leaves_the_sound_recipe_alone() -> None:
+    from kihachi_mcp.knowledge.sound_recipes import DUB_TECHNO, tuned
+    from kihachi_mcp.services.candidate_live_planner import tone_steps
+
+    def recipe(text):
+        intent = {
+            "genre": "dub_techno", "tempo": 120, "bars": 64, "key": "Dm", "mood": "",
+            "hats_first_half": "normal", "hats_second_half": "normal",
+            "bass_register": "mid", "note_density": "normal", "drop_start_bar": 0,
+            "tone_brightness": 1, "unhandled": [], "ambiguous": [],
+        }
+        brief = assemble_brief(extract_explicit(text), intent, model="gemma4")
+        return tuned(DUB_TECHNO, tone_steps(brief))
+
+    for text in (
+        "ダブテクノ、64小節。上物は煌びやか、ベースはこもった音",
+        "ダブテクノ、64小節。キラキラした上物",
+        "ダブテクノ、64小節。派手じゃないドロップ",
+        "ダブテクノ、64小節。曲全体は派手にしない",
+    ):
+        assert recipe(text) == DUB_TECHNO, text
+    # A whole-song word still turns the Stab and Bass filters.
+    brightened = recipe("ダブテクノ、64小節。煌びやかな音")
+    assert brightened != DUB_TECHNO
+
+
+def test_scoped_requests_reproduce_with_the_same_seed() -> None:
+    text = BRIEF + "。上物は徐々に煌びやかに。ドロップは派手に"
+    first = build_candidate(_brief(text), seed=5)
+    second = build_candidate(_brief(text), seed=5)
+    # candidate_id is a fresh uuid each time, so compare the notes themselves.
+    assert first.candidate_id != second.candidate_id
+    assert first.clips == second.clips
+
+
+def test_a_refused_drop_request_changes_nothing() -> None:
+    plain, refused = _pair("ドロップは派手にしすぎない")
+    assert refused.clips == plain.clips
+    assert refused.brief.tone_brightness.value == 0
 
 
 def test_kick_uses_only_pitch_36() -> None:
@@ -429,3 +666,105 @@ def test_pop_and_liquid_arrangements_have_distinct_sections_and_honor_drop() -> 
             sections = build_sections(bars, 0, genre)
             assert sections[0].start_bar == 1 and sections[-1].end_bar == bars
             assert all(b.start_bar == a.end_bar + 1 for a, b in pairwise(sections))
+
+
+def test_explicit_mid_break_placement_and_interpretations() -> None:
+    from kihachi_mcp.services.studio_interpreter import assemble_brief
+
+    def make_brief(text: str, bars: int = 144, drop: int = 0):
+        intent = {
+            "genre": "dub_techno",
+            "tempo": 120,
+            "bars": bars,
+            "key": "Dm",
+            "mood": "",
+            "hats_first_half": "normal",
+            "hats_second_half": "normal",
+            "bass_register": "mid",
+            "note_density": "normal",
+            "drop_start_bar": drop,
+            "unhandled": [],
+            "ambiguous": [],
+        }
+        return assemble_brief(extract_explicit(text), intent)
+
+    # 1. 144 bars user brief: Break is at bars 73-90 (18 bars) for drop=0, or 73-80 (8 bars) for drop=57
+    b144_plain = make_brief("144小節のダブテクノ", 144, 0)
+    b144_asked = make_brief("144小節のダブテクノ。中間でBrakeを必ず入れ", 144, 0)
+    assert b144_asked.sections == b144_plain.sections
+    assert any("73–90小節目（18小節）にBreakを配置" in item for item in b144_asked.interpretations)
+    assert not any("Breakを配置しました" in item for item in b144_plain.interpretations)
+
+    b144_drop57_plain = make_brief("144小節、57小節目からドロップ", 144, 57)
+    b144_drop57_asked = make_brief("144小節、57小節目からドロップ。中間でBreakを必ず入れ", 144, 57)
+    assert b144_drop57_asked.sections == b144_drop57_plain.sections
+    assert any("73–80小節目（8小節）にBreakを配置" in item for item in b144_drop57_asked.interpretations)
+
+    # 1b. 144 bars, drop=9: default break is at 25-32 (not middle).
+    # It must NOT treat 25-32 as mid break. Instead, it inserts a mid break at 73-76
+    # while preserving drop=9, total bars=144, continuity, and keeping 25-32 intact.
+    b144_drop9_plain = make_brief("144小節、9小節目からドロップ", 144, 9)
+    assert [(s.name, s.start_bar, s.end_bar, s.length_bars) for s in b144_drop9_plain.sections] == [
+        ("Intro", 1, 8, 8),
+        ("Drop", 9, 24, 16),
+        ("Break", 25, 32, 8),
+        ("Drop", 33, 136, 104),
+        ("Outro", 137, 144, 8),
+    ]
+    b144_drop9_asked = make_brief("144小節、9小節目からドロップ。中間でBreakを必ず入れ", 144, 9)
+    assert not any("25–32小節目" in item for item in b144_drop9_asked.interpretations)
+    assert any("73–76小節目（4小節）にBreakを配置" in item for item in b144_drop9_asked.interpretations)
+    assert [(s.name, s.start_bar, s.end_bar, s.length_bars) for s in b144_drop9_asked.sections] == [
+        ("Intro", 1, 8, 8),
+        ("Drop", 9, 24, 16),
+        ("Break", 25, 32, 8),
+        ("Drop", 33, 72, 40),
+        ("Break", 73, 76, 4),
+        ("Drop", 77, 136, 60),
+        ("Outro", 137, 144, 8),
+    ]
+    assert b144_drop9_asked.sections[0].start_bar == 1
+    assert b144_drop9_asked.sections[-1].end_bar == 144
+    assert sum(s.length_bars for s in b144_drop9_asked.sections) == 144
+    for before, after in pairwise(b144_drop9_asked.sections):
+        assert after.start_bar == before.end_bar + 1
+
+    # 2. Section without break naturally: 48 bars, drop=33 -> inserts Break at 25-28
+    b48_plain = make_brief("48小節、33小節目からドロップ", 48, 33)
+    b48_asked = make_brief("48小節、33小節目からドロップ。中間にブレイクを入れて", 48, 33)
+    assert not any(s.name == "Break" for s in b48_plain.sections)
+    assert [(s.name, s.start_bar, s.end_bar, s.length_bars) for s in b48_asked.sections] == [
+        ("Intro", 1, 16, 16),
+        ("Build", 17, 24, 8),
+        ("Break", 25, 28, 4),
+        ("Build", 29, 32, 4),
+        ("Drop", 33, 44, 12),
+        ("Outro", 45, 48, 4),
+    ]
+    assert any("25–28小節目（4小節）にBreakを配置" in item for item in b48_asked.interpretations)
+    # verify continuity and total bars
+    assert b48_asked.sections[0].start_bar == 1
+    assert b48_asked.sections[-1].end_bar == 48
+    assert sum(s.length_bars for s in b48_asked.sections) == 48
+    for before, after in pairwise(b48_asked.sections):
+        assert after.start_bar == before.end_bar + 1
+
+    # 3. Short song (16 bars): reported in unhandled
+    b16 = make_brief("16小節のテクノ。中間にブレイクを入れて", 16, 0)
+    assert not any(s.name == "Break" for s in b16.sections)
+    assert any("曲が短い構成（16小節）のため" in item for item in b16.unhandled)
+
+    # 4. Drop conflict (32 bars, drop=17): reported in unhandled
+    b32 = make_brief("32小節、17小節目からドロップ。中間にブレイクを入れて", 32, 17)
+    assert not any(s.name == "Break" for s in b32.sections)
+    assert any("干渉するため、中間ブレイクは配置できませんでした" in item for item in b32.unhandled)
+
+    # 5. Declined expression: break is not removed from default, but noted
+    b_declined = make_brief("144小節のダブテクノ。中間にブレイクを入れない", 144, 0)
+    assert any(s.name == "Break" for s in b_declined.sections)
+    assert any("中間にブレイクを入れない" in item and "既定構成のBreakは維持" in item for item in b_declined.interpretations)
+
+    # 6. Notes reproducibility: existing candidate notes unchanged when no break instruction is given
+    c_plain = build_candidate(b144_plain, seed=7, candidate_id="same")
+    c_plain_2 = build_candidate(b144_plain, seed=7, candidate_id="same")
+    assert c_plain.clips == c_plain_2.clips

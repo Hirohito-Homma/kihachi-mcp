@@ -42,6 +42,7 @@ _SAMPLES = {
     "kihachi-impact.wav": IMPACT_NOTE,
 }
 _MUTATION_KICK = "kihachi-kick-deep.wav"
+FAT_TIGHT_KICK = "kihachi-kick-fat-tight.wav"
 
 
 def sample_dir() -> Path:
@@ -82,7 +83,7 @@ def is_bundled_sample(path: str | Path) -> bool:
         resolved.relative_to(sample_dir().resolve())
     except ValueError:
         return False
-    return resolved.name in {*_SAMPLES, _MUTATION_KICK} and resolved.is_file()
+    return resolved.name in {*_SAMPLES, _MUTATION_KICK, FAT_TIGHT_KICK} and resolved.is_file()
 
 
 def _write_wav(path: Path, frames: list[int]) -> None:

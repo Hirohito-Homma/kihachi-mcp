@@ -20,6 +20,12 @@ PARENT="$(cd "$(dirname "$APP")" && pwd)"
 BASE="$(basename "$APP" .app)"
 SUBMISSION="$PARENT/$BASE-for-notary.zip"
 FINAL="$PARENT/$BASE-notarized.zip"
+for REQUIRED in "$PARENT/scripts/Liveデバイスをインストール.command" "$PARENT/maxforlive/KIHACHI Live Device.amxd" "$PARENT/maxforlive/kihachi.device.js" "$PARENT/maxforlive/kihachi.bridge.js"; do
+  if [ ! -f "$REQUIRED" ]; then
+    echo "配布ファイルが見つかりません: $REQUIRED" >&2
+    exit 1
+  fi
+done
 if [ -e "$SUBMISSION" ] || [ -e "$FINAL" ]; then
   echo "既存のZIPを上書きしません: $SUBMISSION / $FINAL" >&2
   exit 1
@@ -28,5 +34,4 @@ ditto -c -k --keepParent "$APP" "$SUBMISSION"
 xcrun notarytool submit "$SUBMISSION" --keychain-profile "$PROFILE" --wait
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
-ditto -c -k --keepParent "$APP" "$FINAL"
-echo "配布用: $FINAL"
+bash "$(dirname "$0")/package_macos_release.sh" "$APP" "$FINAL"

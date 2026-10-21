@@ -16,15 +16,20 @@ from kihachi_mcp.studio.app import StudioApp, _handler_for
 @pytest.fixture
 def server(tmp_path):
     class NoLive:
+        def __init__(self, candidate_dir):
+            self._candidate_dir = candidate_dir
+
         def __getattr__(self, name):
             raise AssertionError(f"Reference library must not call Live: {name}")
 
+    candidate_dir = tmp_path / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
     library = ReferenceLibrary(
         tmp_path / "library", lambda _: {"metrics": {}, "warnings": []}
     )
     sample_catalog = SampleCatalog(tmp_path / "sample-catalog")
     app = StudioApp(
-        runtime=NoLive(),
+        runtime=NoLive(candidate_dir),
         reference_library=library,
         reference_sources=ReferenceSources({}),
         sample_catalog=sample_catalog,

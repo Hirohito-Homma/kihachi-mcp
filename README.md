@@ -1,206 +1,62 @@
-## Status
+# KIHACHI MUSIC AI
 
-Current milestone
+**Human × AI Make Better Music**
 
-KIHACHI MUSIC AI Studio 統合 ／ 8小節の実機適用・書き出し検証済み（Live 12.4.5、2026-10-01、[RELEASE_ACCEPTANCE](docs/RELEASE_ACCEPTANCE.md)）
+KIHACHI MUSIC AI は、人間とAIが共同で楽曲を制作するための音楽制作システムです。
+単なるワンショットの音声生成ではなく、楽曲設計（SongSpec）からパート別MIDI生成、アレンジ展開、Ableton Live への自動反映、そして読み戻し検証（Verification）までを一貫してサポートします。
 
-最短手順は [docs/QUICKSTART.md](docs/QUICKSTART.md)。初回インストールは `scripts/インストール.command`、詳しい操作は [docs/MANUAL.md](docs/MANUAL.md)、macOSアプリのビルドと署名は [docs/MAC_APP.md](docs/MAC_APP.md) を参照してください。
-配布版としての未完了項目と判定条件は [docs/RELEASE_ACCEPTANCE.md](docs/RELEASE_ACCEPTANCE.md) に記録しています。
+---
 
-# KIHACHI Brain
+## 制作画面（KIHACHI Studio）の起動
 
-Brain MCP for the KIHACHI MUSIC AI Platform.
-
-KIHACHI MUSIC AI is not an AI music generator.
-
-It is an AI music production platform.
-
-The Brain creates musical plans.
-
-KIHACHI builds them inside Ableton Live.
-
-Memory learns from every song.
-
-Review improves every iteration.
-
-このリポジトリは Brain（FastMCP）です。ジャンル知識から SongSpec と ProjectPlan を作り、承認を経て Ableton Live の Session View と Arrangement View を組み立てます。詳細は [docs/BRAIN.md](docs/BRAIN.md) と [docs/VISION.md](docs/VISION.md)。
-
-## 制作画面の起動
-
-日常の制作では Cursor や Codex を開く必要はありません。
+Studio はローカル専用（Loopback: `127.0.0.1:8765`）の Web UI です。クラウド不要・オフラインで動作します。
 
 ```bash
-./scripts/setup.sh      # 初回のみ
-./scripts/kihachi-studio.command  # http://127.0.0.1:8765/
+# 制作画面を起動（ブラウザが自動で開きます）
+uv run python -m kihachi_mcp.studio
 ```
 
-または `scripts/kihachi-studio.command` をダブルクリックします。画面の説明は [docs/STUDIO_GUIDE.md](docs/STUDIO_GUIDE.md)、手順と復旧は [docs/STUDIO.md](docs/STUDIO.md)、困ったときは [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。Ollama は [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md)、Live は [docs/ABLETON_SETUP.md](docs/ABLETON_SETUP.md)。
-
-## CLI
+または CLI コマンドから：
 
 ```bash
-uv run kihachi doctor
-uv run kihachi create "110 BPM、D# minor。Mutation Funk。Swing 54%。約5分。"
-uv run kihachi projects
-uv run kihachi inspect <候補ID>
-uv run kihachi review <候補ID>
-uv run kihachi revise <候補ID> --scope bass --bars 33-49 [--accept]
-uv run kihachi approve <候補ID>
-uv run kihachi ableton plan|dry-run|execute|verify <候補ID>
+uv run kihachi studio
 ```
 
-制作画面・CLI・MCP は同じ `StudioRuntime` を使います。Live に触れる `ableton dry-run / execute / verify` は起動中の制作画面を通します。
+ブラウザで [http://127.0.0.1:8765/](http://127.0.0.1:8765/) にアクセスしてください。
 
-## MCP Gateway
+---
 
-既存の stdio MCP はそのままです。Manus など外部クライアント向けには、同じ FastMCP サーバーを Streamable HTTP でループバック待受します。Ableton Live と AbletonGPT（TCP 9877）は公開しません。
+## 制作ワークフロー
 
-```bash
-export KIHACHI_MCP_API_TOKEN="$(openssl rand -hex 32)"
-uv run kihachi serve --transport streamable-http
-# http://127.0.0.1:8787/mcp    健康確認は GET /health
-```
+1. **Ableton Live の準備**
+   - Ableton Live 11 / 12 を起動します。
+   - `maxforlive/` にある `KIHACHI Live Device.amxd` を Live の任意のトラックに配置します（UDP 17771 / 17772 で自動接続）。
+2. **楽曲の指定・設計（Studio 画面）**
+   - 自然言語（例：「DubとTech House。110 BPM、D#m。太いベースと余白のあるドラム」）で曲のイメージを入力。
+   - AI（ローカル Ollama / Gemini / 決定論的アルゴリズム）が SongSpec とパート別 MIDI 候補を生成。
+3. **試聴とレビュー**
+   - Studio 内蔵の合成プレイヤーでドラムやシンセの試聴が可能。
+   - 問題点（音域衝突、リズムの過密度など）の自動レビューを確認し、必要に応じて小節単位・パート単位で修正案を作成。
+4. **承認（Human Approval）と Live 展開**
+   - Live への書き込みはすべて **「DRY RUN（事前計画）→ 人間の承認（Approve）→ 1回だけ送信」** の順序で実行されます。勝手な上書きや削除は行われません。
+   - 送信後、Live の状態を読み戻して計画通りにクリップやノートが配置されたかを自動検証（Verify）します。
 
-`set_tempo` と `produce_ableton_song` は `confirm=true` が無いと Live を変えません。曲の手順は [docs/ABLETON_SONG_PRODUCTION.md](docs/ABLETON_SONG_PRODUCTION.md)。登録とトンネルは [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) と [docs/MANUS_MCP.md](docs/MANUS_MCP.md)。
+---
 
-## 前提
+## 主な構成
 
-この4点は仕様です。
+- **`src/kihachi_mcp/studio/`**: 制作画面本体（ポート 8765）
+- **`src/kihachi_mcp/services/studio_runtime.py`**: 制作ロジック・候補管理・承認ゲートの正本
+- **`src/kihachi_mcp/services/jarvis/`**: 制作オーケストレーター（読み取り・修正提案）
+- **`src/kihachi_mcp/tools/`**: Cursor / Codex から利用可能な FastMCP ツール群
+- **`maxforlive/`**: Ableton Live 接続用 Max for Live デバイス
+- **`prototypes/`**: 開発初期の実験的プロトタイプ（旧 8421 ポート簡易UIなど）
 
-- **Google Lyria は廃止済み**です。音声生成機能はありません。成果物は編集可能な Live Set です。
-- **Live への変更には人間承認が必要**です。承認トークンは帯域外（所有者のみ読めるファイル）で渡します。
-- **既存内容を自動上書きしません。** 利用者所有のトラック・Clip・Arrangement 領域は変更しません。
-- **自動再実行しません。読戻し成功まで完了扱いしません。CIでは実機接続しません。**
+---
 
-## 公開 Tool
+## 安全設計（14の安全規則）
 
-| Tool | 役割 |
-| --- | --- |
-| `hello` | 接続確認 |
-| `generate_songspec` | SongSpec を JSON で返す |
-| `create_project_from_songspec` | SongSpec から ProjectPlan を JSON で返す |
-| `create_ableton_plan` | ProjectPlan を Ableton 向け構造へ変換 |
-| `create_midi_plan` | ProjectPlan から決定論的なMIDIクリップ計画を生成 |
-| `prepare_ableton_handoff` | Live へ渡す前の静的検証 |
-| `inspect_live_state` | Live の接続確認と状態読取り（変更しない） |
-| `live_device_catalogue` | KIHACHI がロードを許可する Live 標準デバイス一覧 |
-| `create_live_mutation_plan` | Session View の変更計画を作る（実行しない） |
-| `request_live_execution` | 承認待ちの Live 実行要求を作る |
-| `execute_live_request` | 承認済み要求を1回だけ実行し receipt を返す |
-| `verify_live_execution` | Live を読み直して receipt を再確認 |
-| `expand_session_to_arrangement` | 検証済み Session を Arrangement へ展開する計画を作る |
-| `review_songspec` | SongSpec を検証し ReviewResult を返す |
-| `remember_song` | SongSpec とReview結果をMemoryへ保存 |
-| `search_memory` | ジャンル・全文・Review品質・順位でMemoryを検索 |
-| `orchestrate_song` | 生成・Review・Memory・Project作成を一括実行 |
-| `preview_local_ai_song` | 制作画面と同じ経路で MIDI 候補を返す（Live は変更しない） |
-| `create_song` | 制作指示から候補を作って保存する |
-| `list_projects` / `get_project` | 保存済みの候補の一覧・詳細（SongSpec・構成・トラック・レビュー・履歴） |
-| `review_song` | 送る予定のノートを規則でレビューする |
-| `revise_song` | 指摘・対象・小節範囲だけを局所修正する（`accept=True` で採用） |
-| `approve_song` | 候補を承認する（送信の前提） |
-| `dry_run_ableton_plan` | 送信内容を確認する（Live は変更しない） |
-| `execute_ableton_plan` | 承認済み候補を1回だけ送信する（`confirmed=True` が必要） |
-| `verify_ableton_project` | Live から読み戻して計画と比較する |
-| `ollama_status` / `doctor` | AI と環境の状態 |
-
-`save_live_set` は実装していません。設計のみ [docs/issues/ISSUE-0021.md](docs/issues/ISSUE-0021.md) にあります。
-
-詳細は [docs/API.md](docs/API.md)。
-
-## 必要環境
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- Live 自動操作を使う場合: **Ableton Live 11 以降 + Max for Live（必須）**
-
-```bash
-uv sync --group dev
-```
-
-Live 自動操作は外部 API キーを必要としません。秘密情報はループバック用のセッショントークン1つだけで、起動ごとに生成され、Git には入りません。
-
-Memoryを再起動後も保持する場合は保存先を設定します。未設定ならプロセス内のみです。
-
-```bash
-export KIHACHI_MEMORY_PATH="$HOME/.kihachi/memory.json"
-```
-
-承認記録と使用済み idempotency key を再起動後も保持する場合は次を設定します。未設定ならプロセス内のみです。
-
-```bash
-export KIHACHI_LIVE_APPROVAL_PATH="$HOME/.kihachi/live-approvals.json"
-```
-
-設定例は `.env.example` を参照してください。
-
-## Ableton Live セットアップ
-
-1. macOSではLiveを終了し、`scripts/Liveデバイスをインストール.command` を開いてLiveのUser Libraryを選びます。実機で保存した `.amxd` と2つのJSを同梱しています。既存ファイルが異なるときはバックアップしてから導入します。詳しくは [docs/ABLETON_SETUP.md](docs/ABLETON_SETUP.md)。
-2. LiveでSetを開き、User Libraryのデバイスをトラックへ1つロードします。
-3. `inspect_live_state` で `health.connected` が `true` になることを確認します。
-
-Python側の通信パスはmacOSとWindowsに対応しています。今回の `.amxd` 同梱と `.command` による導入はIntel Mac / Live 12.4.5で検証済みで、Apple SiliconとWindowsでの導入は未検証です。
-
-| 用途 | macOS | Windows |
-| --- | --- | --- |
-| ハンドシェイク | `~/Library/Application Support/KIHACHI/` | `%LOCALAPPDATA%\KIHACHI\` |
-
-プロトコル仕様は [docs/MAXFORLIVE.md](docs/MAXFORLIVE.md)。
-
-## 実行の流れ
-
-```text
-inspect_live_state          Live を読む
-create_live_mutation_plan   計画を作る（何も変わらない）
-request_live_execution      承認トークンをファイルへ書く（何も変わらない）
-                            ← ここで人間がファイルを開いてトークンを読む
-execute_live_request        1回だけ実行し readback で検証
-verify_live_execution       Live を読み直して再確認
-expand_session_to_arrangement   verified のときだけ Arrangement へ展開
-```
-
-`verified` は「全操作が適用され、かつ全操作が読み戻して一致した」ことのみを意味します。`partially_applied` と `verification_failed` は `verified` ではありません。復旧手順は [docs/RECOVERY.md](docs/RECOVERY.md)。
-
-## 確認
-
-```bash
-uv run pytest
-uv run ruff check src tests server.py
-uv run fastmcp list server.py
-```
-
-`fastmcp list` の期待値: Tools (29) — 上の表のすべて。
-
-テストは fake transport のみを使い、Ableton Live も Max も起動しません。実機のスモークテストは `./scripts/verify_live.sh`（送信前に確認あり）。その他の実機手順は [docs/MANUAL_LIVE_TESTS.md](docs/MANUAL_LIVE_TESTS.md)。
-
-## Python package structure
-
-```
-kihachi-mcp/
-├── server.py                 # 互換エントリ
-├── src/kihachi_mcp/          # 実装（ADR-0001）
-│   ├── server.py
-│   ├── api/
-│   ├── models/               # live_state / live_mutation / live_receipt ほか
-│   ├── services/             # inspector / planner / gate / executor / bridge
-│   └── tools/                # 薄いJSONアダプター
-├── maxforlive/
-│   ├── kihachi.device.js     # Live Object Model 操作
-│   └── README.md             # パッチ作成とパッケージ化手順
-├── tests/
-└── docs/
-    ├── BRAIN.md
-    ├── VISION.md
-    ├── DEVELOPMENT.md
-    ├── ROADMAP.md
-    ├── ARCHITECTURE.md
-    ├── API.md
-    ├── MAXFORLIVE.md         # プロトコル仕様
-    ├── MANUAL_LIVE_TESTS.md  # 手動実機テスト手順
-    ├── RECOVERY.md           # 障害時の復旧手順
-    ├── issues/
-    └── adr/
-```
-
-開発ルールは [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。設計は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。変更履歴は [CHANGELOG.md](CHANGELOG.md)。Live 自動操作の決定は [docs/adr/0006-ableton-live-automation.md](docs/adr/0006-ableton-live-automation.md)。
+- 送信前の破壊的操作（トラック削除・クリップ上書き）は計画段階で拒否
+- 承認トークン（Approval Gate）がない Live 書き込みは完全に遮断
+- 送信後の自動読み戻し（Readback）による整合性検証
+- 詳細は `docs/ARCHITECTURE.md` および `docs/KIHACHI_MUSIC_AI_MASTER_SPEC_20261022.md` を参照してください。

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -20,11 +21,12 @@ from kihachi_mcp.knowledge.part_sounds import (
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_MIDI_TRACK,
+    OP_SET_DEVICE_PARAMETER,
     LiveContractError,
     canonical_hash,
     managed_track_name,
 )
-from kihachi_mcp.models.live_mutation import LiveMutationPlan
+from kihachi_mcp.models.live_mutation import LiveMutationOperation, LiveMutationPlan, LivePrecondition
 from kihachi_mcp.models.live_receipt import LiveExecutionReceipt
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
@@ -36,7 +38,9 @@ from kihachi_mcp.models.midi_composer import (
 from kihachi_mcp.services import loudness
 from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
 from kihachi_mcp.services.ai_cost_control import MonthlyCostGuard, estimate_cost
+from kihachi_mcp.services.brief_parser import explicit_swing
 from kihachi_mcp.services.ai_provider import (
+    GeminiAIProvider,
     OpenAIProvider,
     _structured_max_output_tokens,
     provider_from_settings,
@@ -67,7 +71,11 @@ from kihachi_mcp.services.live_state_inspector import (
     LiveStateInspector,
     LiveVersionUnsupportedError,
 )
-from kihachi_mcp.services.live_transport import LiveTransport, LiveTransportError
+from kihachi_mcp.services.live_transport import (
+    ERROR_UNAVAILABLE,
+    LiveTransport,
+    LiveTransportError,
+)
 from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_from_brief
 from kihachi_mcp.services.midi_composer import (
     DeterministicMIDIComposer,
@@ -75,6 +83,7 @@ from kihachi_mcp.services.midi_composer import (
     midi_composition_schema,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
+from kihachi_mcp.services.music_training_service import TrainingJournalStore
 from kihachi_mcp.services.music_plan_compiler import compile_music_plan
 from kihachi_mcp.services.ollama_status import probe_ollama
 from kihachi_mcp.services.production_review import review_candidate
@@ -91,6 +100,7 @@ from kihachi_mcp.services.studio_interpreter import (
     interpret_brief_offline,
     interpret_with_fallback,
 )
+from kihachi_mcp.services.studio_variety import diversify_brief, variety_signature
 from kihachi_mcp.services.studio_workflow import (
     EDITABLE_SETTINGS,
     expected_from_plan,
@@ -119,6 +129,18 @@ DRY_RUN_TTL_SECONDS: float = 300.0  # 5 minutes
 AI_ATTEMPTS = 2
 
 
+class _UnavailableBridgeTransport:
+    """A fail-closed transport used when another Studio owns the Live bridge."""
+
+    def __init__(self, error: LiveTransportError) -> None:
+        self._error = error
+
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
+        raise self._error
+
+
 class StudioRuntime:
     """Own candidates, a single Ollama job, and one Live apply at a time."""
 
@@ -143,6 +165,7 @@ class StudioRuntime:
         self._infer_lock = threading.Lock()
         self._apply_lock = threading.Lock()
         self._candidates: dict[str, MidiCandidate] = {}
+        self._learning_adjustments: dict[str, dict[str, Any]] = {}
         self._selected_id = ""
         self._job: dict[str, Any] = _idle_job()
         self._client: OllamaClient | None = None
@@ -152,12 +175,26 @@ class StudioRuntime:
         self._bridge_session: LiveBridgeSession | None = None
         self._transport = transport
         if start_bridge and transport is None:
-            self._bridge_session = LiveBridgeSession()
-            self._bridge_session.write_handshake()
-            self._transport = LocalhostBridgeTransport(
-                session=self._bridge_session,
-                timeout_seconds=40.0,
-            )
+            session = LiveBridgeSession()
+            try:
+                session.write_handshake()
+            except (LiveTransportError, OSError) as exc:
+                session.remove_handshake()
+                error = (
+                    exc
+                    if isinstance(exc, LiveTransportError)
+                    else LiveTransportError(
+                        ERROR_UNAVAILABLE,
+                        "could not initialize the Live bridge handshake file",
+                    )
+                )
+                self._transport = _UnavailableBridgeTransport(error)
+            else:
+                self._bridge_session = session
+                self._transport = LocalhostBridgeTransport(
+                    session=session,
+                    timeout_seconds=40.0,
+                )
         self._inspector = inspector or _PlanningInspector(
             self._transport, request_id_factory=_unique_request_ids()
         )
@@ -233,6 +270,10 @@ class StudioRuntime:
         self._applied_ids: set[str] = set()
         # None keeps candidates in memory only, as tests and the MCP server do.
         self._candidate_dir = Path(candidate_dir) if candidate_dir else None
+        self._variety_history = (
+            _read_json_list(self._candidate_dir / ".kihachi-variety.json")[-8:]
+            if self._candidate_dir else []
+        )
         if self._candidate_dir is not None:
             preferred_id = _read_selected_id(self._candidate_dir)
             self._selected_id = (
@@ -288,6 +329,13 @@ class StudioRuntime:
             return {"ok": False, "message": "先にOpenAIを選んで設定を保存してください。"}
         return provider.test_connection()
 
+    def gemini_connection_status(self) -> dict[str, Any]:
+        """Run a read-only authentication check for the saved Gemini model."""
+        provider = provider_from_settings(self._settings)
+        if not isinstance(provider, GeminiAIProvider):
+            return {"ok": False, "message": "先にGeminiを選んで設定を保存してください。"}
+        return provider.test_connection()
+
     def _abletongpt_state(self) -> str | None:
         """Ping AbletonGPT at most every 15 s; a blocked Live makes each ping slow."""
         if self._kit_loader is None:
@@ -311,6 +359,7 @@ class StudioRuntime:
                 "ollama_url",
                 "ollama_model",
                 "openai_model",
+                "gemini_model",
                 "monthly_ai_limit_jpy",
                 "ableton_host",
                 "ableton_port",
@@ -348,7 +397,13 @@ class StudioRuntime:
         output_tokens: int = OpenAIProvider.DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> dict[str, Any]:
         """Estimate the next paid request and show this month's local ledger."""
-        model = str(self._settings.get("openai_model") or "gpt-6.1-sol")
+        provider = provider_from_settings(self._settings)
+        paid = bool(provider.capabilities().get("paid_api"))
+        model = str(
+            getattr(provider, "model", "")
+            if paid
+            else self._settings.get("openai_model") or "gpt-6.1-sol"
+        )
         # Includes the schema/system instructions and a conservative reply allowance.
         input_tokens = max(5_000, len(brief) * 2 + 3_000)
         estimate = estimate_cost(
@@ -360,7 +415,7 @@ class StudioRuntime:
         limit = int(self._settings.get("monthly_ai_limit_jpy") or 500)
         return {
             "ok": True,
-            "selected": self._settings.get("ai_provider") == "openai",
+            "selected": bool(provider.capabilities().get("paid_api")),
             "estimate": estimate,
             **self._cost_guard.authorize(estimate["estimated_jpy"], limit),
         }
@@ -384,7 +439,7 @@ class StudioRuntime:
                 payload,
                 output_tokens=_structured_max_output_tokens(midi_composition_schema()),
             )
-            if provider_name == "openai"
+            if provider.capabilities().get("paid_api")
             else None
         )
         return {
@@ -393,7 +448,7 @@ class StudioRuntime:
             "provider": provider_name,
             "model": getattr(provider, "model", "deterministic"),
             "paid_api": bool(provider.capabilities().get("paid_api")),
-            "requires_paid_confirmation": provider_name == "openai",
+            "requires_paid_confirmation": bool(provider.capabilities().get("paid_api")),
             "cost": cost,
             "request": request.to_dict(),
             "applied_to_live": False,
@@ -406,6 +461,8 @@ class StudioRuntime:
         source_notes: list[dict[str, Any]] | None = None,
         confirmed_paid: bool = False,
         seed: int = 0,
+        expected_provider: str | None = None,
+        expected_model: str | None = None,
     ) -> dict[str, Any]:
         """Compose a reviewable part. Paid providers require this request's confirmation."""
         preview = self.midi_composer_preview(constraints, operation, source_notes)
@@ -414,6 +471,14 @@ class StudioRuntime:
         request = _midi_composition_request(constraints, operation, source_notes)
         provider = provider_from_settings(self._settings)
         paid = bool(provider.capabilities().get("paid_api"))
+        active_provider = str(provider.capabilities().get("provider") or "deterministic")
+        active_model = str(getattr(provider, "model", "deterministic"))
+        # Bind the second click to the exact provider/model shown in the preview.
+        # If settings changed between clicks, stop before any provider call.
+        if expected_provider and (expected_provider != preview.get("provider") or expected_provider != active_provider):
+            return {**preview, "ok": False, "error": "選択中のAIが確認後に変わりました。もう一度見積もりを確認してください。"}
+        if expected_model and (expected_model != preview.get("model") or expected_model != active_model):
+            return {**preview, "ok": False, "error": "AIモデルが確認後に変わりました。もう一度見積もりを確認してください。"}
         if paid and not confirmed_paid:
             return {
                 **preview,
@@ -422,9 +487,9 @@ class StudioRuntime:
             }
         cost = preview.get("cost") or {}
         if paid and not cost.get("allowed"):
-            return {**preview, "ok": False, "error": "月間AI利用上限を超えるため、OpenAI APIを実行しません"}
+            return {**preview, "ok": False, "error": "月間AI利用上限を超えるため、有料AI APIを実行しません"}
         if paid and not provider.health().get("ok"):
-            return {**preview, "ok": False, "error": "OPENAI_API_KEYが設定されていません"}
+            return {**preview, "ok": False, "error": f"{preview['provider']} APIの認証情報が設定されていないか、接続できません"}
         recorded_usage: dict[str, Any] | None = None
         try:
             if provider.capabilities().get("structured_output"):
@@ -435,7 +500,7 @@ class StudioRuntime:
         except (InterpretationError, OSError, TypeError, ValueError) as exc:
             return {**preview, "ok": False, "error": str(exc)}
         finally:
-            if isinstance(provider, OpenAIProvider) and provider.last_usage:
+            if paid and getattr(provider, "last_usage", None):
                 recorded_usage = self._cost_guard.record(provider.last_usage, cost["estimate"])
         payload = [note.to_dict() for note in notes]
         post_cost = self.ai_cost_status() if paid else None
@@ -588,7 +653,7 @@ class StudioRuntime:
         """Read the bridge health and return only contract-backed capabilities."""
         return discover_capabilities(self._inspector.health(), self._abletongpt_state())
 
-    def queue_generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
+    def queue_generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False, wide_variety: bool = False) -> dict[str, Any]:
         """Start one background generate. Refuses a second concurrent job."""
         if self._infer_lock.locked():
             return {
@@ -598,12 +663,13 @@ class StudioRuntime:
         if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
             return {"ok": False, "error": "推定料金を確認してから有料生成を明示してください", "cost": self.ai_cost_status(brief)}
         thread = threading.Thread(
-            target=self.generate, args=(brief, seed, confirmed_paid), daemon=True
+            target=self.generate, args=(brief, seed, confirmed_paid),
+            kwargs={"wide_variety": True} if wide_variety else {}, daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
 
-    def queue_regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
+    def queue_regenerate(self, candidate_id: str, confirmed_paid: bool = False, wide_variety: bool = False) -> dict[str, Any]:
         """Start one background regenerate from an existing candidate."""
         if self._infer_lock.locked():
             return {
@@ -616,7 +682,8 @@ class StudioRuntime:
         if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
             return {"ok": False, "error": "推定料金を確認してから有料再生成を明示してください", "cost": self.ai_cost_status(current.brief.original_text)}
         thread = threading.Thread(
-            target=self.regenerate, args=(candidate_id, confirmed_paid), daemon=True
+            target=self.regenerate, args=(candidate_id, confirmed_paid),
+            kwargs={"wide_variety": True} if wide_variety else {}, daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
@@ -647,7 +714,7 @@ class StudioRuntime:
             "musical_quality_claimed": False,
         }
 
-    def generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
+    def generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False, wide_variety: bool = False) -> dict[str, Any]:
         """Interpret the brief and store a new candidate. Blocks one caller."""
         if not self._infer_lock.acquire(blocking=False):
             return {
@@ -701,8 +768,39 @@ class StudioRuntime:
                     )
             else:
                 production = interpret_brief_offline(brief)
-            candidate = build_candidate(production, seed=seed)
-            self._store(candidate)
+            if wide_variety:
+                history = self._variety_history if seed is None else []
+                seed = secrets.randbits(32) if seed is None else seed
+                production = diversify_brief(production, seed, history)
+            learned_swing = TrainingJournalStore().learned_studio_swing()
+            swing_was_explicit = explicit_swing(production.original_text) is not None
+            swing_override = (
+                learned_swing["swing_ratio"]
+                if learned_swing["active"] and not swing_was_explicit
+                else None
+            )
+            candidate = build_candidate(
+                production, seed=seed, swing_override=swing_override
+            )
+            learning_adjustment = {
+                "applied": swing_override is not None,
+                "learned_swing": learned_swing,
+                "reason": (
+                    "繰り返しのStudio A/B評価からスイング既定値を適用"
+                    if swing_override is not None
+                    else "依頼文でスイングを明示したため学習値は上書きしません"
+                    if swing_was_explicit
+                    else "スイング学習の有効条件に未到達のため既定値を維持"
+                ),
+            }
+            self._store(candidate, learning_adjustment=learning_adjustment)
+            if wide_variety:
+                self._variety_history = [*self._variety_history, variety_signature(production)][-8:]
+                if self._candidate_dir:
+                    try:
+                        _write_json_atomic(self._candidate_dir / ".kihachi-variety.json", self._variety_history)
+                    except OSError:
+                        pass  # Candidate is saved; an unavailable history never hides it.
             payload = candidate.to_dict()
             with self._lock:
                 self._job = {
@@ -711,11 +809,13 @@ class StudioRuntime:
                     "elapsed_seconds": time.monotonic() - started,
                     "error": "",
                     "candidate_id": candidate.candidate_id,
+                    "learning_adjustment": learning_adjustment,
                 }
             return {
                 "ok": True,
                 "elapsed_seconds": time.monotonic() - started,
                 "candidate": payload,
+                "learning_adjustment": learning_adjustment,
                 "musical_quality_claimed": False,
             }
         except InferenceCancelled:
@@ -743,13 +843,13 @@ class StudioRuntime:
                 self._client = None
             self._infer_lock.release()
 
-    def regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
+    def regenerate(self, candidate_id: str, confirmed_paid: bool = False, wide_variety: bool = False) -> dict[str, Any]:
         """Build a new candidate from the same brief with a new seed."""
         current = self._lookup(candidate_id)
         if current is None:
             return {"ok": False, "error": "指定した候補がありません"}
-        next_seed = current.seed + 1
-        return self.generate(current.brief.original_text, seed=next_seed, confirmed_paid=confirmed_paid)
+        next_seed = None if wide_variety else current.seed + 1
+        return self.generate(current.brief.original_text, seed=next_seed, confirmed_paid=confirmed_paid, wide_variety=wide_variety)
 
     def cancel(self) -> dict[str, Any]:
         """Ask the in-flight Ollama request to stop."""
@@ -2651,6 +2751,77 @@ class StudioRuntime:
         finally:
             self._apply_lock.release()
 
+    def prepare_training_sound_plan(self, track_index: int, device_index: int, variant_id: str) -> dict[str, Any]:
+        """Build one inert, human-approved Operator waveform plan from Live readback."""
+        waveforms = {"A": "Sine", "B": "Triangle", "C": "Saw D"}
+        variant_id = str(variant_id).upper()
+        if variant_id not in waveforms:
+            return {"ok": False, "error": "音色案はA/B/Cから選んでください", "live_changed": False}
+        if not isinstance(track_index, int) or not isinstance(device_index, int):
+            return {"ok": False, "error": "Liveのトラックとデバイスを選択してください", "live_changed": False}
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return failure or {"ok": False, "error": "Live状態を取得できません", "live_changed": False}
+        if snapshot.is_recording or snapshot.is_playing:
+            return {"ok": False, "error": "再生・録音を停止してから音色案を準備してください", "live_changed": False}
+        track = snapshot.track_by_index(track_index)
+        if track is None or not 0 <= device_index < len(track.device_names):
+            return {"ok": False, "error": "選択したトラックまたはデバイスが現在のLiveにありません", "live_changed": False}
+        if track.device_names[device_index] != "Operator":
+            return {"ok": False, "error": "選択したデバイスはOperatorではありません", "live_changed": False}
+        try:
+            reply = self._inspector.device_parameters(device_index, track_index)
+        except LiveTransportError as exc:
+            return {"ok": False, "error": f"Operatorの設定を読み取れません（{exc.code}）: {exc.message}", "live_changed": False}
+        parameter = next((item for item in reply.get("parameters", []) if item.get("name") == "Osc-A Wave"), None)
+        item = waveforms[variant_id]
+        if not parameter or item not in [str(value) for value in parameter.get("value_items") or []]:
+            return {"ok": False, "error": f"このLiveのOperatorでは設定 'Osc-A Wave / {item}' を確認できません", "live_changed": False}
+        from datetime import UTC, datetime, timedelta
+        request_id = uuid.uuid4().hex
+        operation = LiveMutationOperation(
+            operation_id=f"001-{OP_SET_DEVICE_PARAMETER}", op=OP_SET_DEVICE_PARAMETER,
+            target={"track_index": track_index, "device_index": device_index},
+            arguments={"device_name": "Operator", "parameter_name": "Osc-A Wave", "item": item},
+            preconditions=[
+                LivePrecondition("not_recording"),
+                LivePrecondition("track_name_at_index", {"track_index": track_index, "name": track.name}),
+                LivePrecondition("device_name_at_index", {"track_index": track_index, "device_index": device_index, "name": "Operator"}),
+            ],
+            destructive=False,
+            expected_readback={"track_index": track_index, "device_index": device_index, "parameter_name": "Osc-A Wave", "item": item},
+        )
+        plan = LiveMutationPlan(
+            request_id=request_id,
+            idempotency_key=canonical_hash({"request_id": request_id, "training_theme": "bass_timbre", "variant": variant_id, "set": snapshot.set_fingerprint}),
+            source_plan_hash=canonical_hash({"theme": "bass_timbre", "variant": variant_id, "device": "Operator", "parameter": "Osc-A Wave", "item": item}),
+            set_fingerprint=snapshot.set_fingerprint,
+            expires_at=(datetime.now(UTC) + timedelta(seconds=300)).isoformat(),
+            operations=[operation],
+        )
+        return {"ok": True, "preview": True, "plan": plan.to_dict(), "variant_id": variant_id, "waveform": item, "track_name": track.name, "device_index": device_index, "parameter": "Osc-A Wave", "live_changed": False, "approval_required": True, "audio_evaluation": "Liveの実音聴取は未実施です。反映後にLiveで試聴してください。"}
+
+    def approve_training_sound_plan(self, plan: LiveMutationPlan) -> dict[str, Any]:
+        """Approve this exact single-parameter sound plan without executing it."""
+        try:
+            self._gate.approve(plan)
+        except ApprovalError as exc:
+            return {"ok": False, "error": exc.message, "approved": False, "live_changed": False}
+        return {"ok": True, "approved": True, "executed": False, "live_changed": False, "plan_hash": plan.plan_hash}
+
+    def apply_training_sound_plan(self, plan: LiveMutationPlan) -> dict[str, Any]:
+        """Execute the approved one-knob plan exactly once and report readback."""
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です", "live_changed": False}
+        try:
+            token = self._gate.token_for(plan.plan_hash)
+            if token is None:
+                return {"ok": False, "error": "この音色案はまだ承認されていません", "live_changed": False}
+            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            return {"ok": receipt.status == "verified", "receipt": receipt.to_dict(), "live_changed": bool(receipt.completed_operations), "musical_quality_claimed": False}
+        finally:
+            self._apply_lock.release()
+
     def inspect_coverage(self, candidate_id: str) -> dict[str, Any]:
         """Re-read instruments and leftover [KIHACHI] tracks. Does not apply."""
         candidate = self._lookup(candidate_id)
@@ -2671,12 +2842,34 @@ class StudioRuntime:
         """Return the seed a first generate would use."""
         return seed_from_brief(brief)
 
-    def _store(self, candidate: MidiCandidate) -> None:
+    def _store(
+        self,
+        candidate: MidiCandidate,
+        learning_adjustment: dict[str, Any] | None = None,
+    ) -> None:
         self._candidates[candidate.candidate_id] = candidate
+        bound_adjustment = (
+            {
+                **learning_adjustment,
+                "candidate_note_fingerprint": candidate.note_fingerprint,
+            }
+            if learning_adjustment is not None
+            else None
+        )
+        if bound_adjustment is not None:
+            self._learning_adjustments[candidate.candidate_id] = bound_adjustment
+        else:
+            # Candidate ids can be supplied by materialize(). If an id is
+            # reused, never let the previous candidate's learning provenance
+            # appear to describe the replacement MIDI.
+            self._learning_adjustments.pop(candidate.candidate_id, None)
         self._selected_id = candidate.candidate_id
         path = self._candidate_path(candidate.candidate_id)
         if path is not None:
-            _write_json_atomic(path, candidate.to_dict())
+            saved = candidate.to_dict()
+            if bound_adjustment is not None:
+                saved["learning_adjustment"] = bound_adjustment
+            _write_json_atomic(path, saved)
             _write_json_atomic(
                 self._candidate_dir / SELECTED_CANDIDATE_FILE,
                 {"candidate_id": candidate.candidate_id},
@@ -2703,7 +2896,29 @@ class StudioRuntime:
         ):
             return None
         self._candidates[candidate_id] = candidate
+        adjustment = data.get("learning_adjustment")
+        if (
+            isinstance(adjustment, dict)
+            and adjustment.get("candidate_note_fingerprint")
+            in (None, candidate.note_fingerprint)
+        ):
+            self._learning_adjustments[candidate_id] = adjustment
         return candidate
+
+    def get_learning_adjustment(self, candidate_id: str) -> dict[str, Any] | None:
+        """Return generation provenance persisted with this candidate, if any."""
+        if self._lookup(candidate_id) is None:
+            return None
+        adjustment = self._learning_adjustments.get(candidate_id)
+        candidate = self._candidates.get(candidate_id)
+        if (
+            adjustment is not None
+            and candidate is not None
+            and adjustment.get("candidate_note_fingerprint")
+            not in (None, candidate.note_fingerprint)
+        ):
+            return None
+        return dict(adjustment) if adjustment is not None else None
 
     def _candidate_path(self, candidate_id: str, suffix: str = ".json") -> Path | None:
         if self._candidate_dir is None or not _CANDIDATE_ID_RE.fullmatch(candidate_id):

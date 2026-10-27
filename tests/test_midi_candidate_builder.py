@@ -69,6 +69,19 @@ def test_candidate_keeps_explicit_values_and_drop() -> None:
     assert any("低めの音域" in item for item in candidate.brief.interpretations)
 
 
+def test_learned_swing_changes_default_and_explicit_swing_wins() -> None:
+    plain = build_candidate(_brief(), seed=7, candidate_id="swing")
+    learned = build_candidate(_brief(), seed=7, candidate_id="swing", swing_override=0.54)
+    assert learned.clips != plain.clips
+
+    explicit_brief = _brief(BRIEF + "。スイング50%")
+    explicit_default = build_candidate(explicit_brief, seed=7, candidate_id="swing")
+    explicit_with_learning = build_candidate(
+        explicit_brief, seed=7, candidate_id="swing", swing_override=0.54
+    )
+    assert explicit_with_learning.clips == explicit_default.clips
+
+
 def test_hats_are_sparser_in_the_first_half() -> None:
     first, second = hat_counts_by_half(build_candidate(_brief(), seed=1))
     assert first < second

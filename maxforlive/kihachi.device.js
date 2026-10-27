@@ -101,6 +101,16 @@ function isManagedName(name) {
  */
 function handshakePath() {
     var candidates = [];
+    var stateDirectory = null;
+    try {
+        stateDirectory = max.env && max.env.KIHACHI_LIVE_STATE_DIR ? max.env.KIHACHI_LIVE_STATE_DIR : null;
+    } catch (error) {
+        stateDirectory = null;
+    }
+    if (stateDirectory) {
+        candidates.push(stateDirectory.replace(/[\\/]+$/, "") + "/live-bridge.json");
+        return candidates;
+    }
     var home = null;
     try {
         home = max.env && max.env.HOME ? max.env.HOME : null;
@@ -148,13 +158,12 @@ function readHandshake() {
 }
 
 function tokenIsValid(candidate) {
-    if (sessionToken === null) {
-        var handshake = readHandshake();
-        if (handshake === null || !handshake.token) {
-            return false;
-        }
-        sessionToken = handshake.token;
+    var handshake = readHandshake();
+    if (handshake === null || !handshake.token) {
+        sessionToken = null;
+        return false;
     }
+    sessionToken = handshake.token;
     return candidate === sessionToken;
 }
 

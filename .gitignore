@@ -41,3 +41,18 @@ outputs/
 
 # Ableton analysis sidecars
 *.asd
+
+# Local working artifacts & generated songs
+songs/
+scratch/
+
+# Node dependencies
+node_modules/
+
+# Archives
+*.tar.gz
+
+# Xcode user state
+*.xcuserstate
+xcuserdata/
+DerivedData/

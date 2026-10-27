@@ -54,6 +54,9 @@ class MusicalConstraints:
     mood: str = ""
     prompt: str = ""
     swing: float = 0.5
+    kick_style: str = "four_on_the_floor"
+    kick_density_per_bar: float | None = None
+    bass_density_per_bar: float | None = None
 
     def __post_init__(self) -> None:
         if self.role not in MIDI_ROLES:
@@ -68,6 +71,10 @@ class MusicalConstraints:
             raise ValueError("syncopation and octave_jump must be between 0 and 1")
         if not 0 <= self.swing <= 1:
             raise ValueError("swing must be between 0 and 1")
+        if self.kick_style not in {"four_on_the_floor", "broken_beat"}:
+            raise ValueError("kick_style must be four_on_the_floor or broken_beat")
+        if any(value is not None and not 0 <= value <= 16 for value in (self.kick_density_per_bar, self.bass_density_per_bar)):
+            raise ValueError("kick and bass density must be between 0 and 16 hits per bar")
         if not 1 <= self.velocity_min <= self.velocity_max <= 127:
             raise ValueError("velocity range is invalid")
         if not 0 < self.note_length_min <= self.note_length_max:
@@ -109,6 +116,9 @@ class MusicalConstraints:
             mood=str(data.get("mood") or ""),
             prompt=str(data.get("prompt") or ""),
             swing=float(data.get("swing") if data.get("swing") is not None else 0.5),
+            kick_style=str(data.get("kick_style") or "four_on_the_floor"),
+            kick_density_per_bar=float(data["kick_density_per_bar"]) if data.get("kick_density_per_bar") is not None else None,
+            bass_density_per_bar=float(data["bass_density_per_bar"]) if data.get("bass_density_per_bar") is not None else None,
         )
 
 

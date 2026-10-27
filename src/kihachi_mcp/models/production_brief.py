@@ -7,10 +7,12 @@ from kihachi_mcp.knowledge.genre_database import is_known as is_known_genre
 
 SOURCE_USER = "user"
 SOURCE_AI = "ai"
+SOURCE_RANDOM = "random"
+VARIATION_PROFILES = ("", "pocket", "floating", "driving", "offbeat")
 SOURCE_DEFAULT = "default"
 #: Taken from the genre database rather than from the brief or the model.
 SOURCE_GENRE = "genre"
-FIELD_SOURCES = frozenset({SOURCE_USER, SOURCE_AI, SOURCE_DEFAULT, SOURCE_GENRE})
+FIELD_SOURCES = frozenset({SOURCE_USER, SOURCE_AI, SOURCE_DEFAULT, SOURCE_GENRE, SOURCE_RANDOM})
 
 #: What the local model may answer for genre. A genre the brief names is read
 #: by rule from the 1020-row database instead, and any of those is valid.
@@ -141,6 +143,7 @@ class ProductionBrief:
     unhandled: tuple[str, ...] = field(default_factory=tuple)
     ambiguous: tuple[str, ...] = field(default_factory=tuple)
     contradictions: tuple[str, ...] = field(default_factory=tuple)
+    variation_profile: str = ""
     model: str = "gemma4:latest"
     provider: str = "local_ollama"
     #: Tone controls, -2..+2 steps of a sound recipe. 0 leaves the recipe as is.
@@ -149,6 +152,8 @@ class ProductionBrief:
     tone_delay: SourcedValue = field(default_factory=lambda: _no_tone())
 
     def __post_init__(self) -> None:
+        if self.variation_profile not in VARIATION_PROFILES:
+            raise ValueError("unsupported variation_profile")
         if not self.original_text.strip():
             raise ValueError("original_text must not be empty")
         if self.meter_numerator < 1 or self.meter_denominator < 1:
@@ -217,6 +222,7 @@ class ProductionBrief:
             "contradictions": list(self.contradictions),
             "model": self.model,
             "provider": self.provider,
+            **({"variation_profile": self.variation_profile} if self.variation_profile else {}),
             **{name: getattr(self, name).to_dict() for name in TONE_FIELDS},
         }
 
@@ -248,6 +254,7 @@ class ProductionBrief:
             contradictions=tuple(str(item) for item in data.get("contradictions") or []),
             model=str(data.get("model") or "gemma4:latest"),
             provider=str(data.get("provider") or "local_ollama"),
+            variation_profile=str(data.get("variation_profile") or ""),
             # Candidates saved before tone controls existed carry none.
             **{
                 name: SourcedValue.from_dict(data[name])

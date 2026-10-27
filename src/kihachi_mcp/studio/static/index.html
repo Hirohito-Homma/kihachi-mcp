@@ -89,7 +89,20 @@
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 6px 4px; }
     .hidden { display: none; }
+    .studio-tabs-wrap { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px; padding: 10px 0; background: var(--bg); }
+    .studio-tabs { display: flex; gap: 6px; overflow-x: auto; flex: 1; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); scrollbar-width: thin; }
+    .studio-tab { flex: 0 0 auto; min-height: 40px; padding: 8px 14px; background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 8px; white-space: nowrap; }
+    .studio-tab[aria-selected="true"] { color: var(--text); background: #2b333b; border-color: var(--accent); }
+    .studio-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .studio-tab-panel[hidden] { display: none !important; }
+    @media (max-width: 600px) { .studio-tabs-wrap { align-items: stretch; flex-direction: column; gap: 6px; } .studio-tabs { width: 100%; } }
     .progress { color: var(--accent); }
+    .composer-progress { margin: -8px 0 14px; }
+    .composer-progress-track { height: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: #101214; }
+    .composer-progress-bar { width: 38%; height: 100%; border-radius: inherit; background: var(--accent); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 55%, transparent); animation: composer-progress-slide 1.4s ease-in-out infinite alternate; }
+    .composer-progress-label { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+    @keyframes composer-progress-slide { from { transform: translateX(-8%); } to { transform: translateX(175%); } }
+    @media (prefers-reduced-motion: reduce) { .composer-progress-bar { width: 100%; animation: none; } }
     label.inline { display: flex; align-items: center; gap: 6px; font-size: 13px; }
     pre { white-space: pre-wrap; font-size: 12px; color: var(--muted); }
     select, input[type="number"] {
@@ -282,7 +295,17 @@
     </div>
   </header>
   <main>
-    <section aria-labelledby="jarvis-heading">
+    <div class="studio-tabs-wrap">
+      <div class="studio-tabs" role="tablist" aria-label="Studioの機能">
+        <button class="studio-tab" id="studio-tab-create" type="button" role="tab" aria-controls="studio-panel-create" aria-selected="true" tabindex="0" data-studio-tab-target="create">制作</button>
+        <button class="studio-tab" id="studio-tab-midi" type="button" role="tab" aria-controls="studio-panel-midi" aria-selected="false" tabindex="-1" data-studio-tab-target="midi">MIDI作曲</button>
+        <button class="studio-tab" id="studio-tab-candidates" type="button" role="tab" aria-controls="studio-panel-candidates" aria-selected="false" tabindex="-1" data-studio-tab-target="candidates">候補・レビュー</button>
+        <button class="studio-tab" id="studio-tab-live" type="button" role="tab" aria-controls="studio-panel-live" aria-selected="false" tabindex="-1" data-studio-tab-target="live">Live操作</button>
+        <button class="studio-tab" id="studio-tab-settings" type="button" role="tab" aria-controls="studio-panel-settings" aria-selected="false" tabindex="-1" data-studio-tab-target="settings">設定・診断</button>
+      </div>
+      <a href="/references">参考音源</a>
+    </div>
+    <section id="jarvis-view" data-studio-tab="create" aria-labelledby="jarvis-heading">
       <h2 id="jarvis-heading">JARVIS</h2>
       <p class="sub">話しかけると、曲の状態と変更案は Jarvis が返し、制作の相談は確認してから制作指示に追記できます。この欄からは Live を変更しません。</p>
       <label for="dialogue-utterance">Jarvisへの依頼</label>
@@ -335,7 +358,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="production-brief-view" data-studio-tab="create">
       <h2>制作指示</h2>
       <textarea id="brief">125 BPM、Dマイナー、96小節の暗いテクノ。
 前半はハットを少なく、後半で増やす。
@@ -347,6 +370,8 @@
         <button id="regenerate" class="secondary" disabled>別候補を再生成</button>
       </div>
       <p class="sub">Live から生成する前に上の例文を自分の制作指示へ書き換えてください。BPM を指定した場合はその値を優先します。4/4拍子の Set に対応します。</p>
+      <label class="inline"><input id="wide-variety" type="checkbox" checked> 大きくランダムに変える</label>
+      <p class="sub">指定した条件を保ち、未指定のジャンル・テンポ・キー・リズム・構成・密度を組み替えます。直近8候補の組み合わせを参考に、違いの大きい案を選びます。ジャンルも変えたい場合は、制作指示からジャンル指定を外してください。</p>
       <details id="reference-guidance">
         <summary>参考音源DBからBPMを提案</summary>
         <p>確認済みBPMの中央値を参考にします。既にテンポの指定がある場合は変更しません。</p>
@@ -362,9 +387,9 @@
       <p id="live-candidate-context" class="sub" role="status"></p>
     </section>
 
-    <section id="astra-params-view">
-      <h2>Astraへ送るパラメーター</h2>
-      <p class="sub">ここで選んだ内容をAstraへ送ります。ジャンル・雰囲気・指示は音の方向だけです。最初のクリックは料金の確認だけです。同じ内容でもう一度押すとMIDI候補を生成します。Liveは変えません。</p>
+    <section id="astra-params-view" data-studio-tab="create">
+      <h2>AI作曲パラメーター</h2>
+      <p class="sub">ここで選んだ内容をシステム設定で選択中のAIへ送ります（OpenAI / Gemini / Ollama）。ジャンル・雰囲気・指示は音の方向だけです。有料APIは最初のクリックで見積もりを確認し、同じ内容でもう一度押すとMIDI候補を生成します。Liveは変えません。</p>
       <div id="astra-params" class="grid">
         <label>操作<select id="astra-operation"><option value="generate">generate</option><option value="variation">variation</option><option value="revision">revision</option></select></label>
         <label>役割<select id="astra-role"><option value="全パート">全パート</option><option value="Kick">Kick</option><option value="Snare">Snare</option><option value="Hats">Hats</option><option value="OpenHat">OpenHat</option><option value="Perc">Perc</option><option value="Sub">Sub</option><option value="bass" selected>Bass</option><option value="Stab">Stab</option><option value="Pad">Pad</option><option value="arp">Arp</option><option value="Guitar">Guitar</option><option value="Horn">Horn</option><option value="Lead">Lead</option><option value="Vocal">Vocal</option><option value="FX">FX</option><option value="chords">Chords</option><option value="melody">Melody</option><option value="drums">Drums</option><option value="percussion">Percussion</option></select></label>
@@ -388,11 +413,11 @@
       <label class="inline"><input id="astra-ghost" type="checkbox" checked> Ghost notes</label>
       <label class="inline"><input id="astra-avoid-kick" type="checkbox" checked> Kickとの同時発音を避ける</label>
       <label>指示・プロンプト<textarea id="astra-prompt" rows="3" placeholder="例：キックは短め。ミューテーションファンクを作って。Live操作は書かない。"></textarea></label>
-      <div class="actions"><button id="astra-send" type="button">Astraへ送る</button></div>
+      <div class="actions"><button id="astra-send" type="button">選択中のAIへ送る</button></div>
       <p id="astra-status" role="status" class="sub"></p>
     </section>
 
-    <section id="music-plan-view">
+    <section id="music-plan-view" data-studio-tab="live">
       <h2>パートの計画</h2>
       <p class="sub">上で選んだ役割、キー、テンポ、小節で、この画面の中で計画します。全パートを選ぶと、パートごとにトラックを分けます。承認だけでは Live に送りません。「実機の Live に送る」は、1回目で実機の Set を読んで末尾に置き直し、承認し直したあとの2回目で1回だけ送ります。再生と録音を止めてから押してください。読んだあと15分で期限切れです。同じ名前のトラックがあるときは送りません。保存はしません。</p>
       <div class="actions"><button id="music-plan-preview" type="button">計画を確認</button><button id="music-plan-approve" type="button" disabled>この計画を承認</button><button id="music-plan-reject" class="secondary" type="button" disabled>承認しない</button><button id="music-plan-verify" class="secondary" type="button" disabled>読み戻しを確認</button><button id="music-plan-live" type="button" disabled>実機の Live に送る</button></div>
@@ -400,7 +425,7 @@
       <div id="music-plan-result"></div>
     </section>
 
-    <section id="midi-composer-view">
+    <section id="midi-composer-view" data-studio-tab="midi">
       <h2>パート単位MIDI Composer</h2>
       <p class="sub">制約を先に確認し、MIDIノート候補だけを生成します。Abletonや現在の曲は変更しません。</p>
       <div class="grid">
@@ -419,10 +444,14 @@
       <label class="inline"><input id="composer-avoid-kick" type="checkbox" checked> Kickとの同時発音を避ける</label>
       <div class="actions"><button id="composer-preview" class="secondary" type="button">制約と料金を確認</button><button id="composer-run" type="button" disabled>MIDI候補を生成</button><button id="composer-adopt" class="secondary" type="button" disabled>選択中の候補へ採用案を作る</button></div>
       <p id="composer-status" role="status" class="sub"></p>
+      <div id="composer-progress" class="composer-progress hidden" role="progressbar" aria-label="MIDI候補の生成" aria-valuetext="生成中。完了率は取得できません">
+        <div class="composer-progress-track"><div class="composer-progress-bar"></div></div>
+        <p id="composer-progress-label" class="composer-progress-label">生成中…</p>
+      </div>
       <div id="composer-result"></div>
     </section>
 
-    <section id="brief-view" class="hidden">
+    <section id="brief-view" class="hidden" data-studio-tab="candidates">
       <h2>AIが解釈した内容</h2>
       <div id="spec-grid" class="grid"></div>
       <p><b>解釈</b></p>
@@ -436,7 +465,7 @@
       <ul id="unhandled"></ul>
     </section>
 
-    <section id="candidate-view" class="hidden">
+    <section id="candidate-view" class="hidden" data-studio-tab="candidates">
       <h2>MIDI候補</h2>
       <p id="candidate-meta"></p>
       <div id="counts" class="grid"></div>
@@ -508,7 +537,7 @@
       <p class="sub">これは技術的に指示を反映した候補です。音楽的に気に入るかは別です。</p>
     </section>
 
-    <section id="workspace-view">
+    <section id="workspace-view" data-studio-tab="candidates">
       <h2>プロジェクト</h2>
       <div class="actions">
         <select id="project-select" aria-label="保存済みの候補"><option value="">保存済みの候補を読み込み中…</option></select>
@@ -532,7 +561,7 @@
       </div>
     </section>
 
-    <section id="review-view" class="hidden">
+    <section id="review-view" class="hidden" data-studio-tab="candidates">
       <h2>AIレビュー</h2>
       <p class="sub">送る予定のノートそのものを規則で調べます。音楽的な良し悪しの判定ではありません。</p>
       <div id="review-dimensions" class="grid"></div>
@@ -563,7 +592,7 @@
       </details>
     </section>
 
-    <section id="revision-view" class="hidden">
+    <section id="revision-view" class="hidden" data-studio-tab="candidates">
       <h2>修正案</h2>
       <p class="sub">採用するまで今の候補は変わりません。採用すると新しい候補になり、もう一度承認が必要です。</p>
       <div class="grid">
@@ -580,7 +609,7 @@
       <ul id="revision-history"></ul>
     </section>
 
-    <section id="apply-view" class="hidden">
+    <section id="apply-view" class="hidden" data-studio-tab="live">
       <h2>Liveへ適用</h2>
       <p id="live-plan-pending" role="status" class="sub">パート計画の保留はありません。Liveには送っていません。</p>
       <p class="sub">流れ: 承認 → 適用内容を確認（ドライラン。Liveは変わりません）→ この内容でLiveへ適用 → Liveから読み戻して検証。</p>
@@ -663,7 +692,7 @@
       <div id="measure-result"></div>
     </section>
 
-    <section id="recover-view">
+    <section id="recover-view" data-studio-tab="live">
       <h2>適用済みトラックにサンプルを入れる</h2>
       <p class="sub">Studioを再起動して候補が消えたときに使います。Liveのトラック名「KIHACHI Kick ababf584 [KIHACHI]」の8桁を入力してください。空の Kick 36 / Hats 42 パッドにだけ入れ、既存のパッドは上書きしません。再生を止めてから押してください。</p>
       <div class="actions">
@@ -673,7 +702,7 @@
       <div id="recover-result"></div>
     </section>
 
-    <section id="system-view">
+    <section id="system-view" data-studio-tab="settings">
       <details id="system-details">
         <summary>システム（状態・設定・診断）</summary>
         <h2 style="margin-top:12px">SYSTEM DIAGNOSTICS</h2>
@@ -688,6 +717,7 @@
             <select id="setting-provider">
               <option value="ollama">Ollama（ローカル）</option>
               <option value="openai">OpenAI（明示選択・有料）</option>
+              <option value="gemini">Google Gemini（明示選択・API）</option>
               <option value="deterministic">AIなし（既定解釈）</option>
             </select>
           </label>
@@ -699,11 +729,20 @@
               <option value="gpt-6-astra">Astra（重要な作曲）</option>
             </select>
           </label>
+          <label class="inline">Geminiモデル
+            <select id="setting-gemini-model">
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash（高速・推奨）</option>
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro（高精度）</option>
+            </select>
+          </label>
           <label class="inline">月間上限（円） <input type="number" id="setting-ai-limit" min="100" step="100" style="width:9ch"></label>
         </div>
         <div class="actions">
           <button id="ollama-test" class="secondary" type="button">Ollama接続テスト</button>
           <button id="openai-test" class="secondary" type="button">OpenAI接続テスト</button>
+          <button id="gemini-test" class="secondary" type="button">Gemini接続テスト</button>
           <button id="settings-save" class="secondary" type="button">保存</button>
         </div>
         <p id="settings-line" role="status" class="sub">導入済みのモデルだけを選べます。KIHACHIはモデルをダウンロードしません。</p>
@@ -726,6 +765,54 @@
     const state = { candidate: null, poll: null, applying: false, masterRetune: false };
     let pendingRevision = null;
     const $ = (id) => document.getElementById(id);
+    const studioMain = document.querySelector("main");
+    const studioTabButtons = Array.from(document.querySelectorAll("[data-studio-tab-target]"));
+    const studioPanels = new Map();
+    for (const button of studioTabButtons) {
+      const panel = document.createElement("div");
+      panel.className = "studio-tab-panel";
+      panel.id = button.getAttribute("aria-controls");
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", button.id);
+      panel.dataset.studioTabPanel = button.dataset.studioTabTarget;
+      studioPanels.set(button.dataset.studioTabTarget, panel);
+    }
+    for (const section of Array.from(studioMain.querySelectorAll(":scope > section[data-studio-tab]"))) {
+      studioPanels.get(section.dataset.studioTab)?.append(section);
+    }
+    for (const panel of studioPanels.values()) studioMain.append(panel);
+    function activateStudioTab(tabName, focusButton = false) {
+      if (!studioPanels.has(tabName)) return;
+      for (const button of studioTabButtons) {
+        const active = button.dataset.studioTabTarget === tabName;
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+        studioPanels.get(button.dataset.studioTabTarget).hidden = !active;
+        if (active && focusButton) button.focus();
+      }
+      try { localStorage.setItem("kihachi.studio.activeTab", tabName); } catch { /* 表示タブは保存できなくても使える */ }
+    }
+    let initialStudioTab = "create";
+    try {
+      const savedStudioTab = localStorage.getItem("kihachi.studio.activeTab");
+      if (studioPanels.has(savedStudioTab)) initialStudioTab = savedStudioTab;
+    } catch { /* 保存済みタブがなくても制作タブで開始 */ }
+    activateStudioTab(initialStudioTab);
+    for (const button of studioTabButtons) {
+      button.addEventListener("click", () => activateStudioTab(button.dataset.studioTabTarget));
+      button.addEventListener("keydown", (event) => {
+        const index = studioTabButtons.indexOf(button);
+        let next = null;
+        if (event.key === "ArrowRight") next = (index + 1) % studioTabButtons.length;
+        else if (event.key === "ArrowLeft") next = (index - 1 + studioTabButtons.length) % studioTabButtons.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = studioTabButtons.length - 1;
+        if (next !== null) {
+          event.preventDefault();
+          activateStudioTab(studioTabButtons[next].dataset.studioTabTarget, true);
+        }
+      });
+    }
 
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
     let lastFailed = null;
@@ -1534,7 +1621,7 @@
       setLivePlanPending("入力が変わったので、このパート計画は保留ではありません。Liveには送っていません。");
       $("composer-status").textContent = "入力が変わりました。制約と料金をもう一度確認してください。";
       const astraStatus = $("astra-status");
-      if (astraStatus) astraStatus.textContent = "内容が変わりました。Astraへ送る前に、もう一度確認します。";
+      if (astraStatus) astraStatus.textContent = "内容が変わりました。選択中のAIへ送る前に、もう一度確認します。";
     }
     function setLivePlanPending(text) {
       const node = $("live-plan-pending");
@@ -1548,6 +1635,26 @@
       $("astra-status").textContent = line;
       $("composer-result").innerHTML = `<table><thead><tr><th>Pitch</th><th>Start</th><th>Duration</th><th>Velocity</th><th>Channel</th></tr></thead><tbody>${(data.notes || []).slice(0, 128).map((note) => `<tr><td>${esc(note.pitch)}</td><td>${esc(note.start)}</td><td>${esc(note.duration)}</td><td>${esc(note.velocity)}</td><td>${esc(note.channel ?? 0)}</td></tr>`).join("")}</tbody></table>${data.note_count > 128 ? `<p class="sub">先頭128ノートを表示しています。</p>` : ""}<p class="sub">${esc(data.next_action || "")}</p>`;
       $("composer-adopt").disabled = !state.candidate || ["drums", "全パート"].includes(composerConstraints().role);
+    }
+    let composerProgressTimer = null;
+    function startComposerProgress(statusId) {
+      if (statusId !== "composer-status") return;
+      const progress = $("composer-progress");
+      const label = $("composer-progress-label");
+      const startedAt = Date.now();
+      progress.classList.remove("hidden");
+      const update = () => {
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        label.textContent = `生成中…（経過 ${elapsed} 秒／完了率は取得できません）`;
+      };
+      update();
+      composerProgressTimer = window.setInterval(update, 1000);
+    }
+    function stopComposerProgress(statusId) {
+      if (statusId !== "composer-status") return;
+      if (composerProgressTimer !== null) window.clearInterval(composerProgressTimer);
+      composerProgressTimer = null;
+      $("composer-progress").classList.add("hidden");
     }
     async function previewMidi(statusId) {
       const payload = midiPayload();
@@ -1572,7 +1679,7 @@
         $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`;
         return null;
       }
-      composerPreview = {key: JSON.stringify(payload), paid: data.paid_api, model: data.model, allowed: !(data.cost && !data.cost.allowed), astraConfirmed: false};
+      composerPreview = {key: JSON.stringify(payload), provider: data.provider, paid: data.paid_api, model: data.model, allowed: !(data.cost && !data.cost.allowed), aiConfirmed: false};
       const estimate = data.cost?.estimate?.estimated_jpy;
       const money = data.paid_api ? ` / 今回推定 約${Number(estimate || 0).toFixed(2)}円 / 今月 ${Number(data.cost?.spent_jpy || 0).toFixed(2)}円` : " / 有料APIなし";
       $(statusId).textContent = `${data.provider} / ${data.model}${money}。まだ送っていません。`;
@@ -1581,21 +1688,26 @@
     }
     async function composeMidi(statusId, requireAstra = false) {
       const payload = midiPayload();
-      if (!composerPreview || composerPreview.key !== JSON.stringify(payload) || !composerPreview.allowed || (requireAstra && (!composerPreview.astraConfirmed || composerPreview.model !== "gpt-6-astra"))) {
+      if (!composerPreview || composerPreview.key !== JSON.stringify(payload) || !composerPreview.allowed || (requireAstra && !composerPreview.aiConfirmed)) {
         invalidateComposerPreview();
         return null;
       }
       const paid = composerPreview.paid;
+      const expectedProvider = composerPreview.provider;
+      const expectedModel = composerPreview.model;
       composerPreview = null;
       $("composer-run").disabled = true;
       $(statusId).textContent = "MIDI候補を生成中…";
+      startComposerProgress(statusId);
       let data;
       try {
-        data = await post("/api/midi/compose", {...payload, confirmed_paid: paid});
+        data = await post("/api/midi/compose", {...payload, confirmed_paid: paid, expected_provider: expectedProvider, expected_model: expectedModel});
       } catch {
+        stopComposerProgress(statusId);
         $(statusId).textContent = "MIDI候補の生成に失敗しました。もう一度確認してから試してください。";
         return null;
       }
+      stopComposerProgress(statusId);
       if (!data.ok) { $(statusId).innerHTML = `<span class="bad">${esc(data.error)}</span>`; return null; }
       showComposerNotes(data);
       return data;
@@ -1614,26 +1726,22 @@
       const payload = midiPayload();
       $("astra-send").disabled = true;
       try {
-        const confirmed = Boolean(composerPreview && composerPreview.key === JSON.stringify(payload) && composerPreview.astraConfirmed && composerPreview.model === "gpt-6-astra" && composerPreview.allowed);
+        const confirmed = Boolean(composerPreview && composerPreview.key === JSON.stringify(payload) && composerPreview.aiConfirmed && composerPreview.allowed);
         if (!confirmed) {
           const data = await previewMidi("astra-status");
           if (!data) return;
-          if (data.model !== "gpt-6-astra") {
-            composerPreview = null;
-            $("composer-run").disabled = true;
-            $("astra-status").textContent = `いまのモデルは ${data.model} です。Astraへは送っていません。システムで Astra を選んで保存してください。`;
-            return;
-          }
           if (!composerPreview?.allowed) {
             composerPreview = null;
             $("composer-run").disabled = true;
-            $("astra-status").textContent = "月間上限を超えるため、Astraへは送りません。";
+            $("astra-status").textContent = "月間上限を超えるため、有料AI APIへは送りません。";
             return;
           }
-          composerPreview.astraConfirmed = true;
+          composerPreview.aiConfirmed = true;
           $("composer-run").disabled = true;
           const estimate = Number(data.cost?.estimate?.estimated_jpy || 0).toFixed(2);
-          $("astra-status").textContent = `確認しました。推定 約${estimate}円。同じ内容で「Astraへ送る」をもう一度押すと生成します。Liveは変えません。`;
+          $("astra-status").textContent = data.paid_api
+            ? `確認しました。${data.provider} / ${data.model} の今回推定 約${estimate}円。同じ内容で「選択中のAIへ送る」をもう一度押すと生成します。Liveは変えません。`
+            : `${data.provider} / ${data.model} を確認しました。同じ内容で「選択中のAIへ送る」をもう一度押すと生成します。Liveは変えません。`;
           return;
         }
         await composeMidi("astra-status", true);
@@ -1854,7 +1962,7 @@
     });
 
     function sourceLabel(item) {
-      return { user: "指定", ai: "AI補完", default: "既定", genre: "ジャンル基準" }[item.source] || item.source;
+      return { user: "指定", ai: "AI補完", random: "ランダム選択", default: "既定", genre: "ジャンル基準" }[item.source] || item.source;
     }
 
     const COVERAGE_STATES = {
@@ -1899,8 +2007,9 @@
       }).join("");
     }
 
-    function renderCandidate(candidate, coverage) {
+    function renderCandidate(candidate, coverage, learningAdjustment = null) {
       state.candidate = candidate;
+      activateStudioTab("candidates");
       renderRetuneParts(candidate);
       $("brief-view").classList.remove("hidden");
       $("candidate-view").classList.remove("hidden");
@@ -1923,7 +2032,15 @@
       $("filled").innerHTML = filled.join("") || "<li>AIが補った値はありません</li>";
       const extra = [].concat(brief.unhandled || [], brief.contradictions || [], brief.ambiguous || []);
       $("unhandled").innerHTML = extra.map((x) => `<li>${esc(x)}</li>`).join("") || "<li>未対応の指示はありません</li>";
-      $("candidate-meta").textContent = `候補 ${candidate.candidate_id.slice(0, 8)} / seed ${candidate.seed} / ノート ${candidate.note_counts.total}`;
+      const meta = [`候補 ${candidate.candidate_id.slice(0, 8)}`, `seed ${candidate.seed}`, `ノート ${candidate.note_counts.total}`];
+      if (learningAdjustment) {
+        const learned = learningAdjustment.learned_swing || {};
+        const choices = learned.choice_counts || {};
+        meta.push(learningAdjustment.applied
+          ? `学習反映: ${Math.round((learned.swing_ratio || 0) * 100)}%スイング (A${choices.A || 0}/B${choices.B || 0}, ${learned.observations || 0}件)`
+          : `学習未反映: ${learningAdjustment.reason || '学習値を適用していません'} (A${choices.A || 0}/B${choices.B || 0}, ${learned.observations || 0}件)`);
+      } else meta.push('学習反映: 記録なし（生成当時の状態は確認できません）');
+      $("candidate-meta").textContent = meta.join(" / ");
       $("counts").innerHTML = Object.entries(candidate.note_counts).map(([k, v]) => `<div class="metric"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
       $("clip-rows").innerHTML = candidate.clips.map((clip) => `<tr><td>${esc(clip.part)}</td><td>${esc(clip.section_name)}</td><td>${esc(clip.start_bar)}–${esc(clip.start_bar + clip.length_bars - 1)}</td><td>${esc(clip.note_count)}</td></tr>`).join("");
       $("midi-link").href = `/api/candidate/${candidate.candidate_id}/midi`;
@@ -2027,7 +2144,17 @@
           });
           if (res.ok) {
             const label = rating === "B_BETTER" ? "Bが好み" : rating === "A_BETTER" ? "Aが好み" : "同等";
-            $("eval-status").textContent = `記録完了 (${label})`;
+            const learning = res.learned_swing || {};
+            const count = learning.observations || 0;
+            const learningStatus = rating === "EQUAL"
+              ? "同点は選好学習に数えません"
+              : learning.active
+                ? `自動学習: ${Math.round(learning.swing_ratio * 100)}%を次回の既定値に反映`
+                : `自動学習: ${count}/5件を記録`;
+            $("eval-status").textContent = `記録完了 (${label}) / ${learningStatus}`;
+            if (rating !== "EQUAL" && learning.observations > 0) {
+              $("eval-status").textContent += " / 学習ダッシュボードにも反映済み";
+            }
           }
         } catch (e) {
           $("eval-status").textContent = "記録失敗";
@@ -2090,7 +2217,7 @@
       if (job.state === "done" && job.candidate_id) {
         $("job-line").textContent = `生成完了 ${job.elapsed_seconds.toFixed(1)} 秒`;
         const payload = await getJson("/api/candidate/" + job.candidate_id);
-        if (payload.ok) renderCandidate(payload.candidate, payload.coverage);
+        if (payload.ok) renderCandidate(payload.candidate, payload.coverage, payload.learning_adjustment || job.learning_adjustment || null);
       } else {
         $("job-line").textContent = job.error || "生成できませんでした";
       }
@@ -2125,7 +2252,7 @@
     }
 
     $("generate").onclick = async () => {
-      await startGeneration("/api/generate", { brief: $("brief").value });
+      await startGeneration("/api/generate", { brief: $("brief").value, wide_variety: $("wide-variety").checked });
     };
 
     $('generate-from-live').onclick = async () => {
@@ -2165,7 +2292,7 @@
 
     $("regenerate").onclick = async () => {
       if (!state.candidate) return;
-      await startGeneration("/api/regenerate", { candidate_id: state.candidate.candidate_id });
+      await startGeneration("/api/regenerate", { candidate_id: state.candidate.candidate_id, wide_variety: $("wide-variety").checked });
     };
 
     $("preview-apply").onclick = async () => {
@@ -2654,7 +2781,7 @@
         const payload = await getJson("/api/candidate/" + health.selected_candidate_id);
         if (payload.ok) {
           if ($("brief").value === initialBrief) $("brief").value = payload.candidate.brief.original_text;
-          renderCandidate(payload.candidate, payload.coverage);
+          renderCandidate(payload.candidate, payload.coverage, payload.learning_adjustment || null);
         }
       }
       const last = await getJson("/api/apply/last");
@@ -2679,7 +2806,7 @@
       const data = await post("/api/select", { candidate_id: id });
       if (!data.ok) { $("project-status").textContent = data.error; return; }
       const payload = await getJson("/api/candidate/" + id);
-      if (payload.ok) { $("brief").value = payload.candidate.brief.original_text; renderCandidate(payload.candidate, payload.coverage); }
+      if (payload.ok) { $("brief").value = payload.candidate.brief.original_text; renderCandidate(payload.candidate, payload.coverage, payload.learning_adjustment || null); }
     };
 
     async function loadProject(id) {
@@ -2784,7 +2911,7 @@
       if (!data.ok) { $("revision-meta").textContent = data.error; return; }
       if (accept) {
         const payload = await getJson("/api/candidate/" + data.selected_candidate_id);
-        if (payload.ok) renderCandidate(payload.candidate, payload.coverage);
+        if (payload.ok) renderCandidate(payload.candidate, payload.coverage, payload.learning_adjustment || null);
       } else if (state.candidate) loadProject(state.candidate.candidate_id);
       $("revision-view").classList.remove("hidden");
       $("revision-meta").textContent = accept ? "採用しました。新しい候補を承認してから送信してください。" : "却下しました。今の候補のままです。";
@@ -2839,7 +2966,8 @@
       const options = models.includes(s.ollama_model) ? models : [s.ollama_model, ...models];
       $("setting-model").innerHTML = options.map((m) => `<option value="${esc(m)}">${esc(m)}${models.includes(m) ? "" : "（未導入）"}</option>`).join("");
       $("setting-model").value = s.ollama_model;
-      $("setting-openai-model").value = s.openai_model;
+      $("setting-openai-model").value = s.openai_model || "gpt-6.1-sol";
+      $("setting-gemini-model").value = s.gemini_model || "gemini-3.8-flash";
       $("setting-ai-limit").value = s.monthly_ai_limit_jpy;
       const cost = await getJson("/api/ai/cost?brief=" + encodeURIComponent($("brief").value));
       $("ai-cost-line").textContent = `次回推定 約${Number(cost.estimate?.estimated_jpy || 0).toFixed(2)}円 / 今月 ${Number(cost.spent_jpy || 0).toFixed(2)}円 / 上限 ${cost.limit_jpy || 500}円`;
@@ -2858,13 +2986,18 @@
       const result = await getJson("/api/ai/connection");
       $("settings-line").textContent = `${result.ok ? "READY" : "ERROR"}: ${result.message || "確認できませんでした"}`;
     };
+    $("gemini-test").onclick = async () => {
+      $("settings-line").textContent = "Geminiの認証を確認中…";
+      const result = await getJson("/api/ai/gemini-connection");
+      $("settings-line").textContent = `${result.ok ? "READY" : "ERROR"}: ${result.message || "確認できませんでした"}`;
+    };
     $("settings-save").onclick = async () => {
-      const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value, openai_model: $("setting-openai-model").value, monthly_ai_limit_jpy: Number($("setting-ai-limit").value) } });
+      const data = await post("/api/settings", { settings: { ai_provider: $("setting-provider").value, ollama_url: $("setting-url").value.trim(), ollama_model: $("setting-model").value, openai_model: $("setting-openai-model").value, gemini_model: $("setting-gemini-model").value, monthly_ai_limit_jpy: Number($("setting-ai-limit").value) } });
       $("settings-line").innerHTML = data.ok ? '<span class="ok">保存しました。次の生成から使います。</span>' : `<span class="bad">${esc(data.error)}</span>`;
       refreshHealth();
     };
     $("system-details").addEventListener("toggle", () => { if ($("system-details").open) { loadSettings(); runDiagnostics(); } });
-    const openSystem = () => { hideError(); $("system-details").open = true; $("system-view").scrollIntoView({ behavior: "smooth" }); };
+    const openSystem = () => { hideError(); activateStudioTab("settings"); $("system-details").open = true; $("system-view").scrollIntoView({ behavior: "smooth" }); };
     $("error-settings").onclick = openSystem;
     $("error-diagnostics").onclick = openSystem;
     $("error-close").onclick = hideError;

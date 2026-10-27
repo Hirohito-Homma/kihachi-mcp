@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
+import tempfile
 import traceback
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -30,6 +34,7 @@ from kihachi_mcp.services.live_candidate_context import brief_from_live
 from kihachi_mcp.services.live_paths import candidate_store_dir
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
 from kihachi_mcp.services.music_plan_preview import prepare_music_plan
+from kihachi_mcp.services.music_training_service import TrainingJournalStore
 from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
@@ -49,6 +54,8 @@ from kihachi_mcp.studio import reference_routes
 
 HOST = "127.0.0.1"
 PORT = 8765
+JARVIS_SHORTCUT_PATH = "/api/jarvis/shortcut"
+JARVIS_SHORTCUT_PORT = 8766
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOGGER = logging.getLogger(__name__)
 
@@ -74,9 +81,14 @@ class StudioApp:
         self.reference_library = reference_library or ReferenceLibrary()
         self.reference_sources = reference_sources or ReferenceSources()
         self.sample_catalog = sample_catalog or SampleCatalog()
+        self.learning_daemon = reference_routes.AutonomousLearningDaemon(
+            self.reference_library, self.reference_sources, self.sample_catalog,
+            runtime=self.runtime,
+        )
         self.dialogue = StudioDialogue(sample_catalog=self.sample_catalog)
         self.jarvis = JarvisOrchestrator(context_reader=lambda: context_from_runtime(self.runtime))
         self._music_plans: dict[str, LiveMutationPlan] = {}
+        self._training_sound_plans: dict[str, LiveMutationPlan] = {}
         self._music_sources: dict[str, tuple[MusicPlan | None, dict[str, Any] | None]] = {}
         self._live_bound: set[str] = set()
         self._eval_path = self.runtime._candidate_dir / "evaluations.json"
@@ -96,17 +108,40 @@ class StudioApp:
                 )
         return {}
 
-    def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> None:
-        self._evaluations[candidate_id] = record
+    def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> bool:
+        updated = {**self._evaluations, candidate_id: record}
+        temporary_path: str | None = None
         try:
             self._eval_path.parent.mkdir(parents=True, exist_ok=True)
-            self._eval_path.write_text(json.dumps(self._evaluations, ensure_ascii=False, indent=2), "utf-8")
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self._eval_path.parent,
+                prefix=f".{self._eval_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_path = temporary.name
+                json.dump(updated, temporary, ensure_ascii=False, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, self._eval_path)
+            temporary_path = None
+            self._evaluations = updated
+            return True
         except (OSError, TypeError, ValueError):
             LOGGER.warning(
                 "Could not save Studio evaluations to %s",
                 self._eval_path,
                 exc_info=True,
             )
+            return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    LOGGER.warning("Could not remove temporary Studio evaluation file")
 
     def hold_music_plan(
         self,
@@ -174,14 +209,38 @@ class StudioApp:
             "live_changed": False,
         }
 
-    def serve_forever(self, host: str = HOST, port: int = PORT) -> None:
+    def serve_forever(
+        self,
+        host: str = HOST,
+        port: int = PORT,
+        *,
+        tailscale_shortcut_user: str | None = None,
+        tailscale_shortcut_token: str | None = None,
+    ) -> None:
         """Start the blocking HTTP server."""
+        if tailscale_shortcut_user and host != HOST:
+            raise ValueError("Tailscale Shortcut利用時はStudioを127.0.0.1で起動してください")
         handler = _handler_for(self)
         server = ThreadingHTTPServer((host, port), handler)
+        shortcut_server = None
+        shortcut_thread = None
         try:
+            if tailscale_shortcut_user and tailscale_shortcut_token:
+                shortcut_server = ThreadingHTTPServer(
+                    (HOST, JARVIS_SHORTCUT_PORT),
+                    _jarvis_shortcut_handler_for(self, tailscale_shortcut_user, tailscale_shortcut_token),
+                )
+                shortcut_thread = Thread(target=shortcut_server.serve_forever, daemon=True)
+                shortcut_thread.start()
             server.serve_forever()
         finally:
             server.server_close()
+            self.learning_daemon.close()
+            if shortcut_server is not None:
+                if shortcut_thread is not None and shortcut_thread.is_alive():
+                    shortcut_server.shutdown()
+                    shortcut_thread.join(timeout=2)
+                shortcut_server.server_close()
             self.runtime.close()
 
 
@@ -323,6 +382,73 @@ def _send_music_plan_to_live(app: StudioApp, runtime: StudioRuntime, plan: LiveM
     }
 
 
+def _jarvis_shortcut_handler_for(app: StudioApp, allowed_user: str, token: str):
+    """Expose only a narrow JARVIS endpoint to Tailscale Serve."""
+
+    class ShortcutHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_GET(self) -> None:
+            self._send_error(405, "POSTで音声入力を送ってください")
+
+        def do_POST(self) -> None:
+            if self.path != JARVIS_SHORTCUT_PATH:
+                self._send_error(404, "この入口ではJARVIS音声入力だけ利用できます")
+                return
+            login = self.headers.get("Tailscale-User-Login", "")
+            if not login or login.casefold() != allowed_user.casefold():
+                self._send_error(403, "許可されたTailscaleユーザーではありません")
+                return
+            scheme, _, supplied_token = self.headers.get("Authorization", "").partition(" ")
+            if (
+                scheme.casefold() != "bearer"
+                or not supplied_token.isascii()
+                or not hmac.compare_digest(supplied_token, token)
+            ):
+                self._send_error(401, "認証に失敗しました")
+                return
+            if self.headers.get_content_type() != "application/json":
+                self._send_error(415, "JSON形式で送信してください")
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if content_length < 1 or content_length > 4096:
+                self._send_error(413, "入力は1〜4096バイトにしてください")
+                return
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_error(400, "JSONを読み取れません")
+                return
+            utterance = body.get("utterance") if isinstance(body, dict) else None
+            if not isinstance(utterance, str) or not utterance.strip() or len(utterance) > 1000:
+                self._send_error(400, "音声入力の文字列が空か長すぎます")
+                return
+            try:
+                result = app.jarvis.ask(utterance.strip())
+            except Exception:  # noqa: BLE001 - don't expose internal details over the shortcut
+                self._send_error(500, "JARVISの処理に失敗しました")
+                return
+            self._send_json(result)
+
+        def _send_error(self, status: int, message: str) -> None:
+            self._send_json({"ok": False, "error": message, "live_changed": False}, status)
+
+        def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+    return ShortcutHandler
+
+
 def _handler_for(app: StudioApp):
     runtime = app.runtime
 
@@ -372,6 +498,7 @@ def _handler_for(app: StudioApp):
                 parsed,
                 app.reference_sources,
                 app.sample_catalog,
+                app.learning_daemon,
             ):
                 return
             if parsed.path == "/":
@@ -515,6 +642,7 @@ def _handler_for(app: StudioApp):
                     {
                         "ok": True,
                         "candidate": candidate.to_dict(),
+                        "learning_adjustment": runtime.get_learning_adjustment(candidate_id),
                         "coverage": read_coverage(
                             candidate.brief.original_text,
                             model_filled_fields(candidate.brief),
@@ -533,15 +661,37 @@ def _handler_for(app: StudioApp):
                 parts = parsed.path.strip("/").split("/")
                 candidate_id = parts[2]
                 body = self._read_json()
+                variant = str(body.get("variant") or "B").upper()
+                rating = str(body.get("rating") or "").upper()
+                notes = str(body.get("notes") or "")
+                if runtime.get_candidate(candidate_id) is None:
+                    self._send_json({"ok": False, "error": "評価対象の候補が見つかりません"}, 404)
+                    return
+                if variant not in {"A", "B"} or rating not in {"A_BETTER", "B_BETTER", "EQUAL"}:
+                    self._send_json({"ok": False, "error": "A/Bの候補と有効な評価を指定してください"}, 400)
+                    return
+                if len(notes) > 2000:
+                    self._send_json({"ok": False, "error": "評価メモは2000文字以内で入力してください"}, 400)
+                    return
                 record = {
                     "candidate_id": candidate_id,
-                    "variant": str(body.get("variant") or "B"),
-                    "rating": str(body.get("rating") or "B_BETTER"),
-                    "notes": str(body.get("notes") or ""),
+                    "variant": variant,
+                    "rating": rating,
+                    "notes": notes,
                     "evaluated_at": datetime.now(UTC).isoformat(),
                 }
-                app.save_evaluation(candidate_id, record)
-                self._send_json({"ok": True, "evaluation": record})
+                if not app.save_evaluation(candidate_id, record):
+                    self._send_json({"ok": False, "error": "評価を保存できませんでした。空き容量と保存先の権限を確認してください。"}, 500)
+                    return
+                learned = TrainingJournalStore().record_studio_evaluation(
+                    candidate_id, record["rating"]
+                )
+                self._send_json({
+                    "ok": True,
+                    "evaluation": record,
+                    "learning_observation_recorded": learned is not None,
+                    "learned_swing": TrainingJournalStore().learned_studio_swing(),
+                })
                 return
             if parsed.path == "/api/groove/generate":
                 body = self._read_json()
@@ -754,9 +904,38 @@ def _handler_for(app: StudioApp):
                 parsed,
                 app.reference_sources,
                 app.sample_catalog,
+                runtime=runtime,
+                learning_daemon=app.learning_daemon,
             ):
                 return
             body = self._read_json()
+            if parsed.path == "/api/references/training/sound-design/plan":
+                result = runtime.prepare_training_sound_plan(
+                    body.get("track_index"), body.get("device_index"), body.get("variant_id", "")
+                )
+                if result.get("ok") and isinstance(result.get("plan"), dict):
+                    plan = LiveMutationPlan.from_dict(result["plan"])
+                    app._training_sound_plans[plan.plan_hash] = plan
+                    result["plan_hash"] = plan.plan_hash
+                    result.pop("plan", None)
+                    while len(app._training_sound_plans) > 8:
+                        app._training_sound_plans.pop(next(iter(app._training_sound_plans)))
+                self._send_json(result)
+                return
+            if parsed.path in {
+                "/api/references/training/sound-design/approve",
+                "/api/references/training/sound-design/apply",
+            }:
+                plan_hash = str(body.get("plan_hash") or "")
+                plan = app._training_sound_plans.get(plan_hash)
+                if plan is None:
+                    self._send_json({"ok": False, "error": "音色プランが見つからないか期限切れです", "live_changed": False}, 404)
+                    return
+                if parsed.path.endswith("/approve"):
+                    self._send_json(runtime.approve_training_sound_plan(plan))
+                else:
+                    self._send_json(runtime.apply_training_sound_plan(plan))
+                return
             if parsed.path == "/api/samples/replace-preview":
                 try:
                     if body.get("bundled_sample") == FAT_TIGHT_KICK:
@@ -912,11 +1091,11 @@ def _handler_for(app: StudioApp):
                 brief = str(body.get("brief") or "")
                 seed = body.get("seed")
                 seed = int(seed) if seed is not None else None
-                self._send_json(runtime.queue_generate(brief, seed=seed, confirmed_paid=bool(body.get("confirmed_paid"))))
+                self._send_json(runtime.queue_generate(brief, seed=seed, confirmed_paid=bool(body.get("confirmed_paid")), wide_variety=body.get("wide_variety") is True))
                 return
             if parsed.path == "/api/regenerate":
                 candidate_id = str(body.get("candidate_id") or "")
-                self._send_json(runtime.queue_regenerate(candidate_id, confirmed_paid=bool(body.get("confirmed_paid"))))
+                self._send_json(runtime.queue_regenerate(candidate_id, confirmed_paid=bool(body.get("confirmed_paid")), wide_variety=body.get("wide_variety") is True))
                 return
             if parsed.path == "/api/cancel":
                 self._send_json(runtime.cancel())
@@ -1019,7 +1198,13 @@ def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
     elif parsed.path == "/api/ai/cost":
         handler._send_json(runtime.ai_cost_status((query.get("brief") or [""])[0]))
     elif parsed.path == "/api/ai/connection":
-        handler._send_json(runtime.openai_connection_status())
+        provider_name = runtime.settings().get("ai_provider")
+        if provider_name == "gemini":
+            handler._send_json(runtime.gemini_connection_status())
+        else:
+            handler._send_json(runtime.openai_connection_status())
+    elif parsed.path == "/api/ai/gemini-connection":
+        handler._send_json(runtime.gemini_connection_status())
     elif parsed.path == "/api/ollama":
         handler._send_json(runtime.ollama_status())
     elif parsed.path == "/api/diagnostics":
@@ -1137,6 +1322,8 @@ def _workflow_post(
                 body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
                 confirmed_paid=bool(body.get("confirmed_paid")),
                 seed=int(body.get("seed") or 0),
+                expected_provider=str(body.get("expected_provider") or "") or None,
+                expected_model=str(body.get("expected_model") or "") or None,
             )
         )
     elif path == "/api/midi/adopt-preview":

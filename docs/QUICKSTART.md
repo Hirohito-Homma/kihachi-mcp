@@ -18,7 +18,7 @@ uv は初回セットアップに必要です。`~/.local/bin`、`/opt/homebrew/
 ./scripts/kihachi-studio.command
 ```
 
-または Finder で `scripts/kihachi-studio.command` をダブルクリックします。起動時はセットアップ済みの `.venv` を使うため、uv の再実行は不要です。ブラウザで http://127.0.0.1:8765/ が開きます。Ollama と Live は初回起動の必須条件ではありません。Ollama が OFFLINE ならAIなしの既定解釈を選び、Live が OFFLINE でも候補の生成と試聴を先に進められます。
+Finder ではプロジェクト直下の `KIHACHI Studioを起動.command` をダブルクリックします。すでにStudioが起動中なら既存画面をブラウザーで開きます。ターミナルから起動する場合は `scripts/kihachi-studio.command` を使えます。起動時はセットアップ済みの `.venv` を使うため、uv の再実行は不要です。ブラウザで http://127.0.0.1:8765/ が開きます。Ollama と Live は初回起動の必須条件ではありません。Ollama が OFFLINE ならAIなしの既定解釈を選び、Live が OFFLINE でも候補の生成と試聴を先に進められます。
 
 Live へ適用するときは、上部の `Live: READY` を確認してください。インストール直後の診断でREADYでも、以前から起動していたStudioを見ている場合があります。起動したStudio自身の画面か確認してください。
 

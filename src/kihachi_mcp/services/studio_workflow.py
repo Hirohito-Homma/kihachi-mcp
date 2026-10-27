@@ -44,8 +44,15 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 
 #: Keys the Studio may change. Anything else in a request is ignored.
-EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model", "openai_model", "monthly_ai_limit_jpy")
-AI_PROVIDERS = ("ollama", "openai", "deterministic")
+EDITABLE_SETTINGS = (
+    "ai_provider",
+    "ollama_url",
+    "ollama_model",
+    "openai_model",
+    "gemini_model",
+    "monthly_ai_limit_jpy",
+)
+AI_PROVIDERS = ("ollama", "openai", "gemini", "deterministic")
 
 
 def system_statuses(
@@ -380,10 +387,20 @@ def validate_settings(changes: dict[str, Any], installed_models: list[str]) -> s
     """Return an error message, or "" when the change is acceptable."""
     provider = changes.get("ai_provider")
     if provider is not None and provider not in AI_PROVIDERS:
-        return "AIプロバイダは ollama、openai、deterministic から選んでください"
+        return "AIプロバイダは ollama、openai、gemini、deterministic から選んでください"
     openai_model = changes.get("openai_model")
     if openai_model is not None and openai_model not in {"gpt-6.1-sol", "gpt-6-astra"}:
         return "OpenAIモデルは Sol または Astra を選んでください"
+    gemini_model = changes.get("gemini_model")
+    if gemini_model is not None and gemini_model not in {
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+    }:
+        return "Geminiモデルは gemini-3.8-flash または gemini-2.5-pro を選んでください"
     limit = changes.get("monthly_ai_limit_jpy")
     if limit is not None and (not isinstance(limit, int) or not 100 <= limit <= 100_000):
         return "月間上限は100〜100000円の整数で指定してください"

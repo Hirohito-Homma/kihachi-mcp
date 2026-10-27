@@ -10,7 +10,7 @@
 | 生成に1分近くかかる | ローカルモデルの推論時間 | 正常です（Intel i9 で約50〜60秒）。「キャンセル」で止められます |
 | 「AIの応答が2回とも使えなかった」 | モデルの JSON が崩れた | 明示値と既定値で作られています。別モデルを試すか、そのまま使えます |
 | `Live: OFFLINE` | デバイス未配置 / 返信ポート 17772 を別プロセスが使用 | Live にデバイスを置く。Cursor の MCP サーバーが 17772 を掴んでいれば止める |
-| `Live: OFFLINE — session token rejected` | 複数のStudioを起動した後などに、稼働中のStudioとMaxデバイスが異なる認証トークンを参照している | 生成ジョブが終わっていることを確認し、Studioを1つだけ再起動する。画面を再読み込みし、LiveがREADYになったことを確認する。LiveのSetは変更しない |
+| `Live: OFFLINE — session token rejected` | Python側のStudioとMaxブリッジが別のハンドシェイクを参照している。旧版では、2つ目のStudioが起動に失敗する前にトークンを上書きする競合もあった | Studioを1つだけ起動する。最新版はハンドシェイクをプロセス間ロックし、別Studioは既存トークンを上書きせずLive接続を無効にする。エラーが続く場合は、重複Studioを終了してからStudioを再起動し、LiveがREADYになったことを確認する。Setの編集・保存は不要 |
 | デバイス版が一致しない | Max 側の JS が古い | デバイスが参照する `kihachi.device.js` を修正版に更新し、Max の `[js kihachi.device.js]` に `compile` を送る。`reload` ではない |
 | `AbletonGPT: WARNING`（応答しません） | Remote Script はつながるが Live のメインスレッドが応答しない | Live のダイアログ（保存確認・環境設定など）を閉じる。キット読み込み以外の制作には影響しません |
 | 「まだ承認されていません」 | 承認前に送信しようとした | 「この候補を承認」→「適用内容を確認」 |

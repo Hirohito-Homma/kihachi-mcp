@@ -52,6 +52,7 @@ from kihachi_mcp.services.session_pattern_builder import (
     is_minor,
     root_pitch,
 )
+from kihachi_mcp.services.studio_variety import profile_for_variety
 
 KICK_PITCH = 36
 CLAP_PITCH = 39
@@ -152,8 +153,13 @@ def build_candidate(
     seed: int | None = None,
     parent_candidate_id: str = "",
     candidate_id: str | None = None,
+    swing_override: float | None = None,
 ) -> MidiCandidate:
     """Return one candidate whose preview notes are the apply notes."""
+    if swing_override is not None and (
+        isinstance(swing_override, bool) or not 0.5 <= float(swing_override) <= 0.75
+    ):
+        raise ValueError("swing_override must be between 0.5 and 0.75")
     resolved_seed = _resolve_seed(brief.original_text, seed)
     rng = Random(resolved_seed)
     minor = _is_minor_brief(brief)
@@ -181,7 +187,7 @@ def build_candidate(
     song: dict[str, list[MidiNote]] = {}
     for part in (*parts, *_GENERATED_EXTRAS):
         # Generated even when left out, so the parts after it keep their draws.
-        notes = _notes_for_part(part, brief, bars, beats, rng, progression)
+        notes = _notes_for_part(part, brief, bars, beats, rng, progression, swing_override)
         if _genre_plays(part, brief):
             song[part] = notes
     song.update(_split_drums(song.pop("Hats")))
@@ -524,11 +530,12 @@ def _notes_for_part(
     beats: float,
     rng: Random,
     progression: tuple[int, ...],
+    swing_override: float | None = None,
 ) -> list[MidiNote]:
     # One generator per part, seeded from the shared one, so a change inside
     # one part does not reshuffle the random choices of the others.
     part_rng = Random(rng.random())
-    plan = _SongPlan(brief, bars, beats, part_rng, progression)
+    plan = _SongPlan(brief, bars, beats, part_rng, progression, swing_override)
     if part == "Kick":
         notes = _kick_notes(plan)
     elif part == "Hats":
@@ -636,6 +643,7 @@ class _SongPlan:
         beats: float,
         rng: Random,
         progression: tuple[int, ...],
+        swing_override: float | None = None,
     ) -> None:
         self.brief = brief
         self.bars = bars
@@ -661,7 +669,7 @@ class _SongPlan:
         )
         # What the genre's family plays. An unknown genre gets four on the
         # floor with offbeat stabs, which is what every genre used to get.
-        self.profile = profile_for(str(brief.genre.value))
+        self.profile = profile_for_variety(brief, profile_for(str(brief.genre.value)))
         self.pattern = drum_pattern(self.profile.drum_pattern)
         self.articulation = chord_articulation(self.profile.articulation)
         self.bass_role = bass_role(self.profile.bass_role)
@@ -671,7 +679,11 @@ class _SongPlan:
         self.harmonic_rhythm = self.profile.harmonic_rhythm_bars or 2
         stated_swing = explicit_swing(brief.original_text)
         self.swing = (
-            stated_swing if stated_swing is not None else (self.profile.swing or 0.5)
+            stated_swing
+            if stated_swing is not None
+            else swing_override
+            if swing_override is not None
+            else (self.profile.swing or 0.5)
         )
         explicit_fields = read_explicit(brief.original_text)[0]
         self.echo_requested = bool(explicit_fields.get("echo"))

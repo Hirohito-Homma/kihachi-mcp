@@ -209,8 +209,15 @@ def _rhythm_notes(
     for bar in range(c.bars):
         base = bar * 4.0
         if drum_part:
-            # 1. Kick: Solid 4-on-the-floor, locked on beats (no swing), high velocity
-            for beat in range(4):
+            # 1. Follow the abstract kick profile measured from the reference.
+            if c.kick_style == "broken_beat":
+                kick_offsets = (0.0, 1.5, 2.5, 3.5)
+            else:
+                kick_offsets = (0.0, 1.0, 2.0, 3.0)
+            if c.kick_density_per_bar is not None:
+                count = max(1, min(len(kick_offsets), round(c.kick_density_per_bar)))
+                kick_offsets = tuple(kick_offsets[:count])
+            for beat in kick_offsets:
                 kick_time = base + beat
                 if kick_time + 0.125 <= max_beats:
                     notes.append(ComposedMidiNote(36, kick_time, 0.125, _velocity(c, rng, accent=True), 9))
@@ -262,8 +269,11 @@ def _part_drum_notes(c: MusicalConstraints, rng: Random, pitch: int) -> list[Com
     for bar in range(c.bars):
         base = bar * 4.0
         if pitch == 36:
-            # Kick: strict 4-on-the-floor, unswung
-            for b in (0.0, 1.0, 2.0, 3.0):
+            # Kick: follow the abstract reference rhythm profile.
+            offsets = (0.0, 1.5, 2.5, 3.5) if c.kick_style == "broken_beat" else (0.0, 1.0, 2.0, 3.0)
+            if c.kick_density_per_bar is not None:
+                offsets = offsets[:max(1, min(len(offsets), round(c.kick_density_per_bar)))]
+            for b in offsets:
                 t = base + b
                 if t + 0.125 <= max_beats:
                     notes.append(ComposedMidiNote(36, t, 0.125, _velocity(c, rng, accent=True), 9))
@@ -347,6 +357,22 @@ def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedM
             if c.ghost_notes:
                 pattern.append((1.25, root, "ghost", 0.08))
                 pattern.append((2.75, root, "ghost", 0.08))
+
+        if c.bass_density_per_bar is not None and pattern:
+            wanted = max(1, min(len(pattern), round(c.bass_density_per_bar)))
+            if wanted < len(pattern):
+                def density_priority(item: tuple[float, int, str, float]) -> tuple[int, float]:
+                    offset = item[0]
+                    is_offbeat = abs(offset % 1.0) > 1e-6
+                    prefers_offbeat = c.syncopation >= 0.5
+                    kick_overlap = any(abs(base + offset - onset) <= 0.125 for onset in kick)
+                    return (int(not kick_overlap) + int(is_offbeat == prefers_offbeat), -offset)
+                chosen = sorted(pattern, key=density_priority, reverse=True)[:wanted]
+                # Keep a tonic anchor in each bar, then restore chronological order.
+                anchor = next((item for item in pattern if item[0] == 0.0), None)
+                if anchor is not None and anchor not in chosen:
+                    chosen[-1] = anchor
+                pattern = sorted(chosen, key=lambda item: item[0])
 
         # Render notes with swing, kick collision handling, and velocity shaping
         for offset, pitch, style, length in pattern:

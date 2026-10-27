@@ -139,7 +139,7 @@ Live 12.3で公式 Live Object Model に [`Track.insert_device`](https://docs.cy
 
 ### トークン受け渡し
 
-Python 側が起動ごとにセッショントークンを生成し、所有者のみ読める（`0600`）ハンドシェイクファイルへ書き出します。デバイスはリクエストごとにこれを読み、トークンが一致しなければ `unauthorized` を返します。
+Python 側が起動ごとにセッショントークンを生成し、所有者のみ読める（`0600`）ハンドシェイクファイルへ書き出します。Studioプロセス間ロックで同時に1つだけが発行し、2つ目のStudioは既存トークンを上書きせずLive接続を無効にします。Maxブリッジは各リクエスト時にファイルを読み、トークンが一致しなければ `unauthorized` を返します。`KIHACHI_LIVE_STATE_DIR` を設定する場合はStudioとLiveを同じ環境変数で起動してください。
 
 - macOS: `~/Library/Application Support/KIHACHI/live-bridge.json`
 - Windows: `%LOCALAPPDATA%\KIHACHI\live-bridge.json`

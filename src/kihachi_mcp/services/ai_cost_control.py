@@ -19,11 +19,21 @@ class ModelPrice:
     output_usd_per_million: float
 
 
-# Standard, short-context prices read from the official OpenAI pricing page.
+# Standard text prices per million tokens. Gemini values follow the official
+# Gemini Developer API pricing page; estimates use paid-tier rates conservatively.
 OPENAI_PRICES = {
     "gpt-6-luna": ModelPrice(0.10, 0.50),
     "gpt-6.1-sol": ModelPrice(2.0, 10.0),
     "gpt-6-astra": ModelPrice(10.0, 50.0),
+}
+
+GEMINI_PRICES = {
+    "gemini-3.8-flash": ModelPrice(0.30, 2.50),
+    "gemini-3.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-2.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-2.5-pro": ModelPrice(1.25, 10.00),
+    "gemini-1.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-1.5-pro": ModelPrice(1.25, 10.00),
 }
 
 
@@ -35,10 +45,10 @@ def estimate_cost(
     *,
     basis: str = "max_output_tokens_cap",
 ) -> dict[str, Any]:
-    """Return a conservative local estimate without contacting OpenAI."""
-    price = OPENAI_PRICES.get(model)
+    """Return a conservative local estimate without contacting an AI provider."""
+    price = OPENAI_PRICES.get(model) or GEMINI_PRICES.get(model)
     if price is None:
-        raise ValueError("料金を確認できるOpenAIモデルを選んでください")
+        raise ValueError("料金を確認できるAIモデルを選んでください")
     usd = (
         max(0, input_tokens) * price.input_usd_per_million
         + max(0, output_tokens) * price.output_usd_per_million

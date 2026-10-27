@@ -37,7 +37,7 @@ from kihachi_mcp.models.production_brief import (
     STUDIO_PARTS,
     ProductionBrief,
 )
-from kihachi_mcp.services.brief_parser import explicit_swing, read_explicit
+from kihachi_mcp.services.brief_parser import DECLINED, explicit_swing, read_explicit
 from kihachi_mcp.services.drum_samples import (
     CONGA_HIGH_NOTE,
     CONGA_LOW_NOTE,
@@ -52,6 +52,7 @@ from kihachi_mcp.services.session_pattern_builder import (
     is_minor,
     root_pitch,
 )
+from kihachi_mcp.services.studio_variety import profile_for_variety
 
 KICK_PITCH = 36
 CLAP_PITCH = 39
@@ -152,8 +153,13 @@ def build_candidate(
     seed: int | None = None,
     parent_candidate_id: str = "",
     candidate_id: str | None = None,
+    swing_override: float | None = None,
 ) -> MidiCandidate:
     """Return one candidate whose preview notes are the apply notes."""
+    if swing_override is not None and (
+        isinstance(swing_override, bool) or not 0.5 <= float(swing_override) <= 0.75
+    ):
+        raise ValueError("swing_override must be between 0.5 and 0.75")
     resolved_seed = _resolve_seed(brief.original_text, seed)
     rng = Random(resolved_seed)
     minor = _is_minor_brief(brief)
@@ -181,11 +187,15 @@ def build_candidate(
     song: dict[str, list[MidiNote]] = {}
     for part in (*parts, *_GENERATED_EXTRAS):
         # Generated even when left out, so the parts after it keep their draws.
-        notes = _notes_for_part(part, brief, bars, beats, rng, progression)
+        notes = _notes_for_part(part, brief, bars, beats, rng, progression, swing_override)
         if _genre_plays(part, brief):
             song[part] = notes
     song.update(_split_drums(song.pop("Hats")))
     song["Sub"] = _sub_notes(song["Bass"], brief, beats)
+    lifts = _upper_lifts(brief, read_explicit(brief.original_text)[0])
+    if lifts:
+        for part in sorted(UPPER_PARTS & song.keys()):
+            song[part] = _lift_upper(song[part], lifts, beats, octave=part != "Arp")
     for part in PART_ORDER:
         song_notes = song.get(part)
         if song_notes is None:
@@ -214,6 +224,158 @@ def build_candidate(
         clips=tuple(clips),
         parent_candidate_id=parent_candidate_id,
     )
+
+
+#: What 「上物」 names: the parts above the rhythm section. Drums, Bass and Sub
+#: never take an upper-part request.
+UPPER_PARTS = frozenset({"Stab", "Lead", "Pad", "Arp", "Vocal", "Guitar", "Horn"})
+#: Sections whose own thinning outranks a rising request.
+_HELD_BACK_SECTIONS = frozenset({"Break", "Outro"})
+#: Where along the song a gradual upper-part lift takes its first and second step.
+_UPPER_CURVE_STEPS = (1 / 3, 2 / 3)
+#: An added octave never climbs above this pitch (C7).
+_LIFT_CEILING = 96
+
+
+def flash_sections(sections: Any) -> frozenset[str]:
+    """The sections 「ドロップ」 names. A song without a Drop has none: a chorus is
+    not silently taken for one."""
+    return frozenset({"Drop"}) & {section.name for section in sections}
+
+
+def _upper_lifts(
+    brief: ProductionBrief, fields: dict[str, Any]
+) -> dict[int, tuple[float, int]]:
+    """Per bar, how loud an octave above the top note is and how much louder the rest is.
+
+    A ratio of 0 adds no octave. Bars with no lift are left out.
+    """
+    upper = fields.get("upper_brightness")
+    flashy = fields.get("drop_emphasis") == "flashy"
+    if upper not in ("rising", "steady") and not flashy:
+        return {}
+    bars = int(brief.bars.value)
+    targets = flash_sections(brief.sections) if flashy else frozenset()
+    lifts: dict[int, tuple[float, int]] = {}
+    for section in brief.sections:
+        if section.name in _HELD_BACK_SECTIONS:
+            continue
+        for bar in range(section.start_bar, section.end_bar + 1):
+            ratio, louder = 0.0, 0
+            if upper == "steady":
+                ratio = 0.45
+            elif upper == "rising":
+                progress = (bar - 1) / max(1, bars - 1)
+                level = sum(progress >= step for step in _UPPER_CURVE_STEPS)
+                ratio = 0.45 if level else 0.0
+                louder = 5 if level == 2 else 0
+            if section.name in targets:
+                # 「上物は煌びやかにしない」 keeps the octave out; the Drop only plays louder.
+                ratio = ratio if upper == DECLINED else max(ratio, 0.6)
+                louder += 6
+            if ratio or louder:
+                lifts[bar] = (ratio, louder)
+    return lifts
+
+
+def _lift_upper(
+    notes: list[MidiNote],
+    lifts: dict[int, tuple[float, int]],
+    beats: float,
+    octave: bool,
+) -> list[MidiNote]:
+    """Louder notes, and a quiet octave above each onset's top note, where lifted."""
+    lifted: list[MidiNote] = []
+    index = 0
+    while index < len(notes):
+        end = index
+        while end < len(notes) and notes[end].start_beats == notes[index].start_beats:
+            end += 1
+        group = notes[index:end]
+        index = end
+        lift = lifts.get(int(group[0].start_beats // beats) + 1)
+        if lift is None:
+            lifted.extend(group)
+            continue
+        ratio, louder = lift
+        lifted.extend(
+            MidiNote(
+                note.pitch,
+                note.start_beats,
+                note.duration_beats,
+                min(127, note.velocity + louder),
+            )
+            for note in group
+        )
+        top = max(group, key=lambda note: note.pitch)
+        pitch = top.pitch + 12
+        if octave and ratio and pitch <= _LIFT_CEILING and all(
+            note.pitch != pitch for note in group
+        ):
+            lifted.append(
+                MidiNote(
+                    pitch,
+                    top.start_beats,
+                    top.duration_beats,
+                    max(1, round(top.velocity * ratio)),
+                )
+            )
+    return lifted
+
+
+def scoped_request_notes(sections: Any, fields: dict[str, Any]) -> list[str]:
+    """Say, in the user's terms, what the part- and section-scoped requests do to the MIDI."""
+    notes: list[str] = []
+    if fields.get("bass_activity_curve") == "rising":
+        notes.append(
+            "ベースの段階変化: MIDIの音数で表現します。序盤は既存リズムの約4割の打点に間引き、"
+            "曲の進行に合わせて元の密度へ戻します（Subも同じリズムに従います）。"
+            "Intro前半の無音、Breakの持続音、Outro最後8小節の無音は従来どおり優先します"
+        )
+    elif fields.get("bass_activity") == "dense":
+        notes.append(
+            "ベースの動きを増やす: ベースとSubだけ、MIDIの音数（高密度リズム）で表現します。"
+            "ドラム・上物と音色は変えず、Intro前半の無音、Breakの持続音、Outro最後8小節の無音は従来どおり優先します"
+        )
+    upper = fields.get("upper_brightness")
+    drop = fields.get("drop_emphasis")
+    if upper == "rising":
+        notes.append(
+            "上物の段階的な煌びやかさ: MIDIの音域と強弱で表現します。曲の1/3以降は"
+            "Stab・Pad・Lead等の各打点の最高音に1オクターブ上の音を弱く重ね（ベロシティ約45%、Arpは除く）、"
+            "2/3以降は上物のベロシティを+5します。Kick・Bass・Subなどは変えず、"
+            "Break・Outroは従来の抑えた形を優先します。音色（フィルター等）の時間変化は未実装です"
+            + ("。Dropを派手にしない指示があるため、Drop専用の上乗せはしません" if drop == DECLINED else "")
+        )
+    elif upper == "steady":
+        notes.append(
+            "上物の煌びやかさ: 上物だけに、MIDIの音域で表現します。曲全体で"
+            "Stab・Pad・Lead等の各打点の最高音に1オクターブ上の音を弱く重ねます（ベロシティ約45%、Arpは除く）。"
+            "Kick・Bass・Subと音色レシピ（フィルター）は変えず、Break・Outroは従来の抑えた形を優先します"
+        )
+    elif upper == DECLINED:
+        notes.append(
+            "上物を煌びやかにしない: 上物の音域は変えません（暗くもしません）"
+            + ("。Dropの強調はベロシティだけで行います" if drop == "flashy" else "")
+        )
+    if drop == "flashy":
+        if not flash_sections(sections):
+            notes.append("ドロップを派手に: Drop区間がない構成のため、ほかの区間には適用せず、音には反映しません")
+        else:
+            octave = (
+                "" if upper == DECLINED
+                else "各打点の最高音に1オクターブ上の音を重ね（ベロシティ約60%、Arpは除く）、"
+            )
+            notes.append(
+                "ドロップを派手に: Drop 区間の上物だけ、MIDIの"
+                + ("強弱" if upper == DECLINED else "音域と強弱")
+                + f"で表現します。{octave}上物のベロシティを+6します。曲全体の音色は変えません"
+            )
+    elif drop == DECLINED:
+        notes.append("ドロップを派手にしない: Dropに追加の強調はしません（暗くもしません）")
+    if fields.get("tone_brightness") == 0:
+        notes.append("曲全体の明るさを変えない: 音色レシピの明るさは既定のままにします（暗くもしません）")
+    return notes
 
 
 def seed_from_brief(text: str) -> int:
@@ -368,11 +530,12 @@ def _notes_for_part(
     beats: float,
     rng: Random,
     progression: tuple[int, ...],
+    swing_override: float | None = None,
 ) -> list[MidiNote]:
     # One generator per part, seeded from the shared one, so a change inside
     # one part does not reshuffle the random choices of the others.
     part_rng = Random(rng.random())
-    plan = _SongPlan(brief, bars, beats, part_rng, progression)
+    plan = _SongPlan(brief, bars, beats, part_rng, progression, swing_override)
     if part == "Kick":
         notes = _kick_notes(plan)
     elif part == "Hats":
@@ -480,6 +643,7 @@ class _SongPlan:
         beats: float,
         rng: Random,
         progression: tuple[int, ...],
+        swing_override: float | None = None,
     ) -> None:
         self.brief = brief
         self.bars = bars
@@ -505,7 +669,7 @@ class _SongPlan:
         )
         # What the genre's family plays. An unknown genre gets four on the
         # floor with offbeat stabs, which is what every genre used to get.
-        self.profile = profile_for(str(brief.genre.value))
+        self.profile = profile_for_variety(brief, profile_for(str(brief.genre.value)))
         self.pattern = drum_pattern(self.profile.drum_pattern)
         self.articulation = chord_articulation(self.profile.articulation)
         self.bass_role = bass_role(self.profile.bass_role)
@@ -515,9 +679,19 @@ class _SongPlan:
         self.harmonic_rhythm = self.profile.harmonic_rhythm_bars or 2
         stated_swing = explicit_swing(brief.original_text)
         self.swing = (
-            stated_swing if stated_swing is not None else (self.profile.swing or 0.5)
+            stated_swing
+            if stated_swing is not None
+            else swing_override
+            if swing_override is not None
+            else (self.profile.swing or 0.5)
         )
-        self.echo_requested = bool(read_explicit(brief.original_text)[0].get("echo"))
+        explicit_fields = read_explicit(brief.original_text)[0]
+        self.echo_requested = bool(explicit_fields.get("echo"))
+        self.progressive_bass = (
+            explicit_fields.get("bass_activity_curve") == "rising"
+        )
+        self.busy_bass = explicit_fields.get("bass_activity") == "dense"
+        self.bass_density = "dense" if self.busy_bass else self.density
         # A recipe that puts a real Echo on the chords does the repeats; writing
         # them as notes as well doubles the delay.
         recipe = recipe_for(str(brief.genre.value))
@@ -862,7 +1036,7 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
     octave = {"low": -1, "mid": 0, "high": 1}[str(plan.brief.bass_register.value)]
     root = root_pitch(str(plan.brief.key.value), octave_offset=octave)
     mutation = plan.profile.drum_pattern == "mutation_funk"
-    choices = _BASS_RHYTHMS[plan.density]
+    choices = _BASS_RHYTHMS[plan.bass_density]
     notes: list[MidiNote] = []
     rhythms: dict[tuple[str, int], tuple[int, ...]] = {}
     mutation_rhythms: dict[tuple[str, int], tuple[tuple[int, ...], ...]] = {}
@@ -886,7 +1060,7 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
         if key not in motifs:
             if mutation:
                 mutation_rhythms[key] = tuple(
-                    plan.rng.sample(_MUTATION_BASS_RHYTHMS[plan.density], 2)
+                    plan.rng.sample(_MUTATION_BASS_RHYTHMS[plan.bass_density], 2)
                 )
             else:
                 name = "offbeat" if bar.section == "Intro" else plan.rng.choice(choices)
@@ -897,10 +1071,18 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
         )
         steps = _role_steps(
             [step for step in pattern_steps if step < plan.steps],
-            plan.bass_role.density_scale,
+            max(1.0, plan.bass_role.density_scale)
+            if plan.busy_bass
+            else plan.bass_role.density_scale,
         )
         if mutation and bar.section == "Intro":
             steps = steps[:2]
+        # Thinned steps still draw their velocity, so the later phrases pick the
+        # rhythms they would have, and a thinned bar is a subset of the full one.
+        kept = set(steps)
+        if plan.progressive_bass:
+            progress = (number - 1) / max(1, plan.bars - 1)
+            kept = set(_rising_activity_steps(steps, progress))
         motif = motifs[key]
         length = 0.2 if len(steps) > 6 else 0.4
         base = plan.bass_role.velocity
@@ -913,17 +1095,37 @@ def _bass_notes(plan: _SongPlan) -> list[MidiNote]:
             ):
                 interval = 7  # a seventh the chord does not have sounds wrong here
             ghost = mutation and step % 4 == 3
+            velocity = plan.velocity(
+                48 if ghost else base + 2 if step % 4 == 2 else base - 6, 4
+            )
+            if step not in kept:
+                continue
             notes.append(
                 MidiNote(
                     chord_root + interval,
                     plan.at(bar, step / 4),
                     0.12 if ghost else length,
-                    plan.velocity(
-                        48 if ghost else base + 2 if step % 4 == 2 else base - 6, 4
-                    ),
+                    velocity,
                 )
             )
     return notes
+
+
+def _rising_activity_steps(steps: list[int], progress: float) -> list[int]:
+    """Thin a bass rhythm early, then restore its steps as the song advances."""
+    if len(steps) < 2:
+        return steps
+    ratio = 0.4 + 0.6 * min(1.0, max(0.0, progress))
+    count = max(1, round(len(steps) * ratio))
+    if count >= len(steps):
+        return steps
+    if count == 1:
+        return [steps[len(steps) // 2]]
+    indices = {
+        round(index * (len(steps) - 1) / (count - 1))
+        for index in range(count)
+    }
+    return [step for index, step in enumerate(steps) if index in indices]
 
 
 def _role_steps(steps: list[int], scale: float) -> list[int]:

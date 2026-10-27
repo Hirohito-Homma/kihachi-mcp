@@ -1,15 +1,12 @@
 ## KIHACHI Live Device
 
-`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。現在の版は `kihachi-live-device/0.3.1` です。0.3.0 で、デバイスのつまみを名前で設定する `set_device_parameter` と、事前条件 `device_name_at_index` を足し、許可する純正デバイスに Analog を加えました。Live 12.4 以降では空の Drum Rack パッドへ同梱サンプルを `insert_chain` と `replace_sample` で載せます。大きな Set では `get_state` に `include_arrangement=false`、`count_session_notes=false`、音源確認時は `include_session_clips=false` を付けて状態取得します。JS を更新したら Max で `reload` するかデバイスを入れ直してください。
+`kihachi.device.js` は Ableton Live を KIHACHI MCP から安全に自動操作するための Max for Live デバイス本体です。現在の版は `kihachi-live-device/0.3.5` です。Live 12.4 以降では空の Drum Rack パッドへ同梱サンプルをロードします。`insert_chain` はPadではなくRackに呼び、作成したチェーンの `in_note` を対象Padのノートに合わせてからSimplerを挿入します。2026-10-01の `TEST002` 実機テストでは、修正版で7つのDrum Rackサンプルを読み戻しまで確認しました。大きな Set では `get_state` に `include_arrangement=false`、`count_session_notes=false`、音源確認時は `include_session_clips=false` を付けて状態取得します。JS を更新したら Max の `[js kihachi.device.js]` に `compile` メッセージを送るか、Liveを終了してデバイスを開き直してください。
 
-### 未完了部分の明示
+### 配布ファイル
 
-**`.amxd` バイナリはこのリポジトリに含まれていません。** `.amxd` は Max が生成する独自バイナリ形式で、テキストから正しく生成できないため、偽のデバイスファイルを置くことを避けました。含まれているのは次の4点です。
+Maxで保存した実物の `KIHACHI Live Device.amxd` と、同じフォルダに置く `kihachi.device.js`・`kihachi.bridge.js` を同梱します。macOSではLiveを終了後、Finderで `scripts/Liveデバイスをインストール.command` を開き、Abletonの **User Libraryフォルダ** を選んでください。導入先を表示して確認を求め、異なる既存ファイルは `.kihachi-backups` に保存してから3ファイルを置きます。Intel Mac / Live 12.4.5の実機で動作確認済みです。Apple Siliconと別のMacでは未検証です。
 
-1. Live Object Model を操作するJavaScript実装（`kihachi.device.js`）
-2. 生JSON UDPを中継するNode for Max実装（`kihachi.bridge.js`）
-3. メッセージプロトコル仕様（[docs/MAXFORLIVE.md](../docs/MAXFORLIVE.md)、完成）
-4. 下記のパッチ作成・パッケージ化手順（手作業、**利用者側で1回だけ実施が必要**）
+パッチの編集・再構築が必要な開発者向け手順は下に残します。通信契約は [docs/MAXFORLIVE.md](../docs/MAXFORLIVE.md) を参照してください。
 
 純正デバイスの自動ロードには、公式 Live Object Model の `Track.insert_device` が必要なため、Ableton Live 12.3 以降が必要です。Live 11〜12.2では他の操作は利用できますが、デバイスロードを含む計画は `blocked` になります。
 
@@ -21,7 +18,7 @@
 
 Live Intro には Max for Live がないため、KIHACHI の Live 自動操作は利用できません。
 
-### パッチ作成手順
+### パッチ作成手順（開発者向け）
 
 1. Live で MIDI トラックを1つ作り、`Max Audio Effect` をロードします。
 2. デバイスの編集ボタン（鉛筆アイコン）で Max エディタを開きます。
@@ -61,11 +58,7 @@ KIHACHI デバイスに「Studio」ボタンを足すと、Live の上に Studio
 
 #### 0. バックアップ
 
-作業前に今の `.amxd` をコピーしておきます。User Library の外に置くと Live のブラウザに出てきません。
-
-```bash
-mkdir -p ~/Music/KIHACHI/backups && cp -p "/Volumes/NO NAME/User Library/User Library/Presets/Audio Effects/Max Audio Effect/KIHACHI Live Device.amxd" ~/Music/KIHACHI/backups/
-```
+作業前に今の `.amxd` をFinderで複製し、別の名前で保管します。保存済みデバイスをLiveのブラウザに表示するには、元ファイルをUser Library内に残してください。インストーラーで更新する場合は異なる既存ファイルを自動でバックアップします。
 
 #### 1. 再生を止めてエディタを開く
 
@@ -146,12 +139,12 @@ Live 12.3で公式 Live Object Model に [`Track.insert_device`](https://docs.cy
 
 ### トークン受け渡し
 
-Python 側が起動ごとにセッショントークンを生成し、所有者のみ読める（`0600`）ハンドシェイクファイルへ書き出します。デバイスはリクエストごとにこれを読み、トークンが一致しなければ `unauthorized` を返します。
+Python 側が起動ごとにセッショントークンを生成し、所有者のみ読める（`0600`）ハンドシェイクファイルへ書き出します。Studioプロセス間ロックで同時に1つだけが発行し、2つ目のStudioは既存トークンを上書きせずLive接続を無効にします。Maxブリッジは各リクエスト時にファイルを読み、トークンが一致しなければ `unauthorized` を返します。`KIHACHI_LIVE_STATE_DIR` を設定する場合はStudioとLiveを同じ環境変数で起動してください。
 
 - macOS: `~/Library/Application Support/KIHACHI/live-bridge.json`
 - Windows: `%LOCALAPPDATA%\KIHACHI\live-bridge.json`
 
-このファイルは Git にコミットされません。サーバーを再起動したら、パッチから `reload` メッセージを `[js]` へ送ってトークンキャッシュを破棄してください。
+このファイルは Git にコミットされません。サーバーを再起動したら、パッチから `compile` メッセージを `[js]` へ送ってトークンキャッシュを破棄してください。`reload` は `[js]` の再コンパイルメッセージではありません。
 
 ### ポート
 

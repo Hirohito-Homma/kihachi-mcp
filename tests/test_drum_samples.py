@@ -7,6 +7,7 @@ from kihachi_mcp.services.drum_samples import (
     CLAP_NOTE,
     CONGA_HIGH_NOTE,
     CONGA_LOW_NOTE,
+    FAT_TIGHT_KICK,
     HAT_NOTE,
     IMPACT_NOTE,
     KICK_NOTE,
@@ -15,6 +16,7 @@ from kihachi_mcp.services.drum_samples import (
     SHAKER_NOTE,
     ensure_drum_samples,
     is_bundled_sample,
+    sample_dir,
 )
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
@@ -28,6 +30,7 @@ def test_bundled_wavs_are_written_locally() -> None:
     assert paths[CLAP_NOTE].is_file()
     assert paths[OPEN_HAT_NOTE].is_file()
     assert is_bundled_sample(paths[KICK_NOTE])
+    assert is_bundled_sample(sample_dir() / FAT_TIGHT_KICK)
     assert not is_bundled_sample("/tmp/other.wav")
 
 

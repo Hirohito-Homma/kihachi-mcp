@@ -15,12 +15,24 @@ from pathlib import Path
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
+    OP_CREATE_LOCATOR,
     OP_CREATE_MIDI_TRACK,
     OP_CREATE_SESSION_CLIP,
+    OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
+    STATUS_VERIFICATION_FAILED,
+    STATUS_VERIFIED,
     managed_track_name,
 )
+from kihachi_mcp.models.live_mutation import LiveMutationPlan
+from kihachi_mcp.models.live_receipt import LiveExecutionReceipt
 from kihachi_mcp.models.midi_candidate import MidiCandidate
+from kihachi_mcp.services.live_execution_service import (
+    AMBIGUOUS_MATCH_FIELD,
+    ARRANGEMENT_UNREPORTED_FIELD,
+    LOCATORS_UNREPORTED_FIELD,
+    readback_mismatches,
+)
 from kihachi_mcp.services.live_paths import bridge_state_dir
 
 READY = "READY"
@@ -32,8 +44,15 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 
 #: Keys the Studio may change. Anything else in a request is ignored.
-EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model", "openai_model", "monthly_ai_limit_jpy")
-AI_PROVIDERS = ("ollama", "openai", "deterministic")
+EDITABLE_SETTINGS = (
+    "ai_provider",
+    "ollama_url",
+    "ollama_model",
+    "openai_model",
+    "gemini_model",
+    "monthly_ai_limit_jpy",
+)
+AI_PROVIDERS = ("ollama", "openai", "gemini", "deterministic")
 
 
 def system_statuses(
@@ -121,8 +140,13 @@ def readback_verification(
     expected: dict[str, dict[str, int]] | None,
     tempo_changed: bool,
     arranged: bool,
+    arrangement: tuple[LiveMutationPlan, LiveExecutionReceipt] | None = None,
 ) -> dict[str, Any]:
-    """Compare what Live reports with the plan. PASS only on an exact match."""
+    """Compare what Live reports with the plan. PASS only on an exact match.
+
+    ``arrangement`` is the plan and receipt of the Arrangement expansion.
+    Without it an expanded candidate cannot be checked and does not pass.
+    """
     names = track_names(candidate)
     lines: list[dict[str, str]] = []
     tempo = float(candidate.brief.tempo.value)
@@ -182,7 +206,7 @@ def readback_verification(
             "; ".join(note_problems) or f"{note_total} ノート",
         )
     )
-    lines.append(_arrangement_line(candidate, snapshot, tracks, arranged))
+    lines.append(_arrangement_line(candidate, snapshot, tracks, arranged, arrangement))
     failed = [line for line in lines if line["status"] == FAIL]
     return {
         "ok": not failed,
@@ -194,11 +218,42 @@ def readback_verification(
 
 
 def _arrangement_line(
-    candidate: MidiCandidate, snapshot: Any, tracks: dict[str, Any], arranged: bool
+    candidate: MidiCandidate,
+    snapshot: Any,
+    tracks: dict[str, Any],
+    arranged: bool,
+    arrangement: tuple[LiveMutationPlan, LiveExecutionReceipt] | None,
 ) -> dict[str, str]:
     bars = int(candidate.brief.bars.value)
     if not arranged:
         return _line("Arrangement", SKIP, "まだアレンジメントへ展開していません")
+    if arrangement is None:
+        return _line(
+            "Arrangement",
+            FAIL,
+            "未確認: 展開時の計画と結果の記録がないため照合できません",
+        )
+    plan, receipt = arrangement
+    if receipt.status not in {STATUS_VERIFIED, STATUS_VERIFICATION_FAILED}:
+        return _line(
+            "Arrangement",
+            FAIL,
+            f"展開は {receipt.status} で終わっています"
+            f"（成功 {len(receipt.completed_operations)} / 試行 "
+            f"{len(receipt.attempted_operations)} 操作）",
+        )
+    mismatches = readback_mismatches(plan, receipt, snapshot)
+    completed = set(receipt.completed_operations)
+    clip_count = sum(
+        1
+        for op in plan.operations
+        if op.operation_id in completed and op.op == OP_PLACE_ARRANGEMENT_CLIP
+    )
+    locator_count = sum(
+        1
+        for op in plan.operations
+        if op.operation_id in completed and op.op == OP_CREATE_LOCATOR
+    )
     beats = snapshot.time_signature.beats_per_bar
     placed = [
         clip
@@ -206,16 +261,49 @@ def _arrangement_line(
         if track is not None
         for clip in snapshot.arrangement_clips_on(track.index)
     ]
-    if not placed:
-        return _line("Arrangement", FAIL, "アレンジメントにクリップがありません")
-    first = min(clip.start_beats for clip in placed) / beats + 1
-    last = max(clip.end_beats for clip in placed) / beats
-    outside = first < 1 or last > bars + 0.001
-    return _line(
-        "Arrangement",
-        FAIL if outside else PASS,
-        f"{first:g}–{last:g} 小節 / 計画 1–{bars} 小節",
+    outside = bool(placed) and (
+        min(clip.start_beats for clip in placed) / beats + 1 < 1
+        or max(clip.end_beats for clip in placed) / beats > bars + 0.001
     )
+    if not mismatches and not outside and clip_count:
+        return _line(
+            "Arrangement",
+            PASS,
+            f"クリップ {clip_count} 個・ロケーター {locator_count} 個が計画どおり"
+            f"（1–{bars} 小節）",
+        )
+    problems = _mismatch_summary(mismatches)
+    if outside:
+        problems.append(f"計画の 1–{bars} 小節の外にクリップがあります")
+    if not clip_count:
+        problems.append("展開記録に配置済みのクリップがありません")
+    return _line("Arrangement", FAIL, "; ".join(problems))
+
+
+def _mismatch_summary(mismatches: list[Any], limit: int = 4) -> list[str]:
+    fields = {item.field_name for item in mismatches}
+    problems = []
+    if LOCATORS_UNREPORTED_FIELD in fields:
+        problems.append("未確認: Liveがロケーター一覧を返しません（KIHACHI Live Deviceの更新が必要）")
+    if ARRANGEMENT_UNREPORTED_FIELD in fields:
+        problems.append("未確認: LiveがArrangementクリップ一覧を読める形で返しません")
+    ambiguous = [item for item in mismatches if item.field_name == AMBIGUOUS_MATCH_FIELD]
+    if ambiguous:
+        problems.append(f"{len(ambiguous)} 件は同じ名前・位置の候補が複数あり特定できません")
+    detail = [
+        item
+        for item in mismatches
+        if item.field_name
+        not in {LOCATORS_UNREPORTED_FIELD, ARRANGEMENT_UNREPORTED_FIELD, AMBIGUOUS_MATCH_FIELD}
+    ]
+    for item in detail[:limit]:
+        observed = "なし" if item.observed is None else item.observed
+        problems.append(
+            f"{item.operation_id} {item.field_name}: 計画 {item.expected} / Live {observed}"
+        )
+    if len(detail) > limit:
+        problems.append(f"ほか {len(detail) - limit} 件")
+    return problems
 
 
 def _line(name: str, status: str, detail: str) -> dict[str, str]:
@@ -299,10 +387,20 @@ def validate_settings(changes: dict[str, Any], installed_models: list[str]) -> s
     """Return an error message, or "" when the change is acceptable."""
     provider = changes.get("ai_provider")
     if provider is not None and provider not in AI_PROVIDERS:
-        return "AIプロバイダは ollama、openai、deterministic から選んでください"
+        return "AIプロバイダは ollama、openai、gemini、deterministic から選んでください"
     openai_model = changes.get("openai_model")
     if openai_model is not None and openai_model not in {"gpt-6.1-sol", "gpt-6-astra"}:
         return "OpenAIモデルは Sol または Astra を選んでください"
+    gemini_model = changes.get("gemini_model")
+    if gemini_model is not None and gemini_model not in {
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+    }:
+        return "Geminiモデルは gemini-3.8-flash または gemini-2.5-pro を選んでください"
     limit = changes.get("monthly_ai_limit_jpy")
     if limit is not None and (not isinstance(limit, int) or not 100 <= limit <= 100_000):
         return "月間上限は100〜100000円の整数で指定してください"

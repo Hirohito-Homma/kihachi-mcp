@@ -2,16 +2,39 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import logging
+import os
+import tempfile
 import traceback
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from kihachi_mcp.models.live_contract import OP_CREATE_MIDI_TRACK, STATUS_VERIFIED
+from kihachi_mcp.models.live_mutation import LiveMutationPlan
+from kihachi_mcp.models.midi_composer import MIDI_ROLES
+from kihachi_mcp.models.music_plan import MusicPlan
 from kihachi_mcp.services.brief_coverage import model_filled_fields, read_coverage
 from kihachi_mcp.services.candidate_audio_preview import candidate_preview_wav
+from kihachi_mcp.services.drum_samples import FAT_TIGHT_KICK, sample_dir
+from kihachi_mcp.services.jarvis import JarvisOrchestrator, context_from_runtime
+from kihachi_mcp.services.jarvis.fake_execution import (
+    rebind_uninspected_plan,
+    run_approved_plan_on_fake,
+)
+from kihachi_mcp.services.jarvis.intent import parse_intent
+from kihachi_mcp.services.jarvis.revision import revision_request
+from kihachi_mcp.services.jarvis.verification import settle_receipt
+from kihachi_mcp.services.live_candidate_context import brief_from_live
 from kihachi_mcp.services.live_paths import candidate_store_dir
+from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
+from kihachi_mcp.services.music_plan_preview import prepare_music_plan
+from kihachi_mcp.services.music_training_service import TrainingJournalStore
 from kihachi_mcp.services.reference_analysis import ReferenceError
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.reference_sources import ReferenceSources
@@ -31,7 +54,15 @@ from kihachi_mcp.studio import reference_routes
 
 HOST = "127.0.0.1"
 PORT = 8765
+JARVIS_SHORTCUT_PATH = "/api/jarvis/shortcut"
+JARVIS_SHORTCUT_PORT = 8766
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOGGER = logging.getLogger(__name__)
+
+
+def _groove_role_for_part(part: str) -> str:
+    """Keep supported Studio part roles intact when regenerating a groove."""
+    return part if part in MIDI_ROLES else "drums"
 
 
 class StudioApp:
@@ -50,17 +81,372 @@ class StudioApp:
         self.reference_library = reference_library or ReferenceLibrary()
         self.reference_sources = reference_sources or ReferenceSources()
         self.sample_catalog = sample_catalog or SampleCatalog()
+        self.learning_daemon = reference_routes.AutonomousLearningDaemon(
+            self.reference_library, self.reference_sources, self.sample_catalog,
+            runtime=self.runtime,
+        )
         self.dialogue = StudioDialogue(sample_catalog=self.sample_catalog)
+        self.jarvis = JarvisOrchestrator(context_reader=lambda: context_from_runtime(self.runtime))
+        self._music_plans: dict[str, LiveMutationPlan] = {}
+        self._training_sound_plans: dict[str, LiveMutationPlan] = {}
+        self._music_sources: dict[str, tuple[MusicPlan | None, dict[str, Any] | None]] = {}
+        self._live_bound: set[str] = set()
+        self._eval_path = self.runtime._candidate_dir / "evaluations.json"
+        self._evaluations: dict[str, dict[str, Any]] = self._load_evaluations()
+        self.plan_simulator = FakeLiveTransport(FakeLiveSet(tempo=110.0))
 
-    def serve_forever(self, host: str = HOST, port: int = PORT) -> None:
+    def _load_evaluations(self) -> dict[str, dict[str, Any]]:
+        if self._eval_path.is_file():
+            try:
+                data = json.loads(self._eval_path.read_text("utf-8"))
+                return data if isinstance(data, dict) else {}
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                LOGGER.warning(
+                    "Could not load Studio evaluations from %s",
+                    self._eval_path,
+                    exc_info=True,
+                )
+        return {}
+
+    def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> bool:
+        updated = {**self._evaluations, candidate_id: record}
+        temporary_path: str | None = None
+        try:
+            self._eval_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self._eval_path.parent,
+                prefix=f".{self._eval_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_path = temporary.name
+                json.dump(updated, temporary, ensure_ascii=False, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, self._eval_path)
+            temporary_path = None
+            self._evaluations = updated
+            return True
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning(
+                "Could not save Studio evaluations to %s",
+                self._eval_path,
+                exc_info=True,
+            )
+            return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    LOGGER.warning("Could not remove temporary Studio evaluation file")
+
+    def hold_music_plan(
+        self,
+        plan: LiveMutationPlan,
+        music: MusicPlan | None = None,
+        instruments: dict[str, Any] | None = None,
+        *,
+        live_bound: bool = False,
+    ) -> None:
+        """Remember one previewed plan so a person can approve that exact hash."""
+        self._music_plans[plan.plan_hash] = plan
+        self._music_sources[plan.plan_hash] = (music, instruments)
+        if live_bound:
+            self._live_bound.add(plan.plan_hash)
+        while len(self._music_plans) > 8:
+            oldest = next((key for key in self._music_plans if key not in self._live_bound), None)
+            if oldest is None:
+                break
+            self.drop_music_plan(oldest)
+
+    def held_music_plan(self, plan_hash: str) -> LiveMutationPlan | None:
+        return self._music_plans.get(plan_hash)
+
+    def music_source(self, plan_hash: str) -> tuple[MusicPlan | None, dict[str, Any] | None]:
+        return self._music_sources.get(plan_hash, (None, None))
+
+    def is_live_bound(self, plan_hash: str) -> bool:
+        return plan_hash in self._live_bound
+
+    def forget_live_binding(self, plan_hash: str) -> None:
+        self._live_bound.discard(plan_hash)
+
+    def drop_music_plan(self, plan_hash: str) -> None:
+        """Forget a superseded preview. Approval tokens stay in the gate until they expire."""
+        self._music_plans.pop(plan_hash, None)
+        self._music_sources.pop(plan_hash, None)
+        self._live_bound.discard(plan_hash)
+
+    def pending_actions(self) -> dict[str, Any]:
+        """Part plans waiting to be approved again or sent, and undecided revisions. Nothing is changed."""
+        gate = self.runtime._gate
+        plans = []
+        for plan_hash, plan in self._music_plans.items():
+            approved = gate.holds(plan_hash)
+            bound = plan_hash in self._live_bound
+            if gate.is_expired(plan) or not (approved or bound):
+                continue
+            plans.append(
+                {
+                    "plan_hash": plan_hash,
+                    "approved": approved,
+                    "live_bound": bound,
+                    "remaining_seconds": _remaining_seconds(plan),
+                    "tracks": [
+                        operation.arguments.get("name")
+                        for operation in plan.operations
+                        if operation.op == OP_CREATE_MIDI_TRACK
+                    ],
+                }
+            )
+        return {
+            "ok": True,
+            "music_plans": plans,
+            "revisions": self.runtime.pending_revisions(),
+            "live_changed": False,
+        }
+
+    def serve_forever(
+        self,
+        host: str = HOST,
+        port: int = PORT,
+        *,
+        tailscale_shortcut_user: str | None = None,
+        tailscale_shortcut_token: str | None = None,
+    ) -> None:
         """Start the blocking HTTP server."""
+        if tailscale_shortcut_user and host != HOST:
+            raise ValueError("Tailscale Shortcut利用時はStudioを127.0.0.1で起動してください")
         handler = _handler_for(self)
         server = ThreadingHTTPServer((host, port), handler)
+        shortcut_server = None
+        shortcut_thread = None
         try:
+            if tailscale_shortcut_user and tailscale_shortcut_token:
+                shortcut_server = ThreadingHTTPServer(
+                    (HOST, JARVIS_SHORTCUT_PORT),
+                    _jarvis_shortcut_handler_for(self, tailscale_shortcut_user, tailscale_shortcut_token),
+                )
+                shortcut_thread = Thread(target=shortcut_server.serve_forever, daemon=True)
+                shortcut_thread.start()
             server.serve_forever()
         finally:
             server.server_close()
+            self.learning_daemon.close()
+            if shortcut_server is not None:
+                if shortcut_thread is not None and shortcut_thread.is_alive():
+                    shortcut_server.shutdown()
+                    shortcut_thread.join(timeout=2)
+                shortcut_server.server_close()
             self.runtime.close()
+
+
+def _remaining_seconds(plan: LiveMutationPlan) -> int | None:
+    """Seconds until this plan's inspect window closes. Unknown expiry is None."""
+    if not plan.expires_at:
+        return None
+    try:
+        expires = datetime.fromisoformat(plan.expires_at)
+    except ValueError:
+        return 0
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return max(0, int((expires - datetime.now(UTC)).total_seconds()))
+
+
+def _verify_music_plan(app: StudioApp, runtime: StudioRuntime, plan: LiveMutationPlan) -> dict[str, Any]:
+    """Phase 4 on the in-memory set. Real Live is never contacted."""
+    base = {
+        "executed": False,
+        "live_changed": False,
+        "save": False,
+        "paid_api": False,
+        "musical_quality_claimed": False,
+        "plan_hash": plan.plan_hash,
+    }
+    if not runtime._gate.holds(plan.plan_hash):
+        return {
+            **base,
+            "ok": False,
+            "state": "APPROVAL_REQUIRED",
+            "reply": "承認されていない計画は検証で完了にしません。Liveには送っていません。",
+        }
+    if app.is_live_bound(plan.plan_hash):
+        return {
+            **base,
+            "ok": False,
+            "state": "APPROVAL_REQUIRED",
+            "reply": "この計画は実機の Live に合わせてあります。偽の Set では試しません。",
+        }
+    if plan.set_fingerprint in ("", "uninspected"):
+        rebound = rebind_uninspected_plan(plan, app.plan_simulator)
+        app.hold_music_plan(rebound, *app.music_source(plan.plan_hash))
+        if rebound.plan_hash != plan.plan_hash:
+            app.drop_music_plan(plan.plan_hash)
+        return {
+            **base,
+            "ok": False,
+            "state": "APPROVAL_REQUIRED",
+            "plan_hash": rebound.plan_hash,
+            "reply": "偽の Set に合わせました。前の承認は無効です。もう一度承認してください。実機には送っていません。",
+        }
+    finished = run_approved_plan_on_fake(plan, runtime._gate, app.plan_simulator)
+    finished["live_changed"] = False
+    finished["save"] = False
+    finished["paid_api"] = False
+    finished["plan_hash"] = plan.plan_hash
+    return finished
+
+
+_BLOCKED_REASONS = (
+    ("changed after", "読んだあとに Live の Set が変わりました"),
+    ("transport is running", "Live が再生中です"),
+    ("recording", "Live が録音中です"),
+    ("expired", "Live を読んでから15分が過ぎました"),
+)
+
+
+def _send_music_plan_to_live(app: StudioApp, runtime: StudioRuntime, plan: LiveMutationPlan) -> dict[str, Any]:
+    """The first press reads the real Set; after a new approval the second press sends once."""
+    base = {
+        "ok": False,
+        "executed": False,
+        "live_changed": False,
+        "save": False,
+        "paid_api": False,
+        "musical_quality_claimed": False,
+        "plan_hash": plan.plan_hash,
+    }
+    if not runtime._gate.holds(plan.plan_hash):
+        return {**base, "state": "APPROVAL_REQUIRED", "reply": "承認されていない計画は実機に送りません。"}
+    if not app.is_live_bound(plan.plan_hash):
+        music, instruments = app.music_source(plan.plan_hash)
+        if music is None:
+            return {
+                **base,
+                "state": "UNKNOWN",
+                "reply": "元の計画がありません。もう一度「計画を確認」を押してください。実機には送っていません。",
+            }
+        bound, payload = runtime.bind_music_plan_to_live(music, instruments)
+        if bound is not None:
+            app.hold_music_plan(bound, music, instruments, live_bound=True)
+            if bound.plan_hash != plan.plan_hash:
+                app.drop_music_plan(plan.plan_hash)
+        return {**base, **payload}
+    receipt, refusal = runtime.execute_music_plan(plan)
+    if receipt is None:
+        if "実行中" not in (refusal or ""):
+            app.forget_live_binding(plan.plan_hash)
+        return {**base, "state": "APPROVAL_REQUIRED", "reply": refusal}
+    error = receipt.error or ""
+    transport_busy = "transport is running" in error or "recording" in error
+    if receipt.attempted_operations or not transport_busy:
+        app.forget_live_binding(plan.plan_hash)
+    if not receipt.attempted_operations:
+        reason = next(
+            (text for marker, text in _BLOCKED_REASONS if marker in error),
+            error or "理由は不明です",
+        )
+        retry = (
+            "止めてから、同じボタンをもう一度押してください。承認は残しています。"
+            if transport_busy
+            else "もう一度押すと Live を読み直します。"
+        )
+        return {
+            **base,
+            "status": receipt.status,
+            "state": "APPROVAL_REQUIRED",
+            "reply": f"送れませんでした（{reason}）。Live は変えていません。{retry}",
+        }
+    changed = bool(receipt.completed_operations)
+    machine, message = settle_receipt(receipt.status)
+    if receipt.status == STATUS_VERIFIED:
+        message = (
+            "実機の Live は計画どおり応答しました。音源は入れていないので、トラックに音源を載せてから聴いてください。"
+            "音の完成ではありません。保存はしていません。"
+        )
+    elif changed:
+        message = f"{message} 途中まで Live を変えています。自動では再送しません。Live で確かめてください。"
+    return {
+        **base,
+        "ok": receipt.status == STATUS_VERIFIED,
+        "status": receipt.status,
+        "state": machine.state,
+        "states": list(machine.history),
+        "reply": message,
+        "executed": changed,
+        "live_changed": changed,
+    }
+
+
+def _jarvis_shortcut_handler_for(app: StudioApp, allowed_user: str, token: str):
+    """Expose only a narrow JARVIS endpoint to Tailscale Serve."""
+
+    class ShortcutHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_GET(self) -> None:
+            self._send_error(405, "POSTで音声入力を送ってください")
+
+        def do_POST(self) -> None:
+            if self.path != JARVIS_SHORTCUT_PATH:
+                self._send_error(404, "この入口ではJARVIS音声入力だけ利用できます")
+                return
+            login = self.headers.get("Tailscale-User-Login", "")
+            if not login or login.casefold() != allowed_user.casefold():
+                self._send_error(403, "許可されたTailscaleユーザーではありません")
+                return
+            scheme, _, supplied_token = self.headers.get("Authorization", "").partition(" ")
+            if (
+                scheme.casefold() != "bearer"
+                or not supplied_token.isascii()
+                or not hmac.compare_digest(supplied_token, token)
+            ):
+                self._send_error(401, "認証に失敗しました")
+                return
+            if self.headers.get_content_type() != "application/json":
+                self._send_error(415, "JSON形式で送信してください")
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if content_length < 1 or content_length > 4096:
+                self._send_error(413, "入力は1〜4096バイトにしてください")
+                return
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_error(400, "JSONを読み取れません")
+                return
+            utterance = body.get("utterance") if isinstance(body, dict) else None
+            if not isinstance(utterance, str) or not utterance.strip() or len(utterance) > 1000:
+                self._send_error(400, "音声入力の文字列が空か長すぎます")
+                return
+            try:
+                result = app.jarvis.ask(utterance.strip())
+            except Exception:  # noqa: BLE001 - don't expose internal details over the shortcut
+                self._send_error(500, "JARVISの処理に失敗しました")
+                return
+            self._send_json(result)
+
+        def _send_error(self, status: int, message: str) -> None:
+            self._send_json({"ok": False, "error": message, "live_changed": False}, status)
+
+        def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+    return ShortcutHandler
 
 
 def _handler_for(app: StudioApp):
@@ -96,6 +482,9 @@ def _handler_for(app: StudioApp):
 
         def _get(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/jarvis":
+                self._send_json(app.jarvis.status())
+                return
             if _workflow_get(self, runtime, parsed):
                 return
             if parsed.path == "/references":
@@ -109,6 +498,7 @@ def _handler_for(app: StudioApp):
                 parsed,
                 app.reference_sources,
                 app.sample_catalog,
+                app.learning_daemon,
             ):
                 return
             if parsed.path == "/":
@@ -116,6 +506,32 @@ def _handler_for(app: StudioApp):
                 return
             if parsed.path == "/api/health":
                 self._send_json(runtime.health())
+                return
+            if parsed.path == "/api/live/overview":
+                if runtime._transport is None:
+                    self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
+                    return
+                try:
+                    snapshot = runtime._arrangement_inspector.snapshot()
+                except Exception as exc:  # noqa: BLE001 - report read failures without a retry
+                    self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
+                    return
+                self._send_json({
+                    "ok": True,
+                    "live_changed": False,
+                    "observed_at": snapshot.observed_at,
+                    "set_name": snapshot.set_name,
+                    "tempo": snapshot.tempo,
+                    "time_signature": snapshot.time_signature.to_dict(),
+                    "tracks": [track.to_dict() for track in snapshot.tracks],
+                    "scenes": [scene.to_dict() for scene in snapshot.scenes],
+                    "session_clips": [clip.to_dict() for clip in snapshot.session_clips],
+                    "arrangement_clips": [clip.to_dict() for clip in snapshot.arrangement_clips],
+                    "note_counts_included": False,
+                })
+                return
+            if parsed.path == "/api/approvals":
+                self._send_json(app.pending_actions())
                 return
             if parsed.path == "/api/dialogue/voice/status":
                 self._send_json(voice_status())
@@ -148,10 +564,60 @@ def _handler_for(app: StudioApp):
                     if candidate is None:
                         self._send_json({"ok": False, "error": "候補がありません"}, 404)
                         return
+                    query = parse_qs(parsed.query)
+                    part_filter = (query.get("part") or [""])[0] or None
+                    variant = (query.get("variant") or [""])[0].upper()
+                    swing_override: float | None = None
+                    if variant == "A":
+                        swing_override = 0.50
+                    elif variant == "B":
+                        swing_override = 0.54
+                    elif "swing" in query:
+                        try:
+                            swing_override = float(query["swing"][0])
+                        except ValueError:
+                            pass
                     self._send_bytes(
-                        candidate_preview_wav(candidate), "audio/wav",
+                        candidate_preview_wav(
+                            candidate,
+                            part_filter=part_filter,
+                            swing_override=swing_override,
+                        ),
+                        "audio/wav",
                         f'inline; filename="kihachi-{candidate_id[:8]}-preview.wav"',
                     )
+                    return
+                if len(parts) >= 4 and parts[3] == "preview-metrics":
+                    candidate = runtime.get_candidate(candidate_id)
+                    if candidate is None:
+                        self._send_json({"ok": False, "error": "候補がありません"}, 404)
+                        return
+                    query = parse_qs(parsed.query)
+                    part_filter = (query.get("part") or [""])[0] or None
+                    variant = (query.get("variant") or [""])[0].upper()
+                    swing_override = 0.50 if variant == "A" else 0.54
+                    wav_data = candidate_preview_wav(
+                        candidate,
+                        part_filter=part_filter,
+                        swing_override=swing_override,
+                    )
+                    from kihachi_mcp.services.candidate_audio_preview import (
+                        measure_preview_audio,
+                    )
+                    metrics = measure_preview_audio(wav_data)
+                    metrics["candidate_id"] = candidate.candidate_id
+                    metrics["content_hash"] = candidate.note_fingerprint
+                    metrics["variant"] = variant or "B"
+                    metrics["target_midi_protected"] = True
+                    metrics["is_approved_target"] = (variant != "A")
+                    metrics["preview_conditions"] = {
+                        "tempo": int(candidate.brief.tempo.value),
+                        "key": candidate.brief.key.value,
+                        "swing": swing_override,
+                        "part_filter": part_filter or "all",
+                        "notes_identical_to_target": True,
+                    }
+                    self._send_json(metrics)
                     return
                 if len(parts) >= 4 and parts[3] in {"midi", "midi.mid"}:
                     exported = runtime.export_midi(candidate_id)
@@ -165,6 +631,9 @@ def _handler_for(app: StudioApp):
                         f'attachment; filename="kihachi-{candidate_id[:8]}.mid"',
                     )
                     return
+                if len(parts) >= 4 and parts[3] == "evaluation":
+                    self._send_json({"ok": True, "evaluation": app._evaluations.get(candidate_id, {})})
+                    return
                 candidate = runtime.get_candidate(candidate_id)
                 if candidate is None:
                     self._send_json({"ok": False, "error": "候補がありません"}, 404)
@@ -173,11 +642,14 @@ def _handler_for(app: StudioApp):
                     {
                         "ok": True,
                         "candidate": candidate.to_dict(),
+                        "learning_adjustment": runtime.get_learning_adjustment(candidate_id),
                         "coverage": read_coverage(
                             candidate.brief.original_text,
                             model_filled_fields(candidate.brief),
                             str(candidate.brief.genre.value),
+                            brief=candidate.brief,
                         ),
+                        "evaluation": app._evaluations.get(candidate_id, {}),
                     }
                 )
                 return
@@ -185,6 +657,167 @@ def _handler_for(app: StudioApp):
 
         def _post(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/candidate/") and parsed.path.endswith("/evaluate"):
+                parts = parsed.path.strip("/").split("/")
+                candidate_id = parts[2]
+                body = self._read_json()
+                variant = str(body.get("variant") or "B").upper()
+                rating = str(body.get("rating") or "").upper()
+                notes = str(body.get("notes") or "")
+                if runtime.get_candidate(candidate_id) is None:
+                    self._send_json({"ok": False, "error": "評価対象の候補が見つかりません"}, 404)
+                    return
+                if variant not in {"A", "B"} or rating not in {"A_BETTER", "B_BETTER", "EQUAL"}:
+                    self._send_json({"ok": False, "error": "A/Bの候補と有効な評価を指定してください"}, 400)
+                    return
+                if len(notes) > 2000:
+                    self._send_json({"ok": False, "error": "評価メモは2000文字以内で入力してください"}, 400)
+                    return
+                record = {
+                    "candidate_id": candidate_id,
+                    "variant": variant,
+                    "rating": rating,
+                    "notes": notes,
+                    "evaluated_at": datetime.now(UTC).isoformat(),
+                }
+                if not app.save_evaluation(candidate_id, record):
+                    self._send_json({"ok": False, "error": "評価を保存できませんでした。空き容量と保存先の権限を確認してください。"}, 500)
+                    return
+                learned = TrainingJournalStore().record_studio_evaluation(
+                    candidate_id, record["rating"]
+                )
+                self._send_json({
+                    "ok": True,
+                    "evaluation": record,
+                    "learning_observation_recorded": learned is not None,
+                    "learned_swing": TrainingJournalStore().learned_studio_swing(),
+                })
+                return
+            if parsed.path == "/api/groove/generate":
+                body = self._read_json()
+                base_id = str(body.get("candidate_id") or runtime.selected_id() or "")
+                base = runtime.get_candidate(base_id)
+                if base is None:
+                    self._send_json({"ok": False, "error": "ベースとなる候補が見つかりません"}, 404)
+                    return
+                import time as _time
+                import uuid as _uuid
+
+                from kihachi_mcp.models.midi_candidate import (
+                    CandidateClip,
+                    MidiCandidate,
+                )
+                from kihachi_mcp.models.midi_composer import (
+                    MidiCompositionRequest,
+                    MusicalConstraints,
+                )
+                from kihachi_mcp.services.midi_composer import DeterministicMIDIComposer
+                from kihachi_mcp.services.session_pattern_builder import MidiNote
+
+                swing = float(body.get("swing", 0.54))
+                ghost_notes = bool(body.get("ghost_notes", True))
+                syncopation = float(body.get("syncopation", 0.7))
+                new_seed = int(body.get("seed", 0)) or int(_time.time() * 1000) % 1000000
+
+                new_id = _uuid.uuid4().hex
+                new_clips: list[CandidateClip] = []
+                composer = DeterministicMIDIComposer(seed=new_seed)
+
+                for clip in base.clips:
+                    engine_role = _groove_role_for_part(clip.part)
+                    c = MusicalConstraints(
+                        key=base.brief.key.value,
+                        tempo=int(base.brief.tempo.value),
+                        bars=clip.length_bars,
+                        role=engine_role,
+                        grid="1/16",
+                        syncopation=syncopation,
+                        ghost_notes=ghost_notes,
+                        swing=swing,
+                    )
+                    gen_notes = composer.compose(MidiCompositionRequest(constraints=c, operation="generate"))
+                    new_notes = tuple(
+                        MidiNote(
+                            pitch=n.pitch,
+                            start_beats=n.start,
+                            duration_beats=n.duration,
+                            velocity=n.velocity,
+                        )
+                        for n in gen_notes
+                    )
+                    new_clips.append(
+                        CandidateClip(
+                            part=clip.part,
+                            section_name=clip.section_name,
+                            start_bar=clip.start_bar,
+                            length_bars=clip.length_bars,
+                            notes=new_notes,
+                        )
+                    )
+
+                new_candidate = MidiCandidate(
+                    candidate_id=new_id,
+                    brief=base.brief,
+                    clips=tuple(new_clips),
+                    parent_candidate_id=base.candidate_id,
+                    seed=new_seed,
+                )
+                runtime._store(new_candidate)
+                runtime.select(new_id)
+
+                self._send_json({
+                    "ok": True,
+                    "candidate_id": new_id,
+                    "parent_candidate_id": base.candidate_id,
+                    "swing": swing,
+                    "candidate": new_candidate.to_dict(),
+                })
+                return
+            if parsed.path == "/api/jarvis/turn":
+                body = self._read_json()
+                self._send_json(
+                    app.jarvis.ask(
+                        str(body.get("utterance") or ""),
+                        track_index=body.get("track_index"),
+                        track_name=body.get("track_name"),
+                        clip_index=body.get("clip_index"),
+                    )
+                )
+                return
+            if parsed.path == "/api/jarvis/clip-preview":
+                body = self._read_json()
+                self._send_json(
+                    app.jarvis.inspect_midi_clip(
+                        track_index=body.get("track_index"),
+                        track_name=body.get("track_name"),
+                        clip_index=body.get("clip_index"),
+                        utterance=str(body.get("utterance") or ""),
+                        direction=body.get("direction"),
+                        scope=body.get("scope"),
+                        bar_range=body.get("bar_range"),
+                    )
+                )
+                return
+            if parsed.path == "/api/jarvis/revision":
+                body = self._read_json()
+                selected = runtime.selected_id()
+                project = runtime.project(selected) if selected else {}
+                song = {
+                    "bars": (project.get("songspec") or {}).get("bars"),
+                    "sections": (project.get("arrangement") or {}).get("sections") or [],
+                }
+                request = revision_request(parse_intent(str(body.get("utterance") or "")), song)
+                if not request["ok"]:
+                    self._send_json({**request, "live_changed": False})
+                    return
+                result = runtime.propose_revision(
+                    selected,
+                    scopes=request["scopes"],
+                    bars=request["bars"],
+                    parts=request["parts"],
+                )
+                self._send_json({**result, "live_changed": False})
+                return
             if parsed.path.startswith("/api/dialogue/"):
                 content_type = self.headers.get("Content-Type", "").split(";")[0]
                 allowed_types = (
@@ -271,14 +904,50 @@ def _handler_for(app: StudioApp):
                 parsed,
                 app.reference_sources,
                 app.sample_catalog,
+                runtime=runtime,
+                learning_daemon=app.learning_daemon,
             ):
                 return
             body = self._read_json()
+            if parsed.path == "/api/references/training/sound-design/plan":
+                result = runtime.prepare_training_sound_plan(
+                    body.get("track_index"), body.get("device_index"), body.get("variant_id", "")
+                )
+                if result.get("ok") and isinstance(result.get("plan"), dict):
+                    plan = LiveMutationPlan.from_dict(result["plan"])
+                    app._training_sound_plans[plan.plan_hash] = plan
+                    result["plan_hash"] = plan.plan_hash
+                    result.pop("plan", None)
+                    while len(app._training_sound_plans) > 8:
+                        app._training_sound_plans.pop(next(iter(app._training_sound_plans)))
+                self._send_json(result)
+                return
+            if parsed.path in {
+                "/api/references/training/sound-design/approve",
+                "/api/references/training/sound-design/apply",
+            }:
+                plan_hash = str(body.get("plan_hash") or "")
+                plan = app._training_sound_plans.get(plan_hash)
+                if plan is None:
+                    self._send_json({"ok": False, "error": "音色プランが見つからないか期限切れです", "live_changed": False}, 404)
+                    return
+                if parsed.path.endswith("/approve"):
+                    self._send_json(runtime.approve_training_sound_plan(plan))
+                else:
+                    self._send_json(runtime.apply_training_sound_plan(plan))
+                return
             if parsed.path == "/api/samples/replace-preview":
                 try:
-                    sample_path = app.sample_catalog.audio_path(
-                        str(body.get("sample_id") or "")
-                    )
+                    if body.get("bundled_sample") == FAT_TIGHT_KICK:
+                        sample_path = sample_dir() / FAT_TIGHT_KICK
+                        if not sample_path.is_file():
+                            raise ReferenceError("Fat-tight Kick音源が見つかりません")
+                    elif body.get("bundled_sample") is not None:
+                        raise ReferenceError("指定された同梱音源は使用できません")
+                    else:
+                        sample_path = app.sample_catalog.audio_path(
+                            str(body.get("sample_id") or "")
+                        )
                 except ReferenceError as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                     return
@@ -296,6 +965,83 @@ def _handler_for(app: StudioApp):
                         confirmed=body.get("confirmed") is True,
                     )
                 )
+                return
+            if parsed.path == "/api/music-plan/preview":
+                posted = body.get("constraints")
+                prepared = prepare_music_plan(posted if isinstance(posted, dict) else None)
+                if prepared.live is not None:
+                    app.hold_music_plan(prepared.live, prepared.music, prepared.instruments)
+                self._send_json(prepared.payload)
+                return
+            if parsed.path == "/api/music-plan/approve":
+                plan = app.held_music_plan(str(body.get("plan_hash") or ""))
+                if plan is None:
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "先に計画を確認してください。",
+                            "executed": False,
+                            "live_changed": False,
+                            "save": False,
+                            "paid_api": False,
+                        }
+                    )
+                    return
+                self._send_json(runtime.record_music_plan_approval(plan))
+                return
+            if parsed.path == "/api/music-plan/reject":
+                plan = app.held_music_plan(str(body.get("plan_hash") or ""))
+                if plan is None:
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "先に計画を確認してください。",
+                            "approved": False,
+                            "rejected": False,
+                            "executed": False,
+                            "live_changed": False,
+                            "save": False,
+                            "paid_api": False,
+                        }
+                    )
+                    return
+                self._send_json(runtime.reject_music_plan(plan))
+                return
+            if parsed.path == "/api/music-plan/verify":
+                plan = app.held_music_plan(str(body.get("plan_hash") or ""))
+                if plan is None:
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "state": "UNKNOWN",
+                            "reply": "先に計画を確認してください。完了にはしていません。",
+                            "executed": False,
+                            "live_changed": False,
+                            "save": False,
+                            "paid_api": False,
+                            "musical_quality_claimed": False,
+                        }
+                    )
+                    return
+                self._send_json(_verify_music_plan(app, runtime, plan))
+                return
+            if parsed.path == "/api/music-plan/live":
+                plan = app.held_music_plan(str(body.get("plan_hash") or ""))
+                if plan is None:
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "state": "UNKNOWN",
+                            "reply": "先に計画を確認してください。実機には送っていません。",
+                            "executed": False,
+                            "live_changed": False,
+                            "save": False,
+                            "paid_api": False,
+                            "musical_quality_claimed": False,
+                        }
+                    )
+                    return
+                self._send_json(_send_music_plan_to_live(app, runtime, plan))
                 return
             if _workflow_post(self, runtime, parsed, body):
                 return
@@ -322,15 +1068,34 @@ def _handler_for(app: StudioApp):
                 except (TypeError, ValueError) as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                 return
+            if parsed.path == "/api/live/candidate":
+                if runtime._transport is None:
+                    self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
+                    return
+                if runtime._settings.get("ai_provider") == "openai":
+                    self._send_json({"ok": False, "error": "Liveからの候補生成はローカルAI設定で実行してください"}, 400)
+                    return
+                try:
+                    snapshot = runtime._arrangement_inspector.snapshot()
+                    context = brief_from_live(snapshot, str(body.get("brief") or ""))
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except Exception as exc:  # noqa: BLE001 - one read, no retry
+                    self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
+                    return
+                result = runtime.queue_generate(str(context["brief"]))
+                self._send_json({**result, "live_context": context, "live_changed": False})
+                return
             if parsed.path == "/api/generate":
                 brief = str(body.get("brief") or "")
                 seed = body.get("seed")
                 seed = int(seed) if seed is not None else None
-                self._send_json(runtime.queue_generate(brief, seed=seed))
+                self._send_json(runtime.queue_generate(brief, seed=seed, confirmed_paid=bool(body.get("confirmed_paid")), wide_variety=body.get("wide_variety") is True))
                 return
             if parsed.path == "/api/regenerate":
                 candidate_id = str(body.get("candidate_id") or "")
-                self._send_json(runtime.queue_regenerate(candidate_id))
+                self._send_json(runtime.queue_regenerate(candidate_id, confirmed_paid=bool(body.get("confirmed_paid")), wide_variety=body.get("wide_variety") is True))
                 return
             if parsed.path == "/api/cancel":
                 self._send_json(runtime.cancel())
@@ -432,6 +1197,14 @@ def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
         handler._send_json({"ok": True, "settings": runtime.settings()})
     elif parsed.path == "/api/ai/cost":
         handler._send_json(runtime.ai_cost_status((query.get("brief") or [""])[0]))
+    elif parsed.path == "/api/ai/connection":
+        provider_name = runtime.settings().get("ai_provider")
+        if provider_name == "gemini":
+            handler._send_json(runtime.gemini_connection_status())
+        else:
+            handler._send_json(runtime.openai_connection_status())
+    elif parsed.path == "/api/ai/gemini-connection":
+        handler._send_json(runtime.gemini_connection_status())
     elif parsed.path == "/api/ollama":
         handler._send_json(runtime.ollama_status())
     elif parsed.path == "/api/diagnostics":
@@ -484,6 +1257,10 @@ def _workflow_post(
         handler._send_json(runtime.approve(candidate_id))
     elif path == "/api/ableton/dry-run":
         handler._send_json(runtime.dry_run(candidate_id, **flags))
+    elif path == "/api/ableton/confirm-target":
+        handler._send_json(runtime.confirm_target_live_set(candidate_id))
+    elif path == "/api/ableton/delivery-status":
+        handler._send_json(runtime.get_delivery_status(candidate_id))
     elif path == "/api/ableton/send":
         handler._send_json(
             runtime.send_to_ableton(candidate_id, confirmed=bool(body.get("confirmed")), **flags)
@@ -545,6 +1322,8 @@ def _workflow_post(
                 body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
                 confirmed_paid=bool(body.get("confirmed_paid")),
                 seed=int(body.get("seed") or 0),
+                expected_provider=str(body.get("expected_provider") or "") or None,
+                expected_model=str(body.get("expected_model") or "") or None,
             )
         )
     elif path == "/api/midi/adopt-preview":

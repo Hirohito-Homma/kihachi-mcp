@@ -6,6 +6,7 @@ trusted from the transport payload, so a Set that changed between planning and
 execution cannot be mistaken for an unchanged one.
 """
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Self
 
@@ -180,6 +181,78 @@ class LiveArrangementClip:
 
 
 @dataclass(frozen=True)
+class LiveLocator:
+    """One observed Arrangement locator (Live cue point)."""
+
+    name: str = ""
+    beats: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Create a locator from JSON-compatible data."""
+        return cls(
+            name=str(data.get("name") or ""),
+            beats=float(data.get("beats") or 0.0),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the locator to JSON-compatible data."""
+        return asdict(self)
+
+
+def _locators_from(raw: Any) -> list[LiveLocator] | None:
+    """Accept a locator list only if every entry is well formed.
+
+    One malformed entry makes the whole list unreported rather than shorter,
+    so a damaged reply can never confirm a locator or pass for "no locators".
+    """
+    if not isinstance(raw, list):
+        return None
+    locators: list[LiveLocator] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        name = item.get("name")
+        beats = item.get("beats")
+        if not isinstance(name, str):
+            return None
+        if isinstance(beats, bool) or not isinstance(beats, int | float):
+            return None
+        if not math.isfinite(beats):
+            return None
+        locators.append(LiveLocator(name=name, beats=float(beats)))
+    return locators
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int | float)
+        and math.isfinite(value)
+    )
+
+
+def _arrangement_clips_well_formed(raw: Any) -> bool:
+    """Report whether every Arrangement clip entry carries readable placement."""
+    if not isinstance(raw, list):
+        return False
+    for item in raw:
+        if not isinstance(item, dict):
+            return False
+        track_index = item.get("track_index")
+        if isinstance(track_index, bool) or not isinstance(track_index, int):
+            return False
+        if track_index < 0 or not isinstance(item.get("name"), str):
+            return False
+        if not _is_finite_number(item.get("start_beats")):
+            return False
+        length = item.get("length_beats")
+        if not _is_finite_number(length) or length < 0:
+            return False
+    return True
+
+
+@dataclass(frozen=True)
 class LiveDevice:
     """One Live device the running Live installation reports as loadable."""
 
@@ -220,6 +293,13 @@ class LiveStateSnapshot:
     arrangement_clips: list[LiveArrangementClip] = field(default_factory=list)
     devices: list[LiveDevice] = field(default_factory=list)
     master_device_names: list[str] = field(default_factory=list)
+    #: ``None`` means Live did not report locators (an older device, or a read
+    #: without the Arrangement); it never means the Set has no locators.
+    locators: list[LiveLocator] | None = None
+    #: False when ``arrangement_clips`` was missing or held an unreadable entry.
+    #: Planning still reads the list leniently; read-back must not trust it.
+    #: A read without the Arrangement also reports an empty, well-formed list.
+    arrangement_clips_reported: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -266,6 +346,10 @@ class LiveStateSnapshot:
             master_device_names=[
                 str(item) for item in data.get("master_device_names") or []
             ],
+            locators=_locators_from(data.get("locators")),
+            arrangement_clips_reported=_arrangement_clips_well_formed(
+                data.get("arrangement_clips")
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:

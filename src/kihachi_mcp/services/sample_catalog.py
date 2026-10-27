@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
 import threading
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import soundfile as sf
@@ -122,6 +123,10 @@ class SampleCatalog:
             "brightness": "REAL",
             "transient": "REAL",
             "tags": "TEXT NOT NULL DEFAULT ''",
+            "learning_status": "TEXT NOT NULL DEFAULT ''",
+            "learning_claimed_at": "TEXT",
+            "learned_at": "TEXT",
+            "learning_features": "TEXT NOT NULL DEFAULT '{}'",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -170,11 +175,18 @@ class SampleCatalog:
             settings = {
                 r[0]: r[1] for r in db.execute("SELECT key,value FROM settings")
             }
-            count = db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            count, learned, failed = db.execute(
+                """SELECT COUNT(*),
+                          SUM(CASE WHEN learning_status='learned' THEN 1 ELSE 0 END),
+                          SUM(CASE WHEN learning_status='failed' THEN 1 ELSE 0 END)
+                   FROM files"""
+            ).fetchone()
         return {
             "ok": True,
             "root": settings.get("root", ""),
             "count": count,
+            "learning_completed": learned or 0,
+            "learning_failed": failed or 0,
             "indexed_at": settings.get("indexed_at", ""),
             "audio_copied": False,
         }
@@ -217,6 +229,20 @@ class SampleCatalog:
         if not self._lock.acquire(blocking=False):
             raise ReferenceError("サンプル一覧を作成中です")
         try:
+            learned_by_sample = {}
+            if self.path.exists():
+                with closing(self._connect()) as db:
+                    learned_by_sample = {
+                        row["sample_id"]: {
+                            "learning_status": row["learning_status"],
+                            "learned_at": row["learned_at"],
+                            "learning_features": row["learning_features"],
+                        }
+                        for row in db.execute(
+                            "SELECT sample_id,learning_status,learned_at,learning_features FROM files"
+                        )
+                        if row["sample_id"]
+                    }
             rows = []
             for base, dirs, files in os.walk(root, followlinks=False):
                 dirs[:] = [d for d in dirs if not (Path(base) / d).is_symlink()]
@@ -232,13 +258,15 @@ class SampleCatalog:
                         continue
                     relative = str(path.relative_to(root))
                     bpm, musical_key, tags = _filename_metadata(relative)
+                    sample_id = _sample_id(root, relative)
+                    learned = learned_by_sample.get(sample_id, {})
                     rows.append(
                         (
                             relative,
                             name,
                             _role(relative),
                             size,
-                            _sample_id(root, relative),
+                            sample_id,
                             bpm,
                             musical_key,
                             _duration(path),
@@ -248,6 +276,9 @@ class SampleCatalog:
                             None,
                             None,
                             " ".join(tags),
+                            learned.get("learning_status", ""),
+                            learned.get("learned_at"),
+                            learned.get("learning_features", "{}"),
                         )
                     )
                     if len(rows) > MAX_FILES:
@@ -260,7 +291,8 @@ class SampleCatalog:
                     """INSERT INTO files (
                         relative_path,name,role,bytes,sample_id,bpm,musical_key,
                         duration,sample_kind,loudness,energy,brightness,transient,tags
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        ,learning_status,learned_at,learning_features
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     rows,
                 )
                 db.execute(
@@ -273,6 +305,90 @@ class SampleCatalog:
             return self.status()
         finally:
             self._lock.release()
+
+    def next_learning_sample(self, *, claim: bool = False) -> dict | None:
+        """Return the next unfinished sample, optionally claiming it atomically."""
+        status = self.status()
+        if not status["root"]:
+            return None
+        root = Path(status["root"]).resolve()
+        with closing(self._connect()) as db:
+            if claim:
+                db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """SELECT sample_id,relative_path,name,role,bpm,musical_key,duration,tags
+                   FROM files WHERE learning_status=''
+                   ORDER BY relative_path LIMIT 1"""
+            ).fetchone()
+            if row and claim:
+                claimed_at = datetime.now(UTC).isoformat()
+                changed = db.execute(
+                    """UPDATE files SET learning_status='processing', learning_claimed_at=?
+                       WHERE sample_id=? AND learning_status=''""",
+                    (claimed_at, row["sample_id"]),
+                ).rowcount
+                if changed != 1:
+                    db.rollback()
+                    return None
+                db.commit()
+        if not row:
+            return None
+        try:
+            path = self.audio_path(row["sample_id"])
+        except ReferenceError:
+            self.record_learning(row["sample_id"], {}, error="索引音源ファイルが見つからないか、取得条件外です")
+            return self.next_learning_sample(claim=claim)
+        duration = row["duration"]
+        if duration is None:
+            duration = _duration(path)
+            if duration is None:
+                self.record_learning(row["sample_id"], {}, error="音源の長さを読み取れません")
+                return self.next_learning_sample(claim=claim)
+            with closing(self._connect()) as db, db:
+                db.execute(
+                    "UPDATE files SET duration=? WHERE sample_id=?",
+                    (duration, row["sample_id"]),
+                )
+        if not 0.5 <= float(duration) <= 1800:
+            self.record_learning(row["sample_id"], {}, error="自動解析対象は0.5〜1800秒の音源です")
+            return self.next_learning_sample(claim=claim)
+        return {
+            "sample_id": row["sample_id"],
+            "name": row["name"],
+            "role": row["role"],
+            "bpm": row["bpm"],
+            "key": row["musical_key"],
+            "duration": duration,
+            "tags": row["tags"].split(),
+            "path": str(path),
+        }
+
+    def record_learning(self, sample_id: str, features: dict, *, error: str = "") -> None:
+        """Persist compact audio-analysis findings without copying the sample."""
+        if not re.fullmatch(r"[a-f0-9]{24}", sample_id):
+            raise ReferenceError("サンプルが見つかりません")
+        status = "failed" if error else "learned"
+        payload = {key: value for key, value in features.items() if value is None or isinstance(value, (str, int, float, bool))}
+        with closing(self._connect()) as db, db:
+            changed = db.execute(
+                """UPDATE files SET learning_status=?, learning_claimed_at=NULL, learned_at=?, learning_features=?
+                   WHERE sample_id=?""",
+                (status, datetime.now(UTC).isoformat(), json.dumps(payload, ensure_ascii=False), sample_id),
+            ).rowcount
+        if not changed:
+            raise ReferenceError("サンプルが見つかりません")
+
+    def release_abandoned_learning_claims(self, *, older_than_seconds: int = 1800) -> int:
+        """Return claims left by a crashed worker to the unfinished queue."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(1, older_than_seconds))
+        with closing(self._connect()) as db, db:
+            changed = db.execute(
+                """UPDATE files SET learning_status='', learning_claimed_at=NULL
+                   WHERE learning_status='processing'
+                   AND (learning_claimed_at IS NULL OR learning_claimed_at < ?)""",
+                (cutoff.isoformat(),),
+            ).rowcount
+        return int(changed)
 
     def search(
         self,

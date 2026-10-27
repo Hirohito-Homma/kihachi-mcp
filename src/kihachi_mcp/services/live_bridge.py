@@ -14,8 +14,10 @@ The handshake file is how the Max device learns the port and token. Python owns
 the token lifecycle so the secret never has to be typed into Max.
 """
 
+import errno
 import json
 import logging
+import math
 import os
 import secrets
 import socket
@@ -148,6 +150,7 @@ class LiveBridgeSession:
             if handshake_path is not None
             else bridge_handshake_path(system, env)
         ).expanduser()
+        self._lock_file = None
 
     @property
     def handshake_path(self) -> Path:
@@ -162,6 +165,7 @@ class LiveBridgeSession:
         start.
         """
         self._handshake_path.parent.mkdir(parents=True, exist_ok=True)
+        self._acquire_process_lock()
         temporary = self._handshake_path.with_suffix(".tmp")
         payload = {
             "protocol": PROTOCOL_NAME,
@@ -186,9 +190,61 @@ class LiveBridgeSession:
         )
         return self._handshake_path
 
+    def _acquire_process_lock(self) -> None:
+        """Ensure only one Studio process can own and rotate this handshake."""
+        if self._lock_file is not None:
+            return
+        lock_path = self._handshake_path.with_name(self._handshake_path.name + ".lock")
+        lock_file = lock_path.open("a+b")
+        try:
+            os.chmod(lock_path, 0o600)
+            if os.name == "nt":
+                import msvcrt
+
+                lock_file.seek(0)
+                if lock_file.read(1) == b"":
+                    lock_file.write(b"0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            lock_file.close()
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise LiveTransportError(
+                    ERROR_UNAVAILABLE,
+                    "another KIHACHI Studio process owns the Live bridge; "
+                    "this Studio will stay disconnected to protect the active session",
+                ) from None
+            raise LiveTransportError(
+                ERROR_UNAVAILABLE,
+                "could not lock the Live bridge handshake file",
+            ) from None
+        self._lock_file = lock_file
+
     def remove_handshake(self) -> None:
         """Delete the handshake file so a stale token cannot be reused."""
-        self._handshake_path.unlink(missing_ok=True)
+        if self._lock_file is None:
+            return
+        try:
+            self._handshake_path.unlink(missing_ok=True)
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    self._lock_file.seek(0)
+                    msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._lock_file.close()
+                self._lock_file = None
 
 
 class LocalhostBridgeTransport:
@@ -216,7 +272,9 @@ class LocalhostBridgeTransport:
             )
         return self._channel
 
-    def request(self, message: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, message: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
         """Send one message to the Max device and return its raw reply.
 
         The session token is attached here, so no caller above the transport
@@ -241,9 +299,20 @@ class LocalhostBridgeTransport:
                 f"{self._max_request_bytes} byte loopback limit; "
                 "split the plan into smaller operations",
             )
+        request_timeout = self._timeout
+        if timeout_seconds is not None:
+            try:
+                requested_timeout = float(timeout_seconds)
+            except (TypeError, ValueError) as exc:
+                raise LiveTransportError(ERROR_TIMEOUT, "timeout must be positive") from exc
+            if not math.isfinite(requested_timeout) or requested_timeout <= 0:
+                raise LiveTransportError(ERROR_TIMEOUT, "timeout must be positive")
+            request_timeout = min(self._timeout, requested_timeout)
         with self._io_lock:
             channel = self._ensure_channel()
-            return self._exchange_locked(channel, request_id, payload, message)
+            return self._exchange_locked(
+                channel, request_id, payload, message, request_timeout
+            )
 
     def _exchange_locked(
         self,
@@ -251,6 +320,7 @@ class LocalhostBridgeTransport:
         request_id: str,
         payload: bytes,
         message: dict[str, Any],
+        timeout_seconds: float,
     ) -> dict[str, Any]:
         self._seen_request_ids.add(request_id)
         _logger.info(
@@ -262,13 +332,13 @@ class LocalhostBridgeTransport:
             },
         )
         channel.send(payload)
-        deadline = time.monotonic() + self._timeout
+        deadline = time.monotonic() + timeout_seconds
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LiveTransportError(
                     ERROR_TIMEOUT,
-                    f"the Max for Live device did not reply within {self._timeout:g}s",
+                    f"the Max for Live device did not reply within {timeout_seconds:g}s",
                 )
             raw = channel.receive(remaining)
             try:
@@ -295,7 +365,9 @@ class LocalhostBridgeTransport:
 
     def close(self) -> None:
         """Release the loopback channel and remove the handshake file."""
-        if self._channel is not None:
-            self._channel.close()
-            self._channel = None
-        self._session.remove_handshake()
+        try:
+            if self._channel is not None:
+                self._channel.close()
+                self._channel = None
+        finally:
+            self._session.remove_handshake()

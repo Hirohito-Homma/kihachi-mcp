@@ -19,6 +19,10 @@ const BRIDGE_VERSION = 3;
 const socket = dgram.createSocket("udp4");
 
 function handshakePath() {
+  const stateDir = process.env.KIHACHI_LIVE_STATE_DIR;
+  if (stateDir && stateDir.trim()) {
+    return path.join(path.resolve(stateDir), "live-bridge.json");
+  }
   if (process.platform === "win32") {
     const base = process.env.LOCALAPPDATA || process.env.APPDATA;
     return base ? path.join(base, "KIHACHI", "live-bridge.json") : "";

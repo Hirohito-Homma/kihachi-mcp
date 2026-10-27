@@ -15,7 +15,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from kihachi_mcp.knowledge.genre_database import canonical_genre, find, match_genres
 from kihachi_mcp.services.live_paths import bridge_state_dir
@@ -151,7 +151,7 @@ class ReferenceLibrary:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1):
+        if version not in (0, 1, 2):
             connection.close()
             raise ReferenceError(
                 "このDBは新しい版で作られています。対応するStudioを使用してください"
@@ -171,7 +171,14 @@ class ReferenceLibrary:
                 created_at TEXT NOT NULL,
                 UNIQUE (sha256, source, source_url)
             );
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS online_references (
+                id TEXT PRIMARY KEY, video_id TEXT NOT NULL UNIQUE,
+                source_url TEXT NOT NULL, title TEXT NOT NULL, creator TEXT NOT NULL,
+                genre TEXT NOT NULL, musical_notes TEXT NOT NULL,
+                listened INTEGER NOT NULL CHECK (listened IN (0, 1)),
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            PRAGMA user_version=2;
         """)
         return connection
 
@@ -180,14 +187,97 @@ class ReferenceLibrary:
             "ok": True,
             **capabilities(),
             "directory": str(self.directory),
-            "sources": ["local", "freesound", "jamendo"],
+            "sources": ["local", "freesound", "jamendo", "youtube_embed"],
             "import_mode": "local_files_and_provider_downloads",
         }
 
+    @staticmethod
+    def parse_youtube_url(value: str) -> tuple[str, str]:
+        if not isinstance(value, str) or len(value) > 1000:
+            raise ReferenceError("YouTube動画のURLを入力してください")
+        parsed = urlparse(value.strip())
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or parsed.username
+            or parsed.password
+            or parsed.port not in (None, 443)
+        ):
+            raise ReferenceError("HTTPSのYouTube動画URLを入力してください")
+        video_id = ""
+        if host == "youtu.be":
+            video_id = parsed.path.strip("/").split("/")[0]
+        elif host in {
+            "youtube.com",
+            "www.youtube.com",
+            "music.youtube.com",
+            "m.youtube.com",
+        }:
+            if parsed.path == "/watch":
+                video_id = parse_qs(parsed.query).get("v", [""])[0]
+            else:
+                match = re.fullmatch(
+                    r"/(?:embed|shorts|live)/([A-Za-z0-9_-]{11})/?", parsed.path
+                )
+                video_id = match.group(1) if match else ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            raise ReferenceError("YouTubeの単一動画URLを入力してください")
+        return video_id, f"https://www.youtube.com/watch?v={video_id}"
+
+    def save_online_reference(self, data: dict) -> dict:
+        video_id, source_url = self.parse_youtube_url(data.get("source_url", ""))
+        title = _text(data, "title", 200)
+        creator = _text(data, "creator", 200)
+        genre = _text(data, "genre", 120)
+        musical_notes = _text(data, "musical_notes", 2000)
+        if not title or data.get("listened") is not True:
+            raise ReferenceError("タイトルを入力し、動画を視聴してから登録してください")
+        now = datetime.now(UTC).isoformat()
+        reference_id = uuid.uuid4().hex
+        with closing(self._connect()) as db, db:
+            existing = db.execute(
+                "SELECT id FROM online_references WHERE video_id=?", (video_id,)
+            ).fetchone()
+            if existing:
+                reference_id = existing[0]
+                db.execute(
+                    "UPDATE online_references SET source_url=?, title=?, creator=?, genre=?, musical_notes=?, listened=1, updated_at=? WHERE id=?",
+                    (source_url, title, creator, genre, musical_notes, now, reference_id),
+                )
+                duplicate = True
+            else:
+                db.execute(
+                    "INSERT INTO online_references VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                    (reference_id, video_id, source_url, title, creator, genre, musical_notes, now, now),
+                )
+                duplicate = False
+        return {"ok": True, "duplicate": duplicate, "reference": self.get_online_reference(reference_id)}
+
+    def online_references(self) -> list[dict]:
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT * FROM online_references ORDER BY updated_at DESC, id").fetchall()
+        return [dict(row) for row in rows]
+
+    def get_online_reference(self, reference_id: str) -> dict:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT * FROM online_references WHERE id=?", (reference_id,)).fetchone()
+        if row is None:
+            raise ReferenceError("参照曲が見つかりません")
+        return dict(row)
+
     def import_file(
-        self, path: Path, metadata: dict, provider_snapshot: dict | None = None
+        self,
+        path: Path,
+        metadata: dict,
+        provider_snapshot: dict | None = None,
+        license_verification: str | None = None,
     ) -> dict:
         info = validate_metadata(metadata)
+        if (
+            license_verification == "provider_allowlisted_auto"
+            and provider_snapshot is not None
+        ):
+            info["license_verification"] = license_verification
         if provider_snapshot is not None:
             info["provider_metadata"] = {
                 **provider_snapshot,

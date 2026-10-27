@@ -33,6 +33,42 @@ Status: Living Document
 - AIProvider は `health` / `list_models` / `generate` / `generate_structured` / `capabilities` を持ち、設定（画面保存 → 環境変数 → 既定値）から選びます。
 - Live への書き込みは「承認 → ドライラン → 1回だけ送信 → 読み戻し比較」の順だけです。期待値（トラックごとのクリップ数・ノート数）は送信前に `<id>.expected.json` に保存し、再起動後も検証できます。
 - 修正は子候補を作る提案で、採用するまで親候補は変わりません。履歴は `.kihachi-revisions.json`。
+- Astra の作曲結果は `MusicPlan`（`kihachi.music_plan.v1`）です。Live へ出すときは既存の `LiveMutationPlan` に変換し、承認前には送りません。対応表は `docs/ASTRA_MUSIC_PROTOCOL.md` です。
+
+## Reference analysis to Live production flow
+
+Reference audio analysis provides abstract, reusable production constraints (for example tempo range, rhythmic density, swing, section energy, and accent patterns). It must not copy a reference's note sequence. The analysis card is input to candidate generation; it is not approval to mutate Live.
+
+```mermaid
+flowchart LR
+    A[User selects reference] --> B[Reference library]
+    B --> C[Reference analysis service]
+    C --> D[Analysis card<br/>tempo, key, groove, density, sections]
+    D --> E[Production pipeline]
+    E --> F[SongSpec / MusicPlan]
+    F --> G[Editable MIDI candidates]
+    G --> H[Review and compare]
+    H --> I[Human selects candidate]
+    I --> J[Live state inspection]
+    J --> K[Mutation plan and dry run]
+    K --> L[Explicit approval]
+    L --> M[Single execution]
+    M --> N[Readback comparison]
+    N --> O{Expected state matches?}
+    O -->|yes| P[Verified receipt]
+    O -->|no| Q[Stop and report discrepancy]
+    P --> R[Editable Ableton Live Set]
+```
+
+### Data and safety boundaries
+
+- The analysis card records its source reference and measured or inferred fields; uncertainty must remain visible to downstream generation and review.
+- Reference-derived rules guide new material but do not authorize note-for-note copying or Live writes.
+- Generation and effect suggestions remain candidates until reviewed. A card or pipeline run alone is not evidence that a device, parameter, or sound was applied in Live.
+- Live changes follow the existing approval, dry-run, single-execution, and readback contract. A mismatch or unavailable readback is not `verified` and must not trigger automatic retry.
+- Reports distinguish generated plans, attempted operations, readback-confirmed state, and human audition. Only the last establishes musical acceptance.
+
+The user-provided execution log describes a HOUSE 129.2 BPM / D minor analysis card and a claimed 64-bar, seven-part production. That log is a report, not independent evidence of the current Live Set. Verify the current Set and readback before describing those values or effects as applied.
 
 ---
 
@@ -191,8 +227,15 @@ Responsible for
 
 - filesystem
 - localhost-only Ableton Live bridge (`127.0.0.1`, session token, size and time caps)
+- AbletonGPT Remote Script socket (`127.0.0.1:9877` only)
 - Max for Live device transport
 - database
+
+The MCP HTTP gateway (`kihachi serve --transport streamable-http`) is another
+presentation entry on the same FastMCP server. It binds to `127.0.0.1` and
+requires a bearer token. It does not open the Ableton socket to the network.
+Public clients reach it through a tunnel that terminates TLS in front of that
+loopback port. See [MCP_GATEWAY.md](MCP_GATEWAY.md).
 
 There are no external API boundaries. Google Lyria is removed; KIHACHI generates
 no audio.

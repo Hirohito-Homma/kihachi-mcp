@@ -20,23 +20,43 @@ from kihachi_mcp.services.reference_analysis import (
     MAX_SECONDS,
     ReferenceError,
 )
-from kihachi_mcp.services.reference_library import MAX_BYTES, validate_metadata
+from kihachi_mcp.services.reference_library import MAX_BYTES
 
 _OAUTH_LOCK = threading.Lock()
 
-KEYS = ("FREESOUND_API_KEY", "FREESOUND_ACCESS_TOKEN", "JAMENDO_CLIENT_ID")
+KEYS = ("FREESOUND_API_KEY", "FREESOUND_ACCESS_TOKEN", "JAMENDO_CLIENT_ID", "YOUTUBE_DATA_API_KEY")
 
 
 def _allowed(url: str, source: str) -> bool:
     parsed = urlparse(url)
-    domain = "freesound.org" if source == "freesound" else "jamendo.com"
+    domain = {
+        "freesound": "freesound.org",
+        "jamendo": "jamendo.com",
+        "youtube": "www.googleapis.com",
+    }.get(source)
     host = parsed.hostname or ""
     return (
-        parsed.scheme == "https"
-        and (host == domain or host.endswith("." + domain))
+        domain is not None
+        and parsed.scheme == "https"
+        and (host == domain if source == "youtube" else (host == domain or host.endswith("." + domain)))
         and not parsed.username
         and not parsed.password
         and parsed.port in (None, 443)
+    )
+
+
+def _autonomous_license_allowed(source: str, license_value: str) -> bool:
+    """Allow automatic reference import only for permissive CC0 / CC BY terms."""
+    value = str(license_value or "").strip().lower().replace("http://", "https://")
+    if not value or any(term in value for term in ("nc", "noncommercial", "non-commercial", "nd", "no-derivatives", "no derivatives", "sa", "share-alike", "sharealike")):
+        return False
+    if "cc0" in value or "zero/1.0" in value or "publicdomain/zero" in value:
+        return True
+    if source not in {"freesound", "jamendo"}:
+        return False
+    return bool(
+        re.search(r"creativecommons\.org/licenses/by/(?:2\.0|2\.5|3\.0|4\.0)(?:/|$)", value)
+        or value in {"attribution", "creative commons attribution"}
     )
 
 
@@ -80,6 +100,7 @@ class ReferenceSources:
                 "search_configured": bool(self._key("JAMENDO_CLIENT_ID")),
                 "download_configured": bool(self._key("JAMENDO_CLIENT_ID")),
             },
+            "youtube": {"search_configured": bool(self._key("YOUTUBE_DATA_API_KEY"))},
         }
 
     def _key(self, name: str) -> str:
@@ -185,6 +206,34 @@ class ReferenceSources:
                 timeout=30,
             )
         except HTTPError as exc:
+            if source == "youtube" and exc.code in (400, 403):
+                try:
+                    payload = json.loads(exc.read(16_384))
+                    error = payload.get("error", {})
+                    reasons = [
+                        str(item.get("reason", ""))
+                        for item in error.get("errors", [])
+                        if isinstance(item, dict)
+                    ]
+                    reasons.extend(
+                        str(item.get("reason", ""))
+                        for item in error.get("details", [])
+                        if isinstance(item, dict)
+                    )
+                    status = str(error.get("status", ""))
+                except (OSError, ValueError, TypeError, AttributeError):
+                    reasons, status = [], ""
+                if any(reason in {"accessNotConfigured", "SERVICE_DISABLED"} for reason in reasons) or status == "PERMISSION_DENIED":
+                    raise ReferenceError("YouTube Data API v3がこのGoogle Cloudプロジェクトで無効です。同じプロジェクトでAPIを有効化してください") from None
+                if any("REFERER" in reason.upper() or "IP_ADDRESS" in reason.upper() for reason in reasons):
+                    raise ReferenceError("YouTube APIキーのアプリケーション制限が検索元を拒否しました。HTTPリファラー制限を外すか、サーバーの送信元IPを許可してください") from None
+                if any(reason in {"keyInvalid", "API_KEY_INVALID"} for reason in reasons):
+                    raise ReferenceError("YouTube APIキーが無効です。正しいキーをローカル設定へ登録し直してください") from None
+                if any(reason in {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded", "userRateLimitExceeded"} for reason in reasons):
+                    raise ReferenceError("YouTube Data APIの割り当て上限に達しています。Google Cloud Consoleの割り当てを確認してください") from None
+                if exc.code == 403:
+                    raise ReferenceError("YouTube APIが403で拒否しました。Cloud ConsoleでAPI有効化とキー制限を確認してください") from None
+                raise ReferenceError("YouTube APIが400で拒否しました。APIキーと検索パラメータを確認してください") from None
             if exc.code in (401, 403):
                 raise ReferenceError(
                     "認証・アクセス権を確認してください。キーは画面に貼らないでください"
@@ -225,8 +274,14 @@ class ReferenceSources:
                 "audiodlformat": "flac",
             }
             base = "https://api.jamendo.com/v3.0/"
+        elif source == "youtube":
+            key = self._key("YOUTUBE_DATA_API_KEY")
+            if not key:
+                raise ReferenceError("YOUTUBE_DATA_API_KEY を設定してください")
+            params = {**params, "key": key}
+            base = "https://www.googleapis.com/youtube/v3/"
         else:
-            raise ReferenceError("FreesoundまたはJamendoを選択してください")
+            raise ReferenceError("Freesound、Jamendo、YouTubeのいずれかを選択してください")
         try:
             with self._request(
                 source, base + path + "?" + urlencode(params), headers
@@ -253,6 +308,36 @@ class ReferenceSources:
     def search(self, source: str, query: str) -> dict:
         if not isinstance(query, str) or not 1 <= len(query.strip()) <= 120:
             raise ReferenceError("検索語は1〜120文字で入力してください")
+        if source == "youtube":
+            data = self._json(
+                source,
+                "search",
+                {"part": "snippet", "type": "video", "maxResults": 10, "q": query.strip()},
+            )
+            try:
+                results = []
+                for item in data.get("items", []):
+                    video_id = item["id"]["videoId"]
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                        continue
+                    snippet = item["snippet"]
+                    results.append({
+                        "source": "youtube", "remote_id": video_id,
+                        "title": str(snippet.get("title", ""))[:200],
+                        "creator": str(snippet.get("channelTitle", ""))[:200],
+                        "license": "YouTube公式プレイヤーで視聴（音源取得なし）",
+                        "source_url": f"https://www.youtube.com/watch?v={video_id}",
+                        "duration_seconds": 0,
+                        "download_allowed": False,
+                        "download_note": "この結果から音声は取得しません。聴取メモを登録してください。",
+                    })
+            except (ValueError, KeyError, TypeError):
+                raise ReferenceError("YouTube検索結果の形式を読み取れません") from None
+            return {
+                "ok": True,
+                "results": results,
+                "notice": "最大10件。公式プレイヤーで試聴後、曲と利用条件を確認して参照登録してください。",
+            }
         if source == "freesound":
             data = self._json(
                 source,
@@ -337,7 +422,8 @@ class ReferenceSources:
             r"[1-9][0-9]{0,11}", identifier
         ):
             raise ReferenceError("検索結果から音源を選んでください")
-        if body.get("rights_confirmed") is not True:
+        autonomous = body.get("autonomous") is True
+        if not autonomous and body.get("rights_confirmed") is not True:
             raise ReferenceError("取得する作品とAPIの利用条件を確認してください")
         if source == "freesound" and not self._key("FREESOUND_ACCESS_TOKEN"):
             raise ReferenceError(
@@ -360,18 +446,26 @@ class ReferenceSources:
             raise ReferenceError(
                 "この作品はダウンロードできません。別の作品を選んでください"
             )
+        if autonomous and not _autonomous_license_allowed(source, info["license"]):
+            raise ReferenceError(
+                "自動取得の許可リスト外ライセンスです。CC0またはCC BY（NC/ND/SAなし）の作品だけ自動取得します"
+            )
         if body.get("expected_license") != info["license"]:
             raise ReferenceError(
                 "利用条件が検索時と異なります。再検索して確認してください"
             )
+        raw_genres = body.get("genres", "")
+        # API callers may naturally supply multiple genres as a list, while
+        # ReferenceLibrary's metadata contract stores them as comma-separated text.
+        if isinstance(raw_genres, list) and all(isinstance(item, str) for item in raw_genres):
+            raw_genres = ", ".join(item.strip() for item in raw_genres if item.strip())
         metadata = {
             **self._public(info),
             "kind": body.get("kind", ""),
-            "genres": body.get("genres", ""),
+            "genres": raw_genres,
             "rights_confirmed": True,
             "notes": body.get("notes", ""),
         }
-        validate_metadata(metadata)
         headers = (
             {"Authorization": "Bearer " + self._access_token()}
             if source == "freesound"
@@ -397,5 +491,10 @@ class ReferenceSources:
                     "ダウンロードが中断されました。自動再試行はしません"
                 ) from None
             return library.import_file(
-                path, metadata, provider_snapshot=self._public(info)
+                path,
+                metadata,
+                provider_snapshot=self._public(info),
+                license_verification=(
+                    "provider_allowlisted_auto" if autonomous else None
+                ),
             )

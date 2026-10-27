@@ -116,7 +116,7 @@ ISSUE-0020 で完全に削除されました。`AudioRenderRequest`、`GoogleLyr
 
 MP3 検証と HTTP 境界の堅牢化は完了しましたが、方針変更により機能全体を削除しました。判断の記録は [adr/0005-lyria-35-primary-audio.md](adr/0005-lyria-35-primary-audio.md)（superseded）。
 
-### ISSUE-0020 — Ableton Live 自動操作（完了、**実機未検証**）
+### ISSUE-0020 — Ableton Live 自動操作（実装完了、実機部分検証済み）
 
 - Google Lyria を完全に廃止（tool / adapter / prompt builder / models / tests / 環境変数 / 文書）
 - Max for Live を必須要件化
@@ -128,14 +128,15 @@ MP3 検証と HTTP 境界の堅牢化は完了しましたが、方針変更に�
 - 安全規則14項目をコードとテストで固定
 - macOS / Windows のパス差を分離
 - 公開ツール 13 → 17
-- 完了条件: `264 passed`、Ruff 緑、FastMCP Tools (17)
-- **実機未検証。** [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) を人間が実行するまで実機動作は未確認
+- 実装時の完了条件: `264 passed`、Ruff 緑、FastMCP Tools (17)
+- 2026-10-18 に Live 12.4.5 で Arrangement 展開と独立読戻しを部分確認。64/64 操作、58 クリップ、6 Locator が計画どおりで、Locator 改名も読戻しで検出した。証跡と範囲は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md)。
+- これは全手順の実機完了を意味しない。既存 Arrangement Clip との衝突は読み取り専用 preview で拒否され、クリップ保持も確認したが、衝突状態で execute API を呼ぶ実機試験は行っていない。Live 終了後の unavailable 判定と音楽的な聴感評価も未確認。段階1〜8も手順書の個別項目を完了したとは扱わない。
 
 詳細は [adr/0006-ableton-live-automation.md](adr/0006-ableton-live-automation.md) と [issues/ISSUE-0020.md](issues/ISSUE-0020.md)。
 
 ## 進行中
 
-なし。
+フェイク transport で、既存 Clip との衝突時に追加操作がないことと、読戻し中の切断時に `unavailable` となり再送しないことを確認済み。Live 12.4.5 では衝突プレビューの拒否と既存 Clip の保持も確認済み。Live 停止後の `unavailable` は未確認。
 
 ## 次の候補
 
@@ -149,7 +150,7 @@ VST3 / AU / CLAP は現在スコープ外です。将来対応する場合は明
 
 ### ISSUE-0023 — Live純正デバイスローダー（コード完了、実機未検証）
 
-Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側の非公式ブラウザー配線は不要です。Live 11〜12.2ではロード可能一覧を無効化して計画段階で拒否します。コードと契約テストは完了していますが、実機確認は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) の段階8が終わるまで未検証です。
+Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側の非公式ブラウザー配線は不要です。Live 11〜12.2ではロード可能一覧を無効化して計画段階で拒否します。コードと契約テストは完了していますが、実機確認は [MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md) の段階8が終わるまで未検証です。[issues/ISSUE-0023.md](issues/ISSUE-0023.md)。
 
 ### さらに先
 
@@ -176,10 +177,4 @@ Live 12.3以降の公式 `Track.insert_device` を使用します。パッチ側
 
 ## 長期フェーズ
 
-[VISION.md](VISION.md) の Phase 1–6。いまは Phase 2（Ableton Integration）。**実機未検証。**
-
-### ISSUE-0007 — DAW Adapter
-
-- ProjectPlan を AbletonProjectPlan へ変換
-- TrackSpec を Ableton track、Arrangement を locator へ変換
-- Live操作やMIDI生成は行わない
+[VISION.md](VISION.md) の Phase 1–6。いまは Phase 2（Ableton Integration）。**実機は部分確認のみ。** Live 12.4.5 での Arrangement 展開・読戻しと、読み取り専用の衝突プレビューを確認しました。段階8、Live 停止後の `unavailable`、再生・試聴、衝突状態での execute は未確認です（[MANUAL_LIVE_TESTS.md](MANUAL_LIVE_TESTS.md)）。

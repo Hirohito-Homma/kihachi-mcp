@@ -29,5 +29,30 @@ htmlcov/
 # Local credentials
 .env
 
+# AI Company OS local runtime
+ai-company-os/**/node_modules/
+ai-company-os/**/.next/
+ai-company-os/**/.venv/
+ai-company-os/**/*.db
+ai-company-os/**/data/
+
 # Generated audio artifacts
 outputs/
+
+# Ableton analysis sidecars
+*.asd
+
+# Local working artifacts & generated songs
+songs/
+scratch/
+
+# Node dependencies
+node_modules/
+
+# Archives
+*.tar.gz
+
+# Xcode user state
+*.xcuserstate
+xcuserdata/
+DerivedData/

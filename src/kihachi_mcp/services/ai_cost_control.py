@@ -19,11 +19,21 @@ class ModelPrice:
     output_usd_per_million: float
 
 
-# Standard, short-context prices read from the official OpenAI pricing page.
+# Standard text prices per million tokens. Gemini values follow the official
+# Gemini Developer API pricing page; estimates use paid-tier rates conservatively.
 OPENAI_PRICES = {
-    "gpt-6-luna": ModelPrice(0.05, 0.25),
-    "gpt-6.1-sol": ModelPrice(1.0, 5.0),
-    "gpt-6-astra": ModelPrice(5.0, 25.0),
+    "gpt-6-luna": ModelPrice(0.10, 0.50),
+    "gpt-6.1-sol": ModelPrice(2.0, 10.0),
+    "gpt-6-astra": ModelPrice(10.0, 50.0),
+}
+
+GEMINI_PRICES = {
+    "gemini-3.8-flash": ModelPrice(0.30, 2.50),
+    "gemini-3.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-2.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-2.5-pro": ModelPrice(1.25, 10.00),
+    "gemini-1.5-flash": ModelPrice(0.30, 2.50),
+    "gemini-1.5-pro": ModelPrice(1.25, 10.00),
 }
 
 
@@ -32,11 +42,13 @@ def estimate_cost(
     input_tokens: int,
     output_tokens: int,
     usd_jpy: float = DEFAULT_USD_JPY,
+    *,
+    basis: str = "max_output_tokens_cap",
 ) -> dict[str, Any]:
-    """Return a conservative local estimate without contacting OpenAI."""
-    price = OPENAI_PRICES.get(model)
+    """Return a conservative local estimate without contacting an AI provider."""
+    price = OPENAI_PRICES.get(model) or GEMINI_PRICES.get(model)
     if price is None:
-        raise ValueError("料金を確認できるOpenAIモデルを選んでください")
+        raise ValueError("料金を確認できるAIモデルを選んでください")
     usd = (
         max(0, input_tokens) * price.input_usd_per_million
         + max(0, output_tokens) * price.output_usd_per_million
@@ -48,7 +60,8 @@ def estimate_cost(
         "estimated_usd": round(usd, 8),
         "estimated_jpy": round(usd * usd_jpy, 4),
         "usd_jpy": usd_jpy,
-        "estimate_only": True,
+        "estimate_only": basis != "actual_usage",
+        "basis": basis,
     }
 
 
@@ -78,23 +91,34 @@ class MonthlyCostGuard:
         allowed = current["spent_jpy"] + max(0.0, estimate_jpy) <= limit_jpy
         return {**current, "allowed": allowed, "estimated_request_jpy": round(estimate_jpy, 4)}
 
-    def record(self, usage: dict[str, Any], estimate: dict[str, Any]) -> None:
+    def record(self, usage: dict[str, Any], estimate: dict[str, Any]) -> dict[str, Any]:
         rows = self._read()
-        input_tokens = int(usage.get("input_tokens") or estimate["input_tokens"])
-        output_tokens = int(usage.get("output_tokens") or estimate["output_tokens"])
-        actual = estimate_cost(estimate["model"], input_tokens, output_tokens, float(estimate["usd_jpy"]))
-        rows.append({
+        has_actual = "input_tokens" in usage or "output_tokens" in usage
+        input_tokens = int(usage["input_tokens"]) if "input_tokens" in usage else int(estimate["input_tokens"])
+        output_tokens = int(usage["output_tokens"]) if "output_tokens" in usage else int(estimate["output_tokens"])
+        basis = "actual_usage" if has_actual else "max_output_tokens_cap"
+        actual = estimate_cost(
+            estimate["model"],
+            input_tokens,
+            output_tokens,
+            float(estimate["usd_jpy"]),
+            basis=basis,
+        )
+        entry = {
             "month": datetime.now().astimezone().strftime("%Y-%m"),
             "model": estimate["model"],
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "estimated_jpy": estimate["estimated_jpy"],
             "actual_jpy": actual["estimated_jpy"],
-        })
+            "basis": basis,
+        }
+        rows.append(entry)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temporary, self.path)
+        return entry
 
     def _read(self) -> list[dict[str, Any]]:
         try:

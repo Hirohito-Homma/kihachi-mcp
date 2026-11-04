@@ -18,10 +18,12 @@ The order of checks matters and is intentional:
    ``verification_failed``.
 """
 
+import re
 from collections.abc import Callable
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
+    OP_PLACE_ARRANGEMENT_CLIP,
     STATUS_APPROVAL_REQUIRED,
     STATUS_BLOCKED,
     STATUS_PARTIALLY_APPLIED,
@@ -381,6 +383,8 @@ def _verify_against_snapshot(
     scene_index = expected.get("scene_index")
     mismatches: list[LiveReadbackMismatch] = []
 
+    if operation.op == OP_PLACE_ARRANGEMENT_CLIP:
+        return _verify_arrangement_clip(operation, snapshot, expected)
     if "tempo" in expected and not _values_match(expected["tempo"], snapshot.tempo):
         mismatches.append(
             LiveReadbackMismatch(
@@ -447,4 +451,59 @@ def _verify_against_snapshot(
                         observed,
                     )
                 )
+    return mismatches
+
+
+_CLIP_ID_SUFFIX = re.compile(r"\s\[K:[^\]]+\]$")
+
+
+def _clip_base_name(name: str) -> str:
+    """Return a managed clip name without its per-placement id suffix."""
+    return _CLIP_ID_SUFFIX.sub("", name)
+
+
+def _verify_arrangement_clip(
+    operation: LiveMutationOperation,
+    snapshot: LiveStateSnapshot,
+    expected: dict[str, Any],
+) -> list[LiveReadbackMismatch]:
+    """Check one placed Arrangement clip against a fresh snapshot.
+
+    The clip is found by track and start beat. The device renames the
+    clip when it duplicates the Session clip into the Arrangement,
+    keeping the section name but minting a fresh managed id, so names
+    are compared without the ``[K:...]`` suffix.
+    """
+    mismatches: list[LiveReadbackMismatch] = []
+    track_index = expected.get("track_index")
+    start = expected.get("start_beats")
+    clip = None
+    if track_index is not None and start is not None:
+        for candidate in snapshot.arrangement_clips_on(int(track_index)):
+            if abs(candidate.start_beats - float(start)) <= _FLOAT_TOLERANCE:
+                clip = candidate
+                break
+    if "name" in expected:
+        observed_name = clip.name if clip is not None else None
+        if observed_name is None or not _values_match(
+            _clip_base_name(str(expected["name"])), _clip_base_name(observed_name)
+        ):
+            mismatches.append(
+                LiveReadbackMismatch(
+                    operation.operation_id, "name", expected["name"], observed_name
+                )
+            )
+    if "length_beats" in expected:
+        observed_length = clip.length_beats if clip is not None else None
+        if observed_length is None or not _values_match(
+            expected["length_beats"], observed_length
+        ):
+            mismatches.append(
+                LiveReadbackMismatch(
+                    operation.operation_id,
+                    "length_beats",
+                    expected["length_beats"],
+                    observed_length,
+                )
+            )
     return mismatches

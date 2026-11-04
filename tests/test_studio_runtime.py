@@ -406,3 +406,51 @@ def test_skip_instruments_leaves_the_tracks_for_another_loader(tmp_path: Path) -
     assert len(kihachi) == len(candidate.parts)
     assert all(track["device_names"] == [] for track in kihachi)
     assert result["sound_coverage"]["has_missing_sounds"] is True
+
+
+def test_verification_survives_a_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    applied = runtime.apply(candidate.candidate_id, confirmed=True)
+    assert applied["ok"] is True
+    report = runtime.verify(candidate.candidate_id)
+    assert report["candidate_id"] == candidate.candidate_id
+    saved_file = saved / f"{candidate.candidate_id}.verification.json"
+    assert saved_file.is_file()
+
+    restarted = _restarted(tmp_path, transport, saved)
+    restored = restarted._verifications.get(candidate.candidate_id)
+    assert restored is not None
+    assert restored["candidate_id"] == candidate.candidate_id
+    assert restored["checked_at"] == report["checked_at"]
+    assert restored["lines"] == report["lines"]
+
+
+def test_last_apply_survives_a_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    result = runtime.apply(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is True
+    assert (saved / ".kihachi-last-apply.json").is_file()
+
+    restarted = _restarted(tmp_path, transport, saved)
+    restored = restarted.last_apply()
+    assert restored is not None
+    assert restored["receipt"]["status"] == "verified"
+    assert restored["musical_quality_claimed"] is False
+
+
+def test_no_candidate_dir_keeps_records_in_memory_only(tmp_path: Path) -> None:
+    runtime, candidate, _transport = _runtime(tmp_path)
+    result = runtime.apply(candidate.candidate_id, confirmed=True)
+    assert result["ok"] is True
+    report = runtime.verify(candidate.candidate_id)
+    assert report["candidate_id"] == candidate.candidate_id
+    assert runtime.last_apply() is not None
+    leftovers = [
+        path
+        for path in tmp_path.rglob("*")
+        if path.name.endswith(".verification.json")
+        or path.name == ".kihachi-last-apply.json"
+    ]
+    assert leftovers == []

@@ -158,3 +158,40 @@ def test_a_token_from_another_request_is_refused() -> None:
         subject.authorize(other, token)
 
     assert error.value.code == "plan_changed"
+
+
+def test_approval_records_the_default_approver(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KIHACHI_APPROVER_ID", raising=False)
+    subject = gate()
+    token = subject.approve(_plan())
+    record = subject.approval_record(token)
+    assert record is not None
+    assert record["approved_by"] == "local_user"
+    assert record["approved_at"]
+
+
+def test_approval_records_the_env_named_approver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KIHACHI_APPROVER_ID", "kihachi")
+    subject = gate()
+    token = subject.approve(_plan())
+    record = subject.approval_record(token)
+    assert record is not None
+    assert record["approved_by"] == "kihachi"
+
+
+def test_an_explicit_approver_wins_over_the_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("KIHACHI_APPROVER_ID", "kihachi")
+    subject = gate(tmp_path)
+    token = subject.approve(_plan(), approver="homma")
+    record = subject.approval_record(token)
+    assert record is not None
+    assert record["approved_by"] == "homma"
+
+    reloaded = gate(tmp_path)
+    persisted = reloaded.approval_record(token)
+    assert persisted is not None
+    assert persisted["approved_by"] == "homma"

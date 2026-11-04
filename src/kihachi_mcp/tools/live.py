@@ -16,7 +16,8 @@ server cannot mutate a Set until one is configured.
 import json
 import logging
 import os
-from collections.abc import Mapping
+import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -52,25 +53,47 @@ APPROVAL_FILENAME = "pending-approval.json"
 _logger = logging.getLogger("kihachi.live.tools")
 
 
+def _unique_request_ids() -> Callable[[], str]:
+    """Return request ids that stay unique across server processes.
+
+    The Max device remembers every request id it has handled for as long
+    as it stays loaded and refuses a repeat as a duplicate. The services'
+    default factories restart a counter in every process, so a second
+    server process would collide with the previous one's very first id.
+    The Studio avoids this by injecting unique factories; the MCP tools
+    do the same here.
+    """
+    return lambda: f"mcp-{uuid.uuid4().hex}"
+
+
 class _LiveSession:
     """Process-local wiring for the Live tools."""
 
     def __init__(self) -> None:
         self.transport: LiveTransport | None = None
         self.gate = ApprovalGate()
-        self.inspector = LiveStateInspector()
+        self.inspector = LiveStateInspector(
+            request_id_factory=_unique_request_ids()
+        )
         self.planner = LiveMutationPlanner()
         self.expander = ArrangementExpander()
-        self.executor = LiveExecutionService(approval_gate=self.gate)
+        self.executor = LiveExecutionService(
+            inspector=self.inspector,
+            approval_gate=self.gate,
+            request_id_factory=_unique_request_ids(),
+        )
 
     def configure(self, transport: LiveTransport | None) -> None:
         """Install or clear the transport used by every Live tool."""
         self.transport = transport
-        self.inspector = LiveStateInspector(transport)
+        self.inspector = LiveStateInspector(
+            transport, request_id_factory=_unique_request_ids()
+        )
         self.executor = LiveExecutionService(
             transport=transport,
             inspector=self.inspector,
             approval_gate=self.gate,
+            request_id_factory=_unique_request_ids(),
         )
 
 

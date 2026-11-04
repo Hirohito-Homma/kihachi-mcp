@@ -9,7 +9,7 @@ CI と `uv run pytest` は fake transport のみを使います。**Ableton Live
 1. Ableton Live 11 以降 + Max for Live を用意します。
 2. [maxforlive/README.md](../maxforlive/README.md) の手順で `KIHACHI Live Device.amxd` を作成します。
 3. **バックアップ用に、テスト専用の新規 Set を作ります。** 既存の制作物では実行しないでください。
-4. `uv run python -c "from kihachi_mcp.services import LiveBridgeSession; print(LiveBridgeSession().write_handshake())"` でハンドシェイクを書き出します。
+4. MCP サーバーに Bridge を配線します。MCP クライアントのサーバー設定で環境変数 `KIHACHI_MCP_LIVE_TRANSPORT=localhost` を渡してからサーバーを起動してください。サーバーが起動時にハンドシェイクを書き出します。この変数が無いと Live ツールは常に `unavailable` を返します。Bridge を所有できるプロセスは同時に1つだけです。Studio 起動中に配線しようとすると拒否され、Studio 側は影響を受けません。
 
 各段階で、次へ進む前に必ず結果を確認してください。失敗した段階で止めます。自動リトライは行いません。
 

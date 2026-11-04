@@ -155,16 +155,32 @@ def create_live_mutation_plan(
 
 
 def request_live_execution(
-    project_plan: dict[str, Any],
+    project_plan: dict[str, Any] | None = None,
     live_state: dict[str, Any] | None = None,
     clip_bars: int = 4,
+    plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one approval-gated Live request without executing anything.
 
-    On success an approval token is written to an owner-only file and its
-    location is returned. The token itself is never included in this result: a
-    person must open that file and pass the token to ``execute_live_request``.
+    Pass ``project_plan`` to plan a Session View layout from scratch, or
+    pass ``plan`` to request approval for a plan another tool already
+    built (an Arrangement plan from ``expand_session_to_arrangement``).
+    Exactly one of the two must be given. The approval binds to the
+    plan's hash either way, and the same out-of-band token rule applies:
+    the token is written to an owner-only file and only its location is
+    returned, so a person must open that file and pass the token to
+    ``execute_live_request``.
     """
+    if (project_plan is None) == (plan is None):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": STATUS_BLOCKED,
+            "approval_required": False,
+            "plan": plan or project_plan or {},
+            "error": "pass exactly one of project_plan or plan",
+        }
+    if plan is not None:
+        return _request_plan_approval(plan)
     planned = create_live_mutation_plan(project_plan, live_state, clip_bars)
     if planned.get("status") in {STATUS_BLOCKED, STATUS_UNAVAILABLE}:
         return {
@@ -174,6 +190,11 @@ def request_live_execution(
             "plan": planned,
             "error": planned.get("error", ""),
         }
+    return _request_plan_approval(planned)
+
+
+def _request_plan_approval(planned: dict[str, Any]) -> dict[str, Any]:
+    """Register human approval for one built plan and file its token."""
     try:
         plan = LiveMutationPlan.from_dict(planned)
         token = _session.gate.approve(plan)

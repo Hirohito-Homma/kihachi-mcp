@@ -11,6 +11,16 @@ survives untouched and the request comes back as a conflict instead.
 
 Bar positions convert to Live beat time with the Set's own meter, so a 3/4 Set
 does not silently get 4/4 spacing.
+
+Sections longer than the source Session clip are tiled. The Live device
+duplicates a Session clip into the Arrangement at the clip's own loop length:
+its attempt to extend the copy by moving the end marker does not take effect
+on real hardware (verified 2026-11-08, W3-06b branch B — the placed clip
+stayed at the source length in the Set file and in a fresh inspection). So
+when a section's length is an exact multiple of the source clip's length,
+the plan emits one placement per tile at the source length, which the device
+honours. Non-multiple lengths keep the previous single-placement behaviour
+and still surface as a read-back mismatch instead of a silent trim.
 """
 
 import uuid
@@ -241,7 +251,12 @@ class _ArrangementBuilder:
                 )
                 continue
             self._plan_placement(
-                track.index, scene.index, section, source_clip.name, beats_per_bar
+                track.index,
+                scene.index,
+                section,
+                source_clip.name,
+                source_clip.length_beats,
+                beats_per_bar,
             )
 
     def _plan_placement(
@@ -250,6 +265,7 @@ class _ArrangementBuilder:
         scene_index: int,
         section: Any,
         source_clip_name: str,
+        source_length_beats: float,
         beats_per_bar: float,
     ) -> None:
         start = bar_to_beats(section.start_bar, beats_per_bar)
@@ -272,6 +288,51 @@ class _ArrangementBuilder:
                 )
             )
             return
+        for tile_start, tile_length in self._tiles(
+            start, length, source_length_beats
+        ):
+            self._plan_tile(
+                track_index,
+                scene_index,
+                section,
+                source_clip_name,
+                tile_start,
+                tile_length,
+            )
+
+    @staticmethod
+    def _tiles(
+        start: float, length: float, source_length_beats: float
+    ) -> list[tuple[float, float]]:
+        """Split a section range into placements the device can honour.
+
+        A section that is an exact multiple of the source clip's length
+        becomes one placement per tile at the source length. Anything else
+        (section no longer than the source, unknown source length, or a
+        non-multiple length) stays a single placement of the full length.
+        """
+        if source_length_beats > 0 and length > source_length_beats:
+            ratio = length / source_length_beats
+            tile_count = round(ratio)
+            if tile_count > 1 and abs(ratio - tile_count) < 1e-6:
+                return [
+                    (
+                        round(start + index * source_length_beats, 6),
+                        source_length_beats,
+                    )
+                    for index in range(tile_count)
+                ]
+        return [(start, length)]
+
+    def _plan_tile(
+        self,
+        track_index: int,
+        scene_index: int,
+        section: Any,
+        source_clip_name: str,
+        start: float,
+        length: float,
+    ) -> None:
         managed_id = canonical_hash(
             {"track": track_index, "section": section.name, "start": start}
         )[:8]

@@ -65,6 +65,11 @@ class MusicalConstraints:
     #: Section energy 0..1, when known. Context for providers; deterministic
     #: generators do not read it yet.
     section_energy: float | None = None
+    #: Inclusive MIDI pitch range (low, high) every note must stay inside,
+    #: when set. Sourced from the MW10 gateway's pitch-distribution reader
+    #: (the player's own recorded range) via the studio context; None keeps
+    #: the previous behaviour exactly.
+    pitch_range: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         if self.role not in MIDI_ROLES:
@@ -95,6 +100,10 @@ class MusicalConstraints:
         object.__setattr__(self, "section_name", str(self.section_name or "").strip()[:80])
         if self.section_energy is not None and not 0 <= self.section_energy <= 1:
             raise ValueError("section_energy must be between 0 and 1")
+        if self.pitch_range is not None:
+            low, high = self.pitch_range
+            if not 0 <= low <= high <= 127:
+                raise ValueError("pitch_range must satisfy 0 <= low <= high <= 127")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -107,6 +116,8 @@ class MusicalConstraints:
             data.pop("section_name", None)
         if data.get("section_energy") is None:
             data.pop("section_energy", None)
+        if data.get("pitch_range") is None:
+            data.pop("pitch_range", None)
         return data
 
     @classmethod
@@ -139,6 +150,11 @@ class MusicalConstraints:
             section_name=str(data.get("section_name") or ""),
             section_energy=(
                 float(data["section_energy"]) if data.get("section_energy") is not None else None
+            ),
+            pitch_range=(
+                (int(data["pitch_range"][0]), int(data["pitch_range"][1]))
+                if data.get("pitch_range")
+                else None
             ),
         )
 

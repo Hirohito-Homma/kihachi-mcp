@@ -3114,9 +3114,15 @@ def _apply_songspec_context(
     are 0-based. Caller-supplied constraint fields always win — the spec
     only fills what the caller left out. Raises ValueError on an unusable
     spec or a span outside the song, which callers surface as an error.
+
+    Independently of the spec, when OBSIDIAN_VAULT_PATH is configured the
+    MW10 gateway's recorded pitch range fills ``pitch_range`` (real note
+    data only; the reader's default never clamps generation).
     """
     if songspec is None:
-        return constraints
+        enriched = dict(constraints)
+        _fill_pitch_range(enriched)
+        return enriched
     from kihachi_mcp.models.songspec import SongSpec
 
     spec = SongSpec.from_dict(songspec)
@@ -3141,7 +3147,18 @@ def _apply_songspec_context(
             enriched["swing"] = spec.groove.swing
         if "syncopation" not in enriched and spec.groove.syncopation is not None:
             enriched["syncopation"] = spec.groove.syncopation
+    _fill_pitch_range(enriched)
     return enriched
+
+
+def _fill_pitch_range(enriched: dict[str, Any]) -> None:
+    if "pitch_range" in enriched:
+        return
+    from kihachi_mcp.services.mw10_range import pitch_range_from_env
+
+    found = pitch_range_from_env()
+    if found is not None:
+        enriched["pitch_range"] = list(found)
 
 
 def _midi_composition_request(

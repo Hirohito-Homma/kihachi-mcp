@@ -159,11 +159,20 @@ class ProviderMIDIComposer:
             anchor = root_pitch(c.key, octave_offset=_ROLE_ROOT_OCTAVES[engine])
             low, high = (anchor - 12, anchor + 12) if engine == "bass" else (anchor - 12, anchor + 24)
             whitelist = [p for p in range(low, high + 1) if p % 12 in allowed]
+            if c.pitch_range is not None:
+                ranged = [p for p in whitelist if c.pitch_range[0] <= p <= c.pitch_range[1]]
+                if ranged:
+                    whitelist = ranged
             prompt += (
                 f" Use ONLY these pitches (the {c.key} scale in this part's "
                 f"register): {', '.join(str(p) for p in whitelist)}. "
                 "Do not use any other pitch, including chromatic approach notes."
             )
+            if c.pitch_range is not None:
+                prompt += (
+                    f" Keep every pitch between {c.pitch_range[0]} and "
+                    f"{c.pitch_range[1]} inclusive (the player's recorded range)."
+                )
         prompt += (
             ' Return one JSON object like {"notes": [{"pitch": 39, "start": 0.75, "duration": 0.25, '
             '"velocity": 96, "channel": 0}]}; "start" and "duration" are numbers in beats, '
@@ -578,6 +587,13 @@ def _validate_result(notes: tuple[ComposedMidiNote, ...], c: MusicalConstraints)
             raise ValueError(
                 f"MIDI Composerのノートにキー {c.key} のスケール外の音が含まれています: {offending}"
             )
+    if c.pitch_range is not None:
+        low, high = c.pitch_range
+        outside = sorted({note.pitch for note in notes if not low <= note.pitch <= high})
+        if outside:
+            raise ValueError(
+                f"MIDI Composerのノートが音域レンジ {low}〜{high} の外に出ています: {outside}"
+            )
     ratio = chord_fit_ratio(notes, c)
     if ratio is not None and ratio > _CHORD_FIT_LIMIT:
         raise ValueError(
@@ -676,8 +692,18 @@ def _velocity(
         # Ghost notes are strictly quieter than standard notes (35-55)
         return rng.randint(35, min(55, max(36, c.velocity_min - 5)))
     if accent:
-        return rng.randint(max(c.velocity_min, min(c.velocity_max, 105)), c.velocity_max)
-    return rng.randint(max(c.velocity_min, c.velocity_max - 24), min(c.velocity_max, c.velocity_max - 5))
+        # Accents hug the ceiling so they stand out against the widened
+        # standard band below (with the 65-118 defaults: 112-118).
+        return rng.randint(max(c.velocity_min, min(c.velocity_max, c.velocity_max - 6)), c.velocity_max)
+    # Standard band widened (2026-11-09, KIHACHI): was velocity_max-24..-5
+    # (94-113 at the defaults), which left accents almost no headroom above
+    # ordinary notes. Now velocity_max-38..-14 (80-104 at the defaults), so
+    # the tiers separate: ghost 35-55 / standard 80-104 / accent 112-118.
+    # The max() on the high end keeps a narrow constraint range (a
+    # velocity_min close to velocity_max) from inverting the band.
+    low = max(c.velocity_min, c.velocity_max - 38)
+    high = min(c.velocity_max, c.velocity_max - 14)
+    return rng.randint(low, max(low, high))
 
 
 def _rhythm_notes(
@@ -802,6 +828,31 @@ def _part_drum_notes(c: MusicalConstraints, rng: Random, pitch: int) -> list[Com
     return notes
 
 
+# Bass laid-back "tame" (2026-11-09, KIHACHI): extra lag layered on top of
+# swing for bass offbeats only, in beats. At the house tempos this is ~11 ms
+# for an 8th-note offbeat at 110 BPM (~10 ms at 120 BPM) -- deliberately
+# beyond the MPC micro-offsets (max +0.014 beats) so the pop sits audibly
+# behind the beat, while quarter-note anchors stay locked on the grid.
+_BASS_OFFBEAT_LAG_BEATS = 0.020
+_BASS_SIXTEENTH_LAG_BEATS = 0.010
+
+
+def _bass_offbeat_lag(position_in_bar: float) -> float:
+    """Laid-back lag for a bass note sitting at `position_in_bar`, in beats.
+
+    The lag follows where the note actually lands after swing and the
+    kick-collision shift, resolved to the nearest 16th step: step 2 (the 8th
+    offbeat) leans back most, steps 1 and 3 (the 16th pockets) lean back
+    half as much, and step 0 (the quarter grid) stays locked.
+    """
+    step = round((position_in_bar % 1.0) * 4) % 4
+    if step == 2:
+        return _BASS_OFFBEAT_LAG_BEATS
+    if step in (1, 3):
+        return _BASS_SIXTEENTH_LAG_BEATS
+    return 0.0
+
+
 def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedMidiNote]:
     """Funky Slap Bass: Thumb on downbeats/syncopations, Pop on offbeats, ghost notes, 16-bar variations."""
     notes: list[ComposedMidiNote] = []
@@ -868,6 +919,12 @@ def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedM
             if c.avoid_kick_collision and round(start, 6) in kick and offset != 0.0:
                 start = _apply_swing(base + offset + 0.25, swing, c.grid)
 
+            # Laid-back tame on the offbeats (see _bass_offbeat_lag): applied
+            # last, on the note's final position, so a collision-shifted note
+            # leans back from where it actually sits instead of colliding
+            # with a neighbour that was shifted by a different amount.
+            start = round(start + _bass_offbeat_lag(start - base), 6)
+
             if start >= max_beats:
                 continue
 
@@ -880,7 +937,7 @@ def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedM
             if style == "ghost":
                 vel = _velocity(c, rng, ghost=True)
             elif style == "pop":
-                vel = min(c.velocity_max, _velocity(c, rng, accent=True) + 4)
+                vel = min(c.velocity_max, _velocity(c, rng, accent=True) + 6)
             else:
                 vel = _velocity(c, rng, accent=(offset == 0.0))
 

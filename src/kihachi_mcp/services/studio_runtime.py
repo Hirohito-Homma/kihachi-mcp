@@ -360,9 +360,12 @@ class StudioRuntime:
         constraints: dict[str, Any],
         operation: str = "generate",
         source_notes: list[dict[str, Any]] | None = None,
+        songspec: dict[str, Any] | None = None,
+        start_bar: int = 1,
     ) -> dict[str, Any]:
         """Validate one part request and estimate cost without running a model."""
         try:
+            constraints = _apply_songspec_context(constraints, songspec, start_bar)
             request = _midi_composition_request(constraints, operation, source_notes)
             provider = provider_from_settings(self._settings)
         except (TypeError, ValueError) as exc:
@@ -389,8 +392,14 @@ class StudioRuntime:
         source_notes: list[dict[str, Any]] | None = None,
         confirmed_paid: bool = False,
         seed: int = 0,
+        songspec: dict[str, Any] | None = None,
+        start_bar: int = 1,
     ) -> dict[str, Any]:
         """Compose a reviewable part. Paid providers require this request's confirmation."""
+        try:
+            constraints = _apply_songspec_context(constraints, songspec, start_bar)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
         preview = self.midi_composer_preview(constraints, operation, source_notes)
         if not preview.get("ok"):
             return preview
@@ -439,6 +448,7 @@ class StudioRuntime:
         role: str,
         pattern_bars: int,
         notes: list[dict[str, Any]],
+        section_name: str | None = None,
     ) -> dict[str, Any]:
         """Propose replacing only one candidate part with reviewed Composer notes."""
         candidate = self._lookup(candidate_id)
@@ -459,6 +469,13 @@ class StudioRuntime:
                 "error": "DrumsはKick/Hats/Snareに分かれるため、現在は一括採用できません",
             }
         targets = candidate.clips_for_part(part)
+        if section_name is not None:
+            targets = [clip for clip in targets if clip.section_name == section_name]
+            if not targets:
+                return {
+                    "ok": False,
+                    "error": f"この候補に{part}の{section_name}クリップがありません",
+                }
         if not targets:
             return {"ok": False, "error": f"この候補に{part}クリップがありません"}
         if candidate.brief.beats_per_bar != 4:
@@ -474,10 +491,15 @@ class StudioRuntime:
         pattern_beats = pattern_bars * candidate.brief.beats_per_bar
         if any(note.start + note.duration > pattern_beats + 1e-6 for note in parsed):
             return {"ok": False, "error": "Composerノートが指定パターン小節を超えています"}
+        def _in_scope(clip: CandidateClip) -> bool:
+            return clip.part == part and (
+                section_name is None or clip.section_name == section_name
+            )
+
         replaced: list[CandidateClip] = []
         changed_clips = 0
         for clip in candidate.clips:
-            if clip.part != part:
+            if not _in_scope(clip):
                 replaced.append(clip)
                 continue
             clip_beats = clip.length_bars * candidate.brief.beats_per_bar
@@ -517,7 +539,11 @@ class StudioRuntime:
                 f"全体fingerprint: {candidate.note_fingerprint[:12]}",
             ],
             "after": [
-                f"{part}だけを{pattern_bars}小節パターンで置換",
+                (
+                    f"{part}（{section_name}）だけを{pattern_bars}小節パターンで置換"
+                    if section_name is not None
+                    else f"{part}だけを{pattern_bars}小節パターンで置換"
+                ),
                 f"{changed_clips}クリップ / {child.note_count(part)}ノート",
                 f"全体fingerprint: {child.note_fingerprint[:12]}",
             ],
@@ -536,7 +562,7 @@ class StudioRuntime:
             "other_parts_unchanged": all(
                 old == new
                 for old, new in zip(candidate.clips, child.clips, strict=True)
-                if old.part != part
+                if not _in_scope(old)
             ),
             "requires_approval": True,
             "applied_to_live": False,
@@ -2969,6 +2995,47 @@ def _idle_job() -> dict[str, Any]:
         "error": "",
         "candidate_id": "",
     }
+
+
+def _apply_songspec_context(
+    constraints: dict[str, Any],
+    songspec: dict[str, Any] | None,
+    start_bar: int,
+) -> dict[str, Any]:
+    """Fill chord/section context from a SongSpec v2 dict into constraints.
+
+    ``start_bar`` is 1-based (the Studio clip convention); SongSpec bars
+    are 0-based. Caller-supplied constraint fields always win — the spec
+    only fills what the caller left out. Raises ValueError on an unusable
+    spec or a span outside the song, which callers surface as an error.
+    """
+    if songspec is None:
+        return constraints
+    from kihachi_mcp.models.songspec import SongSpec
+
+    spec = SongSpec.from_dict(songspec)
+    bars = int(constraints.get("bars") or 0)
+    if bars < 1:
+        raise ValueError("songspecを使うにはconstraintsのbarsが必要です")
+    start0 = start_bar - 1
+    if start0 < 0 or start0 + bars > spec.bars:
+        raise ValueError("songspecの範囲外の小節が指定されています")
+    enriched = dict(constraints)
+    if "chords_by_bar" not in enriched:
+        chords = spec.chords_for_span(start0, bars)
+        if any(chords):
+            enriched["chords_by_bar"] = list(chords)
+    section = spec.section_at(start0)
+    if section is not None:
+        enriched.setdefault("section_name", section.name)
+        if "section_energy" not in enriched:
+            enriched["section_energy"] = section.energy
+    if spec.groove is not None:
+        if "swing" not in enriched:
+            enriched["swing"] = spec.groove.swing
+        if "syncopation" not in enriched and spec.groove.syncopation is not None:
+            enriched["syncopation"] = spec.groove.syncopation
+    return enriched
 
 
 def _midi_composition_request(

@@ -1112,6 +1112,8 @@ def _workflow_post(
                 body.get("constraints") if isinstance(body.get("constraints"), dict) else {},
                 str(body.get("operation") or "generate"),
                 body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
+                songspec=body.get("songspec") if isinstance(body.get("songspec"), dict) else None,
+                start_bar=int(body.get("start_bar") or 1),
             )
         )
     elif path == "/api/midi/compose":
@@ -1122,6 +1124,8 @@ def _workflow_post(
                 body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
                 confirmed_paid=bool(body.get("confirmed_paid")),
                 seed=int(body.get("seed") or 0),
+                songspec=body.get("songspec") if isinstance(body.get("songspec"), dict) else None,
+                start_bar=int(body.get("start_bar") or 1),
             )
         )
     elif path == "/api/midi/adopt-preview":
@@ -1131,6 +1135,7 @@ def _workflow_post(
                 str(body.get("role") or ""),
                 int(body.get("pattern_bars") or 0),
                 body.get("notes") if isinstance(body.get("notes"), list) else [],
+                section_name=str(body["section_name"]) if body.get("section_name") else None,
             )
         )
     else:

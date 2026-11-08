@@ -44,7 +44,7 @@ from kihachi_mcp.models.midi_plan import MidiClipPlan, MidiPlan
 from kihachi_mcp.models.orchestration import OrchestrationResult
 from kihachi_mcp.models.project_plan import ProjectPlan
 from kihachi_mcp.models.review_result import ReviewResult
-from kihachi_mcp.models.songspec import SongSpec
+from kihachi_mcp.models.songspec import GrooveSpec, SectionSpec, SongSpec
 from kihachi_mcp.models.track import TrackSpec
 
 __all__ = [
@@ -59,6 +59,7 @@ __all__ = [
     "GenerationRequest",
     "GenerationResult",
     "GenreTemplate",
+    "GrooveSpec",
     "KnowledgeContext",
     "KnowledgeEntry",
     "LiveArrangementClip",
@@ -84,6 +85,7 @@ __all__ = [
     "ProjectPlan",
     "ReviewResult",
     "SchemaVersionError",
+    "SectionSpec",
     "SongSpec",
     "TrackSpec",
 ]

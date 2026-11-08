@@ -23,6 +23,7 @@ from kihachi_mcp.models.live_contract import (
     canonical_hash,
     managed_track_name,
 )
+from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
     ComposedMidiNote,
@@ -1363,7 +1364,7 @@ class StudioRuntime:
                 else:
                     record = {"candidate_id": candidate_id, "legacy": True}
                 self._approval_records[candidate_id] = record
-            except Exception:
+            except (OSError, ValueError):
                 self.invalidate_approval(candidate_id, "corrupted_approval_file")
                 return False
 
@@ -1439,7 +1440,7 @@ class StudioRuntime:
                     data["delivery_status"] = "UNKNOWN"
                     data["recovered_from_crash"] = True
                 return data
-            except Exception:
+            except Exception:  # noqa: BLE001 - any corrupt audit file reads as "no record"
                 return None
         return None
 
@@ -1449,9 +1450,7 @@ class StudioRuntime:
             return True
         audit = self.get_delivery_status(candidate_id)
         status = audit.get("delivery_status")
-        if status in ("PARTIAL", "UNKNOWN", "VERIFIED"):
-            return True
-        return False
+        return status in ("PARTIAL", "UNKNOWN", "VERIFIED")
 
     def get_delivery_status(self, candidate_id: str) -> dict[str, Any]:
         """Return the delivery and recovery audit status for a candidate, restoring from disk if needed."""
@@ -1752,7 +1751,6 @@ class StudioRuntime:
             "operations_count": operations,
             "conflicts": all_conflicts,
             "warnings": (preview or {}).get("warnings") or [],
-            "safe_to_deliver": safe_to_deliver,
             "blockers": blockers,
             "live_tracks_audit": (
                 track_mapping.get("live_tracks_audit", []) if track_mapping else []
@@ -1939,7 +1937,7 @@ class StudioRuntime:
         }
         try:
             self._save_delivery_audit(candidate_id, applying_record)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any persistence failure must refuse the write
             # If persistence fails, refuse write immediately to prevent untracked mutations
             return {
                 "ok": False,
@@ -1994,7 +1992,7 @@ class StudioRuntime:
         }
         try:
             self._save_delivery_audit(candidate_id, final_audit_record)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fall back to the in-memory record on any failure
             self._delivery_audit_records[candidate_id] = final_audit_record
 
         result["delivery_status"] = delivery_status

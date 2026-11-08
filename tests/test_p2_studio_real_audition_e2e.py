@@ -9,7 +9,6 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import pytest
 import soundfile as sf
 
 from kihachi_mcp.services.brief_parser import extract_explicit

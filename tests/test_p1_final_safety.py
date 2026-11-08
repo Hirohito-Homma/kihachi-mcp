@@ -1,14 +1,10 @@
-# -*- coding: utf-8 -*-
 """P1 Final Safety Test Suite: Dry Run TTL, Target Confirmation, and Partial Apply Recovery."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
-
-import pytest
 
 # Ensure kihachi_mcp is importable
 TESTS_DIR = Path(__file__).resolve().parent
@@ -17,8 +13,7 @@ if str(TESTS_DIR) not in sys.path:
 
 from live_fixtures import gate
 
-from kihachi_mcp.models.live_contract import managed_track_name
-from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
+from kihachi_mcp.models.midi_candidate import MidiCandidate
 from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import LiveStateInspector
@@ -33,7 +28,7 @@ from kihachi_mcp.services.live_transport_fake import (
 )
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
 from kihachi_mcp.services.studio_interpreter import assemble_brief
-from kihachi_mcp.services.studio_runtime import DRY_RUN_TTL_SECONDS, StudioRuntime
+from kihachi_mcp.services.studio_runtime import StudioRuntime
 
 
 class MockClock:
@@ -123,7 +118,7 @@ def _setup_runtime(
 def test_p1_dry_run_expired_refused(tmp_path: Path) -> None:
     """Task 1: Dry Run expires after 5 minutes (300s); write must be refused."""
     clock = MockClock(1000.0)
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, clock=clock)
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, clock=clock)
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -189,7 +184,7 @@ def test_p1_dry_run_ttl_boundary_conditions(tmp_path: Path) -> None:
 # -----------------------------------------------------------------------------
 def test_p1_unknown_live_set_requires_confirmation(tmp_path: Path) -> None:
     """Task 2: When Live Set name is UNKNOWN, explicit target confirmation is mandatory."""
-    runtime, live_set, _, candidate = _setup_runtime(tmp_path, set_name="")
+    runtime, _live_set, _, candidate = _setup_runtime(tmp_path, set_name="")
     cid = candidate.candidate_id
     runtime.approve(cid)
 
@@ -242,7 +237,7 @@ def test_p1_live_fingerprint_change_invalidates_target_confirmation(tmp_path: Pa
 # -----------------------------------------------------------------------------
 def test_p1_partial_application_handling_and_recovery_report(tmp_path: Path) -> None:
     """Task 3: Simulate mid-application failure, verify PARTIAL transition and recovery report."""
-    runtime, live_set, transport, candidate = _setup_runtime(tmp_path)
+    runtime, _live_set, transport, candidate = _setup_runtime(tmp_path)
     cid = candidate.candidate_id
     runtime.approve(cid)
 

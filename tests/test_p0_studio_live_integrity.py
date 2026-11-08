@@ -1,14 +1,10 @@
-# -*- coding: utf-8 -*-
 """P0 Test Suite: Studio project state, approval state, and Live delivery integrity."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
-from typing import Any
-
-import pytest
+from pathlib import Path
 
 # Ensure kihachi_mcp is importable
 TESTS_DIR = Path(__file__).resolve().parent
@@ -18,7 +14,6 @@ if str(TESTS_DIR) not in sys.path:
 from live_fixtures import gate
 
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-from kihachi_mcp.models.production_brief import ProductionBrief
 from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_state_inspector import LiveStateInspector

@@ -91,7 +91,7 @@ class StudioApp:
             try:
                 data = json.loads(self._eval_path.read_text("utf-8"))
                 return data if isinstance(data, dict) else {}
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - best-effort cache; memory is the fallback
                 pass
         return {}
 
@@ -102,7 +102,7 @@ class StudioApp:
         try:
             self._eval_path.parent.mkdir(parents=True, exist_ok=True)
             self._eval_path.write_text(json.dumps(self._evaluations, ensure_ascii=False, indent=2), "utf-8")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - best-effort cache; memory copy already updated
             pass
 
     def hold_music_plan(
@@ -475,7 +475,9 @@ def _handler_for(app: StudioApp):
                         part_filter=part_filter,
                         swing_override=swing_override,
                     )
-                    from kihachi_mcp.services.candidate_audio_preview import measure_preview_audio
+                    from kihachi_mcp.services.candidate_audio_preview import (
+                        measure_preview_audio,
+                    )
                     metrics = measure_preview_audio(wav_data)
                     metrics["candidate_id"] = candidate.candidate_id
                     metrics["content_hash"] = candidate.note_fingerprint
@@ -550,8 +552,15 @@ def _handler_for(app: StudioApp):
                     return
                 import time as _time
                 import uuid as _uuid
-                from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
-                from kihachi_mcp.models.midi_composer import MidiCompositionRequest, MusicalConstraints
+
+                from kihachi_mcp.models.midi_candidate import (
+                    CandidateClip,
+                    MidiCandidate,
+                )
+                from kihachi_mcp.models.midi_composer import (
+                    MidiCompositionRequest,
+                    MusicalConstraints,
+                )
                 from kihachi_mcp.services.midi_composer import DeterministicMIDIComposer
                 from kihachi_mcp.services.session_pattern_builder import MidiNote
 

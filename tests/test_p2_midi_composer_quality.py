@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P2 MIDI Composer Quality Enhancement Test Suite.
 
 Covers:
@@ -11,19 +10,14 @@ Covers:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import sys
-from typing import Any
-
-import pytest
+from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from kihachi_mcp.models.midi_composer import (
-    ComposedMidiNote,
     MidiCompositionRequest,
     MusicalConstraints,
 )

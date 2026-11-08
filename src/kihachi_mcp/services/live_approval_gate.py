@@ -23,6 +23,11 @@ from typing import Any
 from kihachi_mcp.models.live_mutation import LiveMutationPlan
 
 APPROVAL_TTL_SECONDS = 900
+#: Who is recorded as the approver when a caller does not name one. The
+#: deployment is single-user today, so the default is a fixed local identity;
+#: KIHACHI_APPROVER_ID can name the actual person without a code change.
+DEFAULT_APPROVER = "local_user"
+APPROVER_ENV_VAR = "KIHACHI_APPROVER_ID"
 
 
 class ApprovalError(Exception):
@@ -51,11 +56,15 @@ class ApprovalGate:
         self._approvals: dict[str, dict[str, Any]] = state.get("approvals", {})
         self._consumed: dict[str, str] = state.get("consumed", {})
 
-    def approve(self, plan: LiveMutationPlan) -> str:
+    def approve(self, plan: LiveMutationPlan, approver: str | None = None) -> str:
         """Record a human approval for exactly this plan and return its token.
 
         The caller is responsible for having actually shown the plan to a
         person. This method records a decision; it does not make one.
+
+        The record names who approved (FR-APR-002): the explicit ``approver``
+        when given, else the KIHACHI_APPROVER_ID environment value, else the
+        fixed single-user default.
         """
         if plan.conflicts:
             raise ApprovalError(
@@ -75,6 +84,7 @@ class ApprovalGate:
             "plan_hash": plan.plan_hash,
             "set_fingerprint": plan.set_fingerprint,
             "approved_at": self._clock().isoformat(),
+            "approved_by": _resolve_approver(approver),
         }
         self._save()
         return token
@@ -103,6 +113,11 @@ class ApprovalGate:
             raise ApprovalError(
                 "expired", "the plan expired; inspect Live and plan again"
             )
+
+    def approval_record(self, token: str) -> dict[str, Any] | None:
+        """Return a copy of the recorded approval for ``token``, if any."""
+        record = self._approvals.get(token)
+        return dict(record) if record is not None else None
 
     def consume(self, plan: LiveMutationPlan, token: str) -> None:
         """Retire the idempotency key and token after an execution attempt.
@@ -162,3 +177,9 @@ class ApprovalGate:
             temporary.write("\n")
             temporary_path = Path(temporary.name)
         temporary_path.replace(self._storage_path)
+
+
+
+def _resolve_approver(approver: str | None) -> str:
+    named = (approver or os.getenv(APPROVER_ENV_VAR) or "").strip()
+    return named or DEFAULT_APPROVER

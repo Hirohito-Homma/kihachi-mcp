@@ -101,6 +101,10 @@ JOB_CANCELLED = "cancelled"
 _CANDIDATE_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 #: The dot keeps this file out of the candidate id pattern.
 REVISION_HISTORY_FILE = ".kihachi-revisions.json"
+#: The last apply result, kept across restarts like the revision history.
+LAST_APPLY_FILE = ".kihachi-last-apply.json"
+#: Suffix of the per-candidate read-back verification record.
+VERIFICATION_SUFFIX = ".verification.json"
 AUDIO_SUFFIXES = frozenset({".wav", ".aif", ".aiff", ".flac"})
 #: A model reply that fails validation is asked for again at most this often.
 AI_ATTEMPTS = 2
@@ -207,6 +211,10 @@ class StudioRuntime:
             self._selected_id = _latest_saved_id(self._candidate_dir)
             self._revision_history = _read_json_list(
                 self._candidate_dir / REVISION_HISTORY_FILE
+            )
+            self._verifications = _read_verifications(self._candidate_dir)
+            self._last_apply = _read_json_dict(
+                self._candidate_dir / LAST_APPLY_FILE
             )
 
     def close(self) -> None:
@@ -827,6 +835,7 @@ class StudioRuntime:
                 ),
             }
             self._last_apply = result
+            self._save_last_apply(result)
             return result
         finally:
             self._apply_lock.release()
@@ -1225,6 +1234,7 @@ class StudioRuntime:
         report["candidate_id"] = candidate_id
         report["checked_at"] = time.time()
         self._verifications[candidate_id] = report
+        self._save_verification(candidate_id, report)
         return report
 
     def _remember_expected(
@@ -1782,6 +1792,29 @@ class StudioRuntime:
             return None
         return self._candidate_dir / f"{candidate_id}{suffix}"
 
+    def _save_verification(self, candidate_id: str, report: dict[str, Any]) -> None:
+        """Persist a verification report next to its candidate.
+
+        Best effort: the in-memory record stays authoritative, so a disk
+        failure must never turn a completed verification into an error.
+        """
+        path = self._candidate_path(candidate_id, VERIFICATION_SUFFIX)
+        if path is None:
+            return
+        try:
+            _write_json_atomic(path, report)
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def _save_last_apply(self, result: dict[str, Any]) -> None:
+        """Persist the last apply result so a restart keeps the receipt."""
+        if self._candidate_dir is None:
+            return
+        try:
+            _write_json_atomic(self._candidate_dir / LAST_APPLY_FILE, result)
+        except (OSError, TypeError, ValueError):
+            pass
+
     def _mark_applied(self, candidate_id: str) -> None:
         """Remember the attempt on disk so a restart cannot apply it twice."""
         self._mark(candidate_id, ".applied")
@@ -2054,6 +2087,31 @@ def _read_json_list(path: Path) -> list[dict[str, Any]]:
     except (OSError, json.JSONDecodeError):
         return []
     return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _read_json_dict(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_verifications(directory: Path) -> dict[str, dict[str, Any]]:
+    """Rebuild the verification records saved next to their candidates."""
+    records: dict[str, dict[str, Any]] = {}
+    try:
+        paths = sorted(directory.glob(f"*{VERIFICATION_SUFFIX}"))
+    except OSError:
+        return records
+    for path in paths:
+        candidate_id = path.name[: -len(VERIFICATION_SUFFIX)]
+        if not _CANDIDATE_ID_RE.fullmatch(candidate_id):
+            continue
+        report = _read_json_dict(path)
+        if report is not None:
+            records[candidate_id] = report
+    return records
 
 
 def _public_revision(record: dict[str, Any]) -> dict[str, Any]:

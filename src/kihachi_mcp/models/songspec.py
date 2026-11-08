@@ -163,6 +163,16 @@ class SongSpec:
             start += section.bars
         return None
 
+    def chords_for_span(self, start_bar: int, bar_count: int) -> tuple[str, ...]:
+        """Chord symbol for each bar of ``[start_bar, start_bar + bar_count)``.
+
+        Returns "" for bars whose section names no chord. This is the span a
+        per-clip ``MusicalConstraints.chords_by_bar`` is built from.
+        """
+        if start_bar < 0 or bar_count < 1 or start_bar + bar_count > self.bars:
+            raise ValueError("span is outside the song")
+        return tuple(self.chord_at(start_bar + offset) or "" for offset in range(bar_count))
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Create a SongSpec from a JSON-compatible dict."""

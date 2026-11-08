@@ -56,6 +56,15 @@ class MusicalConstraints:
     swing: float = 0.5
     mpc_groove: bool = False
     triplet_rolls: bool = False
+    #: Chord symbol per bar of this clip ("" = no chord specified for that
+    #: bar). Empty tuple means the clip carries no progression at all, in
+    #: which case generation behaves exactly as before this field existed.
+    chords_by_bar: tuple[str, ...] = field(default_factory=tuple)
+    #: Section this clip belongs to (e.g. "Drop"), when the caller knows it.
+    section_name: str = ""
+    #: Section energy 0..1, when known. Context for providers; deterministic
+    #: generators do not read it yet.
+    section_energy: float | None = None
 
     def __post_init__(self) -> None:
         if self.role not in MIDI_ROLES:
@@ -79,12 +88,25 @@ class MusicalConstraints:
         object.__setattr__(self, "genre", str(self.genre or "").strip()[:80])
         object.__setattr__(self, "mood", str(self.mood or "").strip()[:80])
         object.__setattr__(self, "prompt", str(self.prompt or "").strip()[:500])
+        chords = tuple(str(chord or "").strip()[:24] for chord in self.chords_by_bar)
+        if chords and len(chords) != self.bars:
+            raise ValueError("chords_by_bar must name one chord per bar of the clip")
+        object.__setattr__(self, "chords_by_bar", chords)
+        object.__setattr__(self, "section_name", str(self.section_name or "").strip()[:80])
+        if self.section_energy is not None and not 0 <= self.section_energy <= 1:
+            raise ValueError("section_energy must be between 0 and 1")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         for key in ("genre", "mood", "prompt"):
             if not data.get(key):
                 data.pop(key, None)
+        if not data.get("chords_by_bar"):
+            data.pop("chords_by_bar", None)
+        if not data.get("section_name"):
+            data.pop("section_name", None)
+        if data.get("section_energy") is None:
+            data.pop("section_energy", None)
         return data
 
     @classmethod
@@ -113,6 +135,11 @@ class MusicalConstraints:
             swing=float(data.get("swing") if data.get("swing") is not None else 0.5),
             mpc_groove=bool(data.get("mpc_groove")),
             triplet_rolls=bool(data.get("triplet_rolls")),
+            chords_by_bar=tuple(str(chord or "") for chord in data.get("chords_by_bar") or ()),
+            section_name=str(data.get("section_name") or ""),
+            section_energy=(
+                float(data["section_energy"]) if data.get("section_energy") is not None else None
+            ),
         )
 
 

@@ -138,6 +138,15 @@ class ProviderMIDIComposer:
                     f" Build the chords from the tonic triad MIDI {root}, {root + third}, {root + 7} "
                     f"and other notes of the {c.key} scale only."
                 )
+        if c.chords_by_bar:
+            prompt += " " + _progression_prompt_text(c)
+        if c.section_name:
+            prompt += f" This clip is the '{c.section_name}' section of the song."
+            if c.section_energy is not None:
+                prompt += (
+                    f" Its energy is {c.section_energy:.2f} on a 0..1 scale; "
+                    "let density and dynamics follow it."
+                )
         prompt += (
             ' Return one JSON object like {"notes": [{"pitch": 39, "start": 0.75, "duration": 0.25, '
             '"velocity": 96, "channel": 0}]}; "start" and "duration" are numbers in beats, '
@@ -247,6 +256,153 @@ def _scale_pitch_classes(key: str) -> frozenset[int]:
     return frozenset((tonic + interval) % 12 for interval in intervals)
 
 
+_CHORD_ROOT_PC = {"c": 0, "d": 2, "e": 4, "f": 5, "g": 7, "a": 9, "b": 11}
+_CHORD_QUALITIES: dict[str, tuple[int, ...]] = {
+    "": (0, 4, 7),
+    "maj": (0, 4, 7),
+    "m": (0, 3, 7),
+    "min": (0, 3, 7),
+    "-": (0, 3, 7),
+    "7": (0, 4, 7, 10),
+    "m7": (0, 3, 7, 10),
+    "min7": (0, 3, 7, 10),
+    "maj7": (0, 4, 7, 11),
+    "mmaj7": (0, 3, 7, 11),
+    "dim": (0, 3, 6),
+    "dim7": (0, 3, 6, 9),
+    "aug": (0, 4, 8),
+    "sus4": (0, 5, 7),
+    "sus2": (0, 2, 7),
+    "5": (0, 7),
+    "6": (0, 4, 7, 9),
+    "m6": (0, 3, 7, 9),
+    "9": (0, 4, 7, 10, 14),
+    "m9": (0, 3, 7, 10, 14),
+    "add9": (0, 4, 7, 14),
+}
+
+
+def _parse_chord(symbol: str) -> tuple[int, tuple[int, ...]] | None:
+    """Parse an absolute chord symbol (``D#m``, ``B``, ``F#m7``).
+
+    Returns ``(root_pitch_class, intervals)`` or None when the symbol is
+    empty or its quality is not a supported spelling, so an unknown chord
+    opts out of chord-aware behavior instead of being judged against a
+    guessed voicing.
+    """
+    text = (symbol or "").strip()
+    if not text or text[0].lower() not in _CHORD_ROOT_PC:
+        return None
+    root_pc = _CHORD_ROOT_PC[text[0].lower()]
+    rest = text[1:]
+    if rest.startswith("#"):
+        root_pc += 1
+        rest = rest[1:]
+    elif rest.startswith("b"):
+        root_pc -= 1
+        rest = rest[1:]
+    intervals = _CHORD_QUALITIES.get(rest.strip().lower())
+    if intervals is None:
+        return None
+    return root_pc % 12, intervals
+
+
+def _chord_pitch_classes(symbol: str) -> frozenset[int] | None:
+    parsed = _parse_chord(symbol)
+    if parsed is None:
+        return None
+    root_pc, intervals = parsed
+    return frozenset((root_pc + interval) % 12 for interval in intervals)
+
+
+def _bar_chord_tones(c: MusicalConstraints, bar: int) -> frozenset[int] | None:
+    """Chord tones in force at a 0-based bar of the clip, if specified."""
+    if not c.chords_by_bar or not 0 <= bar < len(c.chords_by_bar):
+        return None
+    return _chord_pitch_classes(c.chords_by_bar[bar])
+
+
+def _chord_root_pitch(c: MusicalConstraints, bar: int, base_pitch: int) -> int:
+    """Chord root for a bar, voiced in the register around ``base_pitch``.
+
+    Falls back to ``base_pitch`` (the key's tonic anchor) when the bar has
+    no parseable chord, so progression-free generation is unchanged.
+    """
+    if not c.chords_by_bar or not 0 <= bar < len(c.chords_by_bar):
+        return base_pitch
+    parsed = _parse_chord(c.chords_by_bar[bar])
+    if parsed is None:
+        return base_pitch
+    pitch = base_pitch - (base_pitch % 12) + parsed[0]
+    while pitch - base_pitch > 6:
+        pitch -= 12
+    while base_pitch - pitch > 6:
+        pitch += 12
+    return pitch
+
+
+def _snap_to_chord_tone(pitch: int, tones: frozenset[int]) -> int:
+    """Nearest pitch whose pitch class is a chord tone (ties prefer up)."""
+    for delta in range(1, 7):
+        if pitch + delta <= 127 and (pitch + delta) % 12 in tones:
+            return pitch + delta
+        if pitch - delta >= 0 and (pitch - delta) % 12 in tones:
+            return pitch - delta
+    return pitch
+
+
+#: A melodic line may use scale passing tones freely; it fails the chord
+#: check only when most of its judged notes ignore the progression.
+_CHORD_FIT_LIMIT = 0.5
+
+
+def chord_fit_ratio(
+    notes: tuple[ComposedMidiNote, ...], c: MusicalConstraints
+) -> float | None:
+    """Share of pitched notes that fall outside their bar's chord tones.
+
+    Only bars whose chord symbol could be parsed are judged. Drum parts,
+    the combined all-parts role, and clips without a usable progression
+    return None. 0.0 means every judged note is a chord tone.
+    """
+    if c.role == ROLE_ALL or _engine_for(c.role) not in _SCALE_CHECKED_ENGINES:
+        return None
+    if not c.chords_by_bar:
+        return None
+    judged = 0
+    off_chord = 0
+    for note in notes:
+        tones = _bar_chord_tones(c, int(note.start // 4))
+        if tones is None:
+            continue
+        judged += 1
+        if note.pitch % 12 not in tones:
+            off_chord += 1
+    if judged == 0:
+        return None
+    return off_chord / judged
+
+
+def _progression_prompt_text(c: MusicalConstraints) -> str:
+    """Run-length summary of the per-bar progression for provider prompts."""
+    runs: list[str] = []
+    start = 0
+    for index in range(1, len(c.chords_by_bar) + 1):
+        if index == len(c.chords_by_bar) or c.chords_by_bar[index] != c.chords_by_bar[start]:
+            symbol = c.chords_by_bar[start] or "(no chord specified)"
+            if index - start == 1:
+                runs.append(f"bar {start + 1}: {symbol}")
+            else:
+                runs.append(f"bars {start + 1}-{index}: {symbol}")
+            start = index
+    return (
+        "Chord progression by bar: " + "; ".join(runs) + ". Follow it: the bass anchors "
+        "on each bar's chord root, chord parts play that bar's chord tones, and melody "
+        "and arp lines favor that bar's chord tones on strong beats (scale passing "
+        "tones are fine elsewhere)."
+    )
+
+
 def _rescue_transpose(
     notes: tuple[ComposedMidiNote, ...], c: MusicalConstraints
 ) -> tuple[ComposedMidiNote, ...] | None:
@@ -318,6 +474,12 @@ def _validate_result(notes: tuple[ComposedMidiNote, ...], c: MusicalConstraints)
             raise ValueError(
                 f"MIDI Composerのノートにキー {c.key} のスケール外の音が含まれています: {offending}"
             )
+    ratio = chord_fit_ratio(notes, c)
+    if ratio is not None and ratio > _CHORD_FIT_LIMIT:
+        raise ValueError(
+            f"MIDI Composerのノートがコード進行に合っていません"
+            f"（コード外の音 {ratio:.0%}、上限 {_CHORD_FIT_LIMIT:.0%}）"
+        )
 
 
 def _grid_beats(grid: str) -> float:
@@ -547,8 +709,12 @@ def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedM
     # root, minor 3rd (+3), 4th (+5), 5th (+7), minor 7th (+10), octave (+12)
     m3, p4, p5, m7, oct_int = 3, 5, 7, 10, 12
 
+    song_root = root
     for bar in range(c.bars):
         base = bar * 4.0
+        # With a progression, each bar anchors on its own chord root (the
+        # pattern shapes stay the house shapes, transposed to the chord).
+        root = _chord_root_pitch(c, bar, song_root)
         is_turnaround = (bar % 8 == 7)
         is_fill_bar = (bar % 4 == 3)
 
@@ -686,6 +852,15 @@ def _chord_notes(c: MusicalConstraints, root: int) -> list[ComposedMidiNote]:
 
     for bar in range(c.bars):
         base = bar * 4.0
+        # With a progression, stab the bar's own chord in the house register;
+        # without one, keep the tonic voicing this generator has always used.
+        bar_root = root
+        bar_intervals = chord_intervals
+        if c.chords_by_bar and bar < len(c.chords_by_bar):
+            parsed = _parse_chord(c.chords_by_bar[bar])
+            if parsed is not None:
+                bar_root = _chord_root_pitch(c, bar, root)
+                bar_intervals = parsed[1]
         stabs = [(1.5, 108)]
         if bar % 2 == 1:
             stabs.append((3.5, 102))
@@ -713,10 +888,10 @@ def _chord_notes(c: MusicalConstraints, root: int) -> list[ComposedMidiNote]:
             if duration <= 1e-6:
                 continue
 
-            for interval in chord_intervals:
+            for interval in bar_intervals:
                 notes.append(
                     ComposedMidiNote(
-                        root + interval,
+                        bar_root + interval,
                         start,
                         duration,
                         vel,
@@ -745,5 +920,11 @@ def _melodic_notes(c: MusicalConstraints, root: int, rng: Random, arp: bool) -> 
         if duration <= 1e-6:
             continue
         pitch = root + scale[(index * 2 if arp else rng.randrange(len(scale))) % len(scale)]
+        if c.chords_by_bar and raw_start % 1.0 == 0:
+            # Strong beats land on the bar's chord tones when a progression
+            # is in force; passing tones between beats stay free.
+            tones = _bar_chord_tones(c, int(raw_start // 4))
+            if tones is not None and pitch % 12 not in tones:
+                pitch = _snap_to_chord_tone(pitch, tones)
         notes.append(ComposedMidiNote(pitch, round(start, 6), duration, _velocity(c, rng), 0))
     return notes

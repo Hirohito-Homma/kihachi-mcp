@@ -9,7 +9,7 @@ nodes['dialogue-alternatives'].children=[];
 nodes['dialogue-alternatives'].replaceChildren=()=>{nodes['dialogue-alternatives'].children=[];};
 nodes['dialogue-alternatives'].append=child=>{nodes['dialogue-alternatives'].children.push(child);};
 nodes['dialogue-auto-send'].checked=false;
-let sends=0, trackStops=0, recorder;
+let sends=0, trackStops=0, recorder, audioRequest;
 let transcriptionResult={ok:true,transcript:'キックを短く'};
 nodes['dialogue-send'].click=()=>{sends++;};
 class Recorder{
@@ -22,7 +22,7 @@ const context=vm.createContext({
   $:id=>nodes[id], stopDialogueAudio(){},
   document:{createElement:()=>({textContent:'',onclick:null})},
   getJson:async()=>({asr_installed:true,ffmpeg_available:true,usage_description_present:true,on_device:true,available:true,authorization:'authorized',message:'ready'}),
-  navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){trackStops++;}}]})}},
+  navigator:{mediaDevices:{getUserMedia:async(constraints)=>{audioRequest=constraints;return {getTracks:()=>[{stop(){trackStops++;}}]};}}},
   window:{MediaRecorder:Recorder,addEventListener(){}},MediaRecorder:Recorder,
   Blob,Buffer,fetch:async()=>({ok:true,json:async()=>transcriptionResult}),
   setTimeout:()=>1,clearTimeout(){}
@@ -32,6 +32,10 @@ vm.runInContext(source,context);
   await new Promise(resolve=>setImmediate(resolve));
   await nodes['dialogue-record'].onclick();
   await recorder.stop();
+  assert.equal(audioRequest.audio.echoCancellation,true);
+  assert.equal(audioRequest.audio.noiseSuppression,true);
+  assert.equal(audioRequest.audio.autoGainControl,true);
+  assert.equal(audioRequest.audio.channelCount,1);
   assert.equal(nodes['dialogue-utterance'].value,'キックを短く');
   assert.equal(sends,0,'recognized speech should wait for review by default');
   assert.equal(trackStops,1,'microphone must be released');

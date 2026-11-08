@@ -125,6 +125,7 @@ def test_verification_fails_when_live_lost_a_note(tmp_path: Path) -> None:
     runtime, live = _studio(tmp_path)
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=True)
     runtime.send_to_ableton(candidate_id, confirmed=True, change_tempo=True)
     clip = next(iter(live.session_clips.values()))
     clip.notes.pop()
@@ -138,6 +139,7 @@ def test_verification_survives_a_restart(tmp_path: Path) -> None:
     runtime, live = _studio(tmp_path)
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=True)
     runtime.send_to_ableton(candidate_id, confirmed=True, change_tempo=True)
     restarted, _ = _studio(tmp_path, live=live)
     assert restarted.is_approved(candidate_id)
@@ -149,6 +151,7 @@ def test_tempo_left_unchanged_is_skip_not_pass(tmp_path: Path) -> None:
     runtime, _live = _studio(tmp_path, live=FakeLiveSet(live_version="12.4.3", tempo=128))
     candidate_id = _create(runtime, SMOKE_TEST)
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id, change_tempo=False)
     result = runtime.send_to_ableton(candidate_id, confirmed=True)
     tempo = next(line for line in result["verification"]["lines"] if line["name"] == "Tempo")
     assert tempo["status"] == "SKIP"
@@ -226,6 +229,25 @@ def test_golden_path_1_reaches_project_ready(tmp_path: Path) -> None:
     assert sections[0]["start_bar"] == 1
     assert sections[-1]["end_bar"] == 64
     _send_expand_verify(runtime, candidate_id)
+
+
+def test_repeated_drop_names_do_not_double_count_section_notes(tmp_path: Path) -> None:
+    runtime, _live = _studio(tmp_path)
+    candidate_id = _create(runtime, "124 BPM、D# minor、128小節")
+    candidate = runtime.get_candidate(candidate_id)
+    sections = runtime.project(candidate_id)["arrangement"]["sections"]
+
+    assert [section["name"] for section in sections].count("Drop") == 2
+    assert sum(section["notes"] for section in sections) == candidate.note_count()
+    for section in sections:
+        clips = [
+            clip for clip in candidate.clips
+            if section["start_bar"] <= clip.start_bar <= section["end_bar"]
+        ]
+        assert section["notes"] == sum(len(clip.notes) for clip in clips)
+        assert set(section["active_tracks"]) == {
+            clip.part for clip in clips if clip.notes
+        }
 
 
 def test_kihachi_golden_path_shapes_the_notes(tmp_path: Path) -> None:
@@ -310,8 +332,26 @@ def test_swing_amount_is_not_the_swing_genre() -> None:
 def test_model_json_is_repaired_only_around_one_object() -> None:
     assert parse_model_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_model_json('Here: {"a": 1} done') == {"a": 1}
+    assert parse_model_json({"a": 1}) == {"a": 1}
+    assert parse_model_json('<think>scratch {</think>{"a": 1}') == {"a": 1}
     with pytest.raises(InterpretationError):
         parse_model_json("no json at all")
+
+
+def test_openai_structured_payload_reads_parsed_json_and_skips_reasoning() -> None:
+    from kihachi_mcp.services.ai_provider import _structured_payload
+
+    payload = {
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "content": [{"text": "scratch {"}]},
+            {"type": "message", "content": [{"parsed": {"a": 1}}]},
+        ],
+    }
+    assert _structured_payload(payload) == {"a": 1}
+    incomplete = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
+    with pytest.raises(InterpretationError, match="途切れました"):
+        _structured_payload(incomplete)
 
 
 class _Client:

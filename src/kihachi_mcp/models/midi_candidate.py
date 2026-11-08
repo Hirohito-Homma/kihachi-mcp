@@ -102,6 +102,38 @@ class MidiCandidate:
             }
         )
 
+    @property
+    def content_hash(self) -> str:
+        """Return a hash over all SongSpec metadata, Arrangement sections, and MIDI clips."""
+        brief = self.brief
+        return canonical_hash(
+            {
+                "candidate_id": self.candidate_id,
+                "seed": self.seed,
+                "songspec": {
+                    "tempo": brief.tempo.value,
+                    "key": brief.key.value,
+                    "genre": brief.genre.value,
+                    "bars": brief.bars.value,
+                    "mood": brief.mood.value,
+                    "time_signature": f"{brief.meter_numerator}/{brief.meter_denominator}",
+                    "meter_numerator": brief.meter_numerator,
+                    "meter_denominator": brief.meter_denominator,
+                    "beats_per_bar": brief.beats_per_bar,
+                },
+                "arrangement": [
+                    {
+                        "name": s.name,
+                        "start_bar": s.start_bar,
+                        "length_bars": s.length_bars,
+                        "end_bar": s.end_bar,
+                    }
+                    for s in brief.sections
+                ],
+                "clips": [clip.to_dict() for clip in self.clips],
+            }
+        )
+
     def clips_for_part(self, part: str) -> list[CandidateClip]:
         """Return section clips for one part in bar order."""
         return [clip for clip in self.clips if clip.part == part]
@@ -126,6 +158,7 @@ class MidiCandidate:
             "seed": self.seed,
             "parent_candidate_id": self.parent_candidate_id,
             "note_fingerprint": self.note_fingerprint,
+            "content_hash": self.content_hash,
             "brief": self.brief.to_dict(),
             "clips": [clip.to_dict() for clip in self.clips],
             "note_counts": {

@@ -29,5 +29,12 @@ htmlcov/
 # Local credentials
 .env
 
+# AI Company OS local runtime
+ai-company-os/**/node_modules/
+ai-company-os/**/.next/
+ai-company-os/**/.venv/
+ai-company-os/**/*.db
+ai-company-os/**/data/
+
 # Generated audio artifacts
 outputs/

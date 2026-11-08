@@ -849,15 +849,20 @@ function loadDrumPadSample(target, args) {
     if (countChildren(pad.api, "chains") > 0) {
         return drumPadReadback(target.track_index, rack.index, note, true);
     }
-    var before = countChildren(pad.api, "chains");
-    pad.api.call("insert_chain");
-    var after = countChildren(pad.api, "chains");
+    /* insert_chain belongs to RackDevice. New Drum Rack chains start on
+     * All Notes; assigning in_note makes the chain appear on this pad. */
+    var before = countChildren(rack.api, "chains");
+    rack.api.call("insert_chain");
+    var after = countChildren(rack.api, "chains");
     if (after <= before) {
         refuse("Drum Rack chain was not inserted");
     }
-    var chainPath = rack.path + " drum_pads " + pad.index + " chains " + (after - 1);
+    var chainPath = rack.path + " chains " + (after - 1);
     var chain = liveApi(chainPath);
     chain.set("in_note", note);
+    if (countChildren(pad.api, "chains") !== 1) {
+        refuse("Drum Rack chain was not assigned to note " + note);
+    }
     chain.call("insert_device", "Simpler");
     var deviceCount = countChildren(chain, "devices");
     if (deviceCount < 1) {
@@ -887,7 +892,8 @@ function replaceDrumPadSample(target, args) {
         refuse("target Drum Rack pad must contain exactly one device");
     }
     var simpler = liveApi(chainPath + " devices 0");
-    if (String(getProperty(simpler, "class_name") || "") !== "Simpler") {
+    var deviceClass = String(getProperty(simpler, "class_name") || "");
+    if (deviceClass !== "Simpler" && deviceClass !== "OriginalSimpler") {
         refuse("target Drum Rack pad device is not Simpler");
     }
     simpler.call("replace_sample", samplePath);
@@ -902,15 +908,15 @@ function drumPadSamplePath(rackPath, padIndex) {
     }
     var simpler = liveApi(chainPath + " devices 0");
     var direct = String(
-        getProperty(simpler, "sample_file_path") ||
-        getProperty(simpler, "file_path") ||
+        getPropertyOrNull(simpler, "sample_file_path") ||
+        getPropertyOrNull(simpler, "file_path") ||
         ""
     );
     if (direct) {
         return direct;
     }
     var sample = liveApi(chainPath + " devices 0 sample");
-    return String(getProperty(sample, "file_path") || "");
+    return String(getPropertyOrNull(sample, "file_path") || "");
 }
 
 function findDrumRack(trackIndex) {
@@ -944,31 +950,10 @@ function drumPadReadback(trackIndex, deviceIndex, note, alreadyOccupied) {
         note
     );
     var occupied = pad ? countChildren(pad.api, "chains") > 0 : false;
-    var samplePath = "";
-    if (occupied) {
-        var chain = liveApi(
-            "live_set tracks " + trackIndex + " devices " + deviceIndex +
-            " drum_pads " + pad.index + " chains 0"
-        );
-        if (countChildren(chain, "devices") > 0) {
-            var simpler = liveApi(
-                "live_set tracks " + trackIndex + " devices " + deviceIndex +
-                " drum_pads " + pad.index + " chains 0 devices 0"
-            );
-            samplePath = String(
-                getProperty(simpler, "sample_file_path") ||
-                getProperty(simpler, "file_path") ||
-                ""
-            );
-            if (!samplePath) {
-                var sample = liveApi(
-                    "live_set tracks " + trackIndex + " devices " + deviceIndex +
-                    " drum_pads " + pad.index + " chains 0 devices 0 sample"
-                );
-                samplePath = String(getProperty(sample, "file_path") || "");
-            }
-        }
-    }
+    var samplePath = occupied ? drumPadSamplePath(
+        "live_set tracks " + trackIndex + " devices " + deviceIndex,
+        pad.index
+    ) : "";
     return {
         track_index: trackIndex,
         note: note,
@@ -1060,10 +1045,31 @@ function readDrumRackSummary(trackIndex) {
                 );
                 var chainCount = countChildren(pad, "chains");
                 if (chainCount > 0) {
+                    var padDeviceClass = "";
+                    if (chainCount === 1) {
+                        var padChain = liveApi(
+                            "live_set tracks " + trackIndex + " devices " +
+                            deviceIndex + " drum_pads " + padIndex + " chains 0"
+                        );
+                        if (countChildren(padChain, "devices") === 1) {
+                            var padDevice = liveApi(
+                                "live_set tracks " + trackIndex + " devices " +
+                                deviceIndex + " drum_pads " + padIndex +
+                                " chains 0 devices 0"
+                            );
+                            padDeviceClass = String(getPropertyOrNull(padDevice, "class_name") || "");
+                        }
+                    }
                     item.occupied_pads.push({
                         note: Number(getProperty(pad, "note")),
                         name: String(getProperty(pad, "name") || ""),
-                        chain_count: chainCount
+                        chain_count: chainCount,
+                        device_class_name: padDeviceClass,
+                        sample_path: chainCount === 1 ?
+                            drumPadSamplePath(
+                                "live_set tracks " + trackIndex + " devices " + deviceIndex,
+                                padIndex
+                            ) : ""
                     });
                 }
             }

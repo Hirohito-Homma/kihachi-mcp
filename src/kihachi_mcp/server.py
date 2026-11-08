@@ -1,5 +1,7 @@
 from fastmcp import FastMCP
 
+from kihachi_mcp.gateway.http import register_health_route
+from kihachi_mcp.gateway.tools import register_gateway_tools
 from kihachi_mcp.tools import (
     compose_midi_part,
     configure_live_transport_from_environment,
@@ -85,10 +87,15 @@ mcp.add_tool(review_songspec)
 mcp.add_tool(remember_song)
 mcp.add_tool(search_memory)
 mcp.add_tool(orchestrate_song)
+register_gateway_tools(mcp)
+register_health_route(mcp)
 
 
 def main() -> None:
-    """Start the KIHACHI MUSIC AI MCP server.
+    """Start the KIHACHI MUSIC AI MCP server on stdio.
+
+    HTTP is ``kihachi serve --transport streamable-http``. This entry stays
+    on stdio so an existing local MCP client keeps working.
 
     The Live tools stay unwired unless the operator opts in with
     ``KIHACHI_MCP_LIVE_TRANSPORT=localhost``; see
@@ -96,7 +103,9 @@ def main() -> None:
     """
     wired = configure_live_transport_from_environment()
     try:
-        mcp.run()
+        from kihachi_mcp.gateway.serve import serve_stdio
+
+        serve_stdio()
     finally:
         if wired:
             shutdown_live_transport()

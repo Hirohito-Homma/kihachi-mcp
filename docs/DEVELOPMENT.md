@@ -243,7 +243,9 @@ Live 自動操作の秘密情報はループバック用セッショントーク
 - トランスポート層が付加します。planner、executor、MCP Tool はトークンを扱いません。
 - ログ、エラーメッセージ、Tool 出力、Git に出しません。`tests/test_live_bridge.py` がこれを検証します。
 
-外部公開ポートと固定トークンを作らないでください。bind は `127.0.0.1` のみです。
+Live ブリッジと AbletonGPT Remote Script（9877）は `127.0.0.1` 以外へ bind しません。トークンを Git に置かないでください。
+
+MCP の HTTP 待受（`kihachi serve --transport streamable-http`）も既定は `127.0.0.1` で、`0.0.0.0` は起動時に拒否します。Bearer トークンは `KIHACHI_MCP_API_TOKEN` だけに置き、ログと Tool の戻り値に出しません。インターネットへ出すときはトンネルやリバースプロキシで TLS を終端し、転送先は Gateway のループバックポートだけにします。9877 と制作画面の 8765 は公開しません。詳細は [MCP_GATEWAY.md](MCP_GATEWAY.md)。
 
 ---
 

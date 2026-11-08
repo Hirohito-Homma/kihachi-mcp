@@ -10,6 +10,8 @@ Real-device behaviour is covered by the manual checklist in
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -76,6 +78,38 @@ def test_parameter_items_are_compared_as_text(source: str) -> None:
 def test_the_device_source_exists() -> None:
     assert DEVICE_SOURCE.is_file()
     assert BRIDGE_SOURCE.is_file()
+
+
+def test_drum_rack_summary_exposes_occupied_pad_sample_path(source: str) -> None:
+    assert "function readDrumRackSummary(trackIndex)" in source
+    assert "sample_path: chainCount === 1 ?" in source
+    assert "drumPadSamplePath(" in source
+    assert "device_class_name: padDeviceClass" in source
+
+
+def test_replacement_accepts_live_simpler_class_name(source: str) -> None:
+    assert 'deviceClass !== "Simpler" && deviceClass !== "OriginalSimpler"' in source
+
+
+def test_drum_chain_is_inserted_on_rack_then_assigned_to_pad(source: str) -> None:
+    """DrumPad exposes chains for reading; insert_chain belongs to RackDevice."""
+    block = source.split("function loadDrumPadSample", 1)[1].split(
+        "function replaceDrumPadSample", 1
+    )[0]
+    assert 'rack.api.call("insert_chain")' in block
+    assert 'pad.api.call("insert_chain")' not in block
+    assert 'var chainPath = rack.path + " chains " + (after - 1)' in block
+    assert 'chain.set("in_note", note)' in block
+    assert 'countChildren(pad.api, "chains") !== 1' in block
+
+
+def test_drum_chain_loading_with_liveapi_model() -> None:
+    """Catch wrong LiveAPI method targets before the next one-shot Live apply."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable for the Max JavaScript smoke test")
+    fixture = Path(__file__).with_name("maxforlive_drum_chain_smoke.js")
+    subprocess.run([node, str(fixture)], check=True, timeout=10)
 
 
 def test_node_bridge_uses_raw_loopback_udp() -> None:

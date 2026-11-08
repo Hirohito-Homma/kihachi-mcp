@@ -18,7 +18,11 @@ from kihachi_mcp.knowledge.part_sounds import (
     SIDECHAIN_DUCKING,
 )
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
-from kihachi_mcp.models.live_contract import managed_track_name
+from kihachi_mcp.models.live_contract import (
+    OP_CREATE_MIDI_TRACK,
+    canonical_hash,
+    managed_track_name,
+)
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
     ComposedMidiNote,
@@ -29,6 +33,7 @@ from kihachi_mcp.services import loudness
 from kihachi_mcp.services.abletongpt_kits import AbletonGPTKitLoader, KitLoadError
 from kihachi_mcp.services.ai_cost_control import MonthlyCostGuard, estimate_cost
 from kihachi_mcp.services.ai_provider import (
+    OllamaCloudProvider,
     OpenAIProvider,
     provider_from_settings,
     split_ollama_url,
@@ -65,6 +70,7 @@ from kihachi_mcp.services.midi_composer import (
     ProviderMIDIComposer,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
+from kihachi_mcp.services.music_plan_compiler import compile_music_plan
 from kihachi_mcp.services.ollama_status import probe_ollama
 from kihachi_mcp.services.production_review import review_candidate
 from kihachi_mcp.services.production_revision import revise_candidate
@@ -105,7 +111,9 @@ REVISION_HISTORY_FILE = ".kihachi-revisions.json"
 LAST_APPLY_FILE = ".kihachi-last-apply.json"
 #: Suffix of the per-candidate read-back verification record.
 VERIFICATION_SUFFIX = ".verification.json"
+SELECTED_CANDIDATE_FILE = ".kihachi-selected.json"
 AUDIO_SUFFIXES = frozenset({".wav", ".aif", ".aiff", ".flac"})
+DRY_RUN_TTL_SECONDS: float = 300.0  # 5 minutes
 #: A model reply that fails validation is asked for again at most this often.
 AI_ATTEMPTS = 2
 
@@ -127,6 +135,7 @@ class StudioRuntime:
         kit_loader: AbletonGPTKitLoader | None = None,
         parameter_file: Path = PARAMETER_FILE,
         cost_guard: MonthlyCostGuard | None = None,
+        clock: Any | None = None,
     ) -> None:
         self._parameter_file = parameter_file
         self._lock = threading.Lock()
@@ -164,6 +173,15 @@ class StudioRuntime:
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
         )
+        # A pad replacement needs track/device identity, not every Session clip.
+        # Plan and execute against the same compact snapshot so the fingerprint
+        # guard remains meaningful on large Sets.
+        self._sample_executor = executor or LiveExecutionService(
+            transport=self._transport,
+            inspector=self._coverage_inspector,
+            approval_gate=self._gate,
+            request_id_factory=_unique_request_ids(),
+        )
         # Arrangement expansion reads Arrangement clips, and the Set fingerprint
         # covers them, so planning and execution must read the Set the same way.
         self._arrangement_inspector = (
@@ -196,6 +214,12 @@ class StudioRuntime:
         self._cost_guard = cost_guard or MonthlyCostGuard()
         self._abletongpt_cache: tuple[float, str] | None = None
         self._approved_ids: set[str] = set()
+        self._approval_records: dict[str, dict[str, Any]] = {}
+        self._clock: Any = clock or time.time
+        self._last_dry_run_set_fingerprint: dict[str, str] = {}
+        self._dry_run_records: dict[str, dict[str, Any]] = {}
+        self._target_confirmed_records: dict[str, dict[str, Any]] = {}
+        self._delivery_audit_records: dict[str, dict[str, Any]] = {}
         self._ignored_issues: dict[str, set[str]] = {}
         self._pending_revisions: dict[str, dict[str, Any]] = {}
         self._pending_children: dict[str, MidiCandidate] = {}
@@ -208,7 +232,12 @@ class StudioRuntime:
         # None keeps candidates in memory only, as tests and the MCP server do.
         self._candidate_dir = Path(candidate_dir) if candidate_dir else None
         if self._candidate_dir is not None:
-            self._selected_id = _latest_saved_id(self._candidate_dir)
+            preferred_id = _read_selected_id(self._candidate_dir)
+            self._selected_id = (
+                preferred_id
+                if preferred_id and self._lookup(preferred_id) is not None
+                else _latest_saved_id(self._candidate_dir)
+            )
             self._revision_history = _read_json_list(
                 self._candidate_dir / REVISION_HISTORY_FILE
             )
@@ -254,6 +283,13 @@ class StudioRuntime:
             "settings": self.settings(),
         }
 
+    def openai_connection_status(self) -> dict[str, Any]:
+        """Run a read-only authentication check for the saved OpenAI model."""
+        provider = provider_from_settings(self._settings)
+        if not isinstance(provider, OpenAIProvider):
+            return {"ok": False, "message": "先にOpenAIを選んで設定を保存してください。"}
+        return provider.test_connection()
+
     def _abletongpt_state(self) -> str | None:
         """Ping AbletonGPT at most every 15 s; a blocked Live makes each ping slow."""
         if self._kit_loader is None:
@@ -276,6 +312,7 @@ class StudioRuntime:
                 "ai_provider",
                 "ollama_url",
                 "ollama_model",
+                "ollama_cloud_model",
                 "openai_model",
                 "monthly_ai_limit_jpy",
                 "ableton_host",
@@ -406,6 +443,8 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
+        if str(role) == "全パート":
+            return {"ok": False, "error": "全パートは一度に採用できません。パートを選んでください。"}
         part = {
             "bass": "Bass",
             "chords": "Stab",
@@ -527,28 +566,35 @@ class StudioRuntime:
         """Read the bridge health and return only contract-backed capabilities."""
         return discover_capabilities(self._inspector.health(), self._abletongpt_state())
 
-    def queue_generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
+    def queue_generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
         """Start one background generate. Refuses a second concurrent job."""
         if self._infer_lock.locked():
             return {
                 "ok": False,
                 "error": "別の生成が実行中です。完了またはキャンセルを待ってください",
             }
+        if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
+            return {"ok": False, "error": "推定料金を確認してから有料生成を明示してください", "cost": self.ai_cost_status(brief)}
         thread = threading.Thread(
-            target=self.generate, args=(brief, seed), daemon=True
+            target=self.generate, args=(brief, seed, confirmed_paid), daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
 
-    def queue_regenerate(self, candidate_id: str) -> dict[str, Any]:
+    def queue_regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
         """Start one background regenerate from an existing candidate."""
         if self._infer_lock.locked():
             return {
                 "ok": False,
                 "error": "別の生成が実行中です。完了またはキャンセルを待ってください",
             }
+        current = self._lookup(candidate_id)
+        if current is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        if self._settings.get("ai_provider") == "openai" and not confirmed_paid:
+            return {"ok": False, "error": "推定料金を確認してから有料再生成を明示してください", "cost": self.ai_cost_status(current.brief.original_text)}
         thread = threading.Thread(
-            target=self.regenerate, args=(candidate_id,), daemon=True
+            target=self.regenerate, args=(candidate_id, confirmed_paid), daemon=True
         )
         thread.start()
         return {"ok": True, "started": True, "job": self.job_status()}
@@ -579,7 +625,7 @@ class StudioRuntime:
             "musical_quality_claimed": False,
         }
 
-    def generate(self, brief: str, seed: int | None = None) -> dict[str, Any]:
+    def generate(self, brief: str, seed: int | None = None, confirmed_paid: bool = False) -> dict[str, Any]:
         """Interpret the brief and store a new candidate. Blocks one caller."""
         if not self._infer_lock.acquire(blocking=False):
             return {
@@ -598,6 +644,8 @@ class StudioRuntime:
         try:
             provider = provider_from_settings(self._settings)
             if isinstance(provider, OpenAIProvider):
+                if not confirmed_paid:
+                    raise InterpretationError("推定料金を確認してから有料生成を明示してください")
                 cost = self.ai_cost_status(brief)
                 if not cost["allowed"]:
                     raise InterpretationError("月間AI利用上限を超えるため、OpenAI APIを実行しません")
@@ -608,6 +656,8 @@ class StudioRuntime:
                 finally:
                     if provider.last_usage:
                         self._cost_guard.record(provider.last_usage, cost["estimate"])
+            elif isinstance(provider, OllamaCloudProvider):
+                production = provider.interpret(brief)
             elif self._settings.get("ai_provider") == "ollama":
                 host, port = split_ollama_url(str(self._settings["ollama_url"]))
                 model = str(self._settings.get("ollama_model") or DEFAULT_MODEL)
@@ -673,13 +723,13 @@ class StudioRuntime:
                 self._client = None
             self._infer_lock.release()
 
-    def regenerate(self, candidate_id: str) -> dict[str, Any]:
+    def regenerate(self, candidate_id: str, confirmed_paid: bool = False) -> dict[str, Any]:
         """Build a new candidate from the same brief with a new seed."""
         current = self._lookup(candidate_id)
         if current is None:
             return {"ok": False, "error": "指定した候補がありません"}
         next_seed = current.seed + 1
-        return self.generate(current.brief.original_text, seed=next_seed)
+        return self.generate(current.brief.original_text, seed=next_seed, confirmed_paid=confirmed_paid)
 
     def cancel(self) -> dict[str, Any]:
         """Ask the in-flight Ollama request to stop."""
@@ -714,6 +764,14 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
+        if self._candidate_dir is not None:
+            try:
+                _write_json_atomic(
+                    self._candidate_dir / SELECTED_CANDIDATE_FILE,
+                    {"candidate_id": candidate.candidate_id},
+                )
+            except OSError:
+                return {"ok": False, "error": "候補の選択を保存できません"}
         self._selected_id = candidate.candidate_id
         return {"ok": True, "candidate": candidate.to_dict()}
 
@@ -775,7 +833,7 @@ class StudioRuntime:
         """Apply one confirmed candidate once. Never auto-retries."""
         if not confirmed:
             return {"ok": False, "error": "適用内容を確認してから実行してください"}
-        if candidate_id in self._applied_ids or self._applied_on_disk(candidate_id):
+        if self._is_applied_or_in_progress(candidate_id):
             return {
                 "ok": False,
                 "error": (
@@ -1072,6 +1130,7 @@ class StudioRuntime:
         issue_ids: list[str] | None = None,
         scopes: list[str] | None = None,
         bars: tuple[int, int] | None = None,
+        parts: list[str] | None = None,
     ) -> dict[str, Any]:
         """Build a local revision as a proposal. Nothing is adopted until accepted."""
         candidate = self._lookup(candidate_id)
@@ -1081,7 +1140,9 @@ class StudioRuntime:
         wanted = [item for item in issue_ids or [] if item not in ignored] or None
         if issue_ids and wanted is None:
             return {"ok": False, "error": "選んだ指摘はすべて無視されています"}
-        result = revise_candidate(candidate, scopes=scopes, issue_ids=wanted, bars=bars)
+        result = revise_candidate(
+            candidate, scopes=scopes, issue_ids=wanted, bars=bars, parts=parts
+        )
         if not result.get("ok"):
             return {"ok": False, "error": result.get("error") or "修正案を作れませんでした"}
         record = revision_record(result)
@@ -1096,6 +1157,21 @@ class StudioRuntime:
             "requires_approval": True,
             "musical_quality_claimed": False,
         }
+
+    def pending_revisions(self) -> list[dict[str, Any]]:
+        """Revisions still waiting for a person to adopt or reject them."""
+        pending = []
+        for record in self._pending_revisions.values():
+            parent = self._lookup(record["parent_candidate_id"])
+            child = self._pending_children.get(record["child_candidate_id"])
+            pending.append(
+                {
+                    **_public_revision(record),
+                    "note_count_before": parent.note_count() if parent is not None else None,
+                    "note_count_after": child.note_count() if child is not None else None,
+                }
+            )
+        return pending
 
     def decide_revision(self, revision_id: str, accept: bool) -> dict[str, Any]:
         """The human adopts or rejects a proposed revision. Rejection keeps the parent."""
@@ -1119,19 +1195,394 @@ class StudioRuntime:
             "revision": record,
         }
 
+    def reject_music_plan(self, plan: Any) -> dict[str, Any]:
+        """Refuse a plan without creating an approval token or sending it."""
+        if self._gate.holds(plan.plan_hash):
+            return {
+                "ok": True,
+                "approved": True,
+                "rejected": False,
+                "message": "この計画はすでに承認済みです。取り消しはしません。Liveには送っていません。",
+                "executed": False,
+                "live_changed": False,
+                "save": False,
+                "paid_api": False,
+                "plan_hash": plan.plan_hash,
+            }
+        return {
+            "ok": True,
+            "approved": False,
+            "rejected": True,
+            "message": "この計画は承認していません。Liveには送っていません。",
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "plan_hash": plan.plan_hash,
+        }
+
+    def record_music_plan_approval(self, plan: Any) -> dict[str, Any]:
+        """Record human approval of one inert Live plan. Nothing is sent."""
+        try:
+            self._gate.approve(plan)
+        except ApprovalError as exc:
+            return {
+                "ok": False,
+                "error": exc.message,
+                "executed": False,
+                "live_changed": False,
+                "save": False,
+                "paid_api": False,
+            }
+        return {
+            "ok": True,
+            "approved": True,
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "plan_hash": plan.plan_hash,
+        }
+
+    def bind_music_plan_to_live(
+        self, music: Any, instruments: Any = None
+    ) -> tuple[Any, dict[str, Any]]:
+        """Read the Set once and place the plan after its last track and scene. Nothing is written."""
+        base = {
+            "ok": False,
+            "executed": False,
+            "live_changed": False,
+            "save": False,
+            "paid_api": False,
+            "musical_quality_claimed": False,
+        }
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            detail = (failure or {}).get("error") or "接続がありません"
+            return None, {
+                **base,
+                "state": "UNKNOWN",
+                "reply": f"実機の Live を読めませんでした（{detail}）。実機には送っていません。",
+            }
+        if snapshot.is_recording or snapshot.is_playing:
+            return None, {
+                **base,
+                "state": "APPROVAL_REQUIRED",
+                "reply": "Live が再生中か録音中です。止めてから、もう一度押してください。実機には送っていません。",
+            }
+        plan = compile_music_plan(
+            music,
+            instruments,
+            track_index=len(snapshot.tracks),
+            scene_index=len(snapshot.scenes),
+            set_fingerprint=snapshot.set_fingerprint,
+            label=canonical_hash(music.to_dict())[:8],
+        )
+        taken = next(
+            (
+                operation.arguments["name"]
+                for operation in plan.operations
+                if operation.op == OP_CREATE_MIDI_TRACK
+                and snapshot.track_by_name(operation.arguments["name"]) is not None
+            ),
+            "",
+        )
+        if taken:
+            return None, {
+                **base,
+                "state": "APPROVAL_REQUIRED",
+                "reply": f"同じ名前のトラック「{taken}」が Live にあります。二重には置きません。実機には送っていません。",
+            }
+        return plan, {
+            **base,
+            "state": "APPROVAL_REQUIRED",
+            "plan_hash": plan.plan_hash,
+            "reply": (
+                f"実機の Live を読みました。トラック {len(snapshot.tracks) + 1} 番目とシーン "
+                f"{len(snapshot.scenes) + 1} 番目から足します。前の承認は無効です。"
+                "もう一度承認してから、もう一度押してください。まだ送っていません。"
+            ),
+        }
+
+    def execute_music_plan(self, plan: Any) -> tuple[Any, str]:
+        """Send one approved plan once through the Live bridge and return its receipt."""
+        token = self._gate.token_for(plan.plan_hash)
+        if token is None:
+            return None, "承認されていない計画は実機に送りません。"
+        if not self._apply_lock.acquire(blocking=False):
+            return None, "別の Live 適用が実行中です。実機には送っていません。"
+        try:
+            return self._executor.execute(plan, approved=True, approval_token=token), ""
+        finally:
+            self._apply_lock.release()
+
     def approve(self, candidate_id: str) -> dict[str, Any]:
         """Human approval of this take. Required before anything is sent to Live."""
-        if self._lookup(candidate_id) is None:
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
+        record = {
+            "candidate_id": candidate_id,
+            "approved_at": time.time(),
+            "content_hash": candidate.content_hash,
+            "note_fingerprint": candidate.note_fingerprint,
+        }
         self._approved_ids.add(candidate_id)
-        self._mark(candidate_id, ".approved")
-        return {"ok": True, "candidate_id": candidate_id, "approved": True}
+        self._approval_records[candidate_id] = record
+        path = self._candidate_path(candidate_id, ".approved")
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+        return {"ok": True, "candidate_id": candidate_id, "approved": True, "content_hash": candidate.content_hash}
+
+    def invalidate_approval(self, candidate_id: str, reason: str = "") -> dict[str, Any]:
+        """Invalidate approval for this candidate (e.g. data modified or mismatch detected)."""
+        self._approved_ids.discard(candidate_id)
+        self._approval_records.pop(candidate_id, None)
+        path = self._candidate_path(candidate_id, ".approved")
+        if path is not None and path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return {"ok": True, "candidate_id": candidate_id, "approved": False, "reason": reason}
 
     def is_approved(self, candidate_id: str) -> bool:
-        if candidate_id in self._approved_ids:
-            return True
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return False
+
         path = self._candidate_path(candidate_id, ".approved")
-        return path is not None and path.is_file()
+        record = self._approval_records.get(candidate_id)
+
+        if record is None and path is not None and path.is_file():
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+                if content.startswith("{"):
+                    record = json.loads(content)
+                else:
+                    record = {"candidate_id": candidate_id, "legacy": True}
+                self._approval_records[candidate_id] = record
+            except Exception:
+                self.invalidate_approval(candidate_id, "corrupted_approval_file")
+                return False
+
+        if record is None and candidate_id not in self._approved_ids:
+            return False
+
+        if record:
+            expected_hash = record.get("content_hash")
+            if expected_hash and expected_hash != candidate.content_hash:
+                self.invalidate_approval(candidate_id, "content_hash_mismatch")
+                return False
+            expected_fp = record.get("note_fingerprint")
+            if expected_fp and expected_fp != candidate.note_fingerprint:
+                self.invalidate_approval(candidate_id, "note_fingerprint_mismatch")
+                return False
+
+        return True
+
+    def confirm_target_live_set(self, candidate_id: str) -> dict[str, Any]:
+        """User explicit confirmation of target Live Set when set_name is UNKNOWN."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return {
+                "ok": False,
+                "error": (failure or {}).get("error") or "Live状態を取得できません",
+            }
+        now = self._clock()
+        record = {
+            "candidate_id": candidate_id,
+            "set_fingerprint": snapshot.set_fingerprint,
+            "confirmed_at": now,
+        }
+        self._target_confirmed_records[candidate_id] = record
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "target_confirmed": True,
+            "set_fingerprint": snapshot.set_fingerprint,
+            "confirmed_at": now,
+        }
+
+    def is_target_confirmed(self, candidate_id: str, current_fingerprint: str) -> bool:
+        """Check if target Live Set confirmation is valid for current fingerprint."""
+        record = self._target_confirmed_records.get(candidate_id)
+        if record is None:
+            return False
+        return record.get("set_fingerprint") == current_fingerprint
+
+    def _delivery_audit_path(self, candidate_id: str) -> Path | None:
+        return self._candidate_path(candidate_id, ".delivery.json")
+
+    def _save_delivery_audit(self, candidate_id: str, record: dict[str, Any]) -> None:
+        """Atomically persist delivery audit record before and after write operations."""
+        self._delivery_audit_records[candidate_id] = record
+        path = self._delivery_audit_path(candidate_id)
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(".tmp")
+            temp_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temp_path.replace(path)
+
+    def _load_delivery_audit(self, candidate_id: str) -> dict[str, Any] | None:
+        """Load persisted delivery audit record from disk, restoring interrupted APPLYING as UNKNOWN."""
+        path = self._delivery_audit_path(candidate_id)
+        if path is not None and path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                # Crash recovery: If state was left in APPLYING during crash, restore as UNKNOWN
+                if data.get("delivery_status") == "APPLYING":
+                    data["delivery_status"] = "UNKNOWN"
+                    data["recovered_from_crash"] = True
+                return data
+            except Exception:
+                return None
+        return None
+
+    def _is_applied_or_in_progress(self, candidate_id: str) -> bool:
+        """Report whether candidate has ever been attempted (PARTIAL, UNKNOWN, VERIFIED, or applied on disk)."""
+        if candidate_id in self._applied_ids or self._applied_on_disk(candidate_id):
+            return True
+        audit = self.get_delivery_status(candidate_id)
+        status = audit.get("delivery_status")
+        if status in ("PARTIAL", "UNKNOWN", "VERIFIED"):
+            return True
+        return False
+
+    def get_delivery_status(self, candidate_id: str) -> dict[str, Any]:
+        """Return the delivery and recovery audit status for a candidate, restoring from disk if needed."""
+        record = self._delivery_audit_records.get(candidate_id)
+        if record is None:
+            record = self._load_delivery_audit(candidate_id)
+            if record is not None:
+                self._delivery_audit_records[candidate_id] = record
+        if record is not None:
+            return {"ok": True, **record}
+        return {"ok": True, "candidate_id": candidate_id, "delivery_status": "IDLE"}
+
+    def recover_delivery(self, candidate_id: str) -> dict[str, Any]:
+        """Read-back verification for manual recovery without rolling back or deleting anything."""
+        audit = self.get_delivery_status(candidate_id)
+        verification = self.verify(candidate_id)
+        snapshot, _ = self._snapshot()
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "delivery_status": audit.get("delivery_status", "UNKNOWN"),
+            "recovery_diff_report": audit.get("recovery_diff_report"),
+            "verification": verification,
+            "current_live_fingerprint": snapshot.set_fingerprint if snapshot else "",
+            "notice": (
+                "自動削除やロールバックは行いません。上記のRead-back照合結果を確認し、"
+                "必要に応じてLive上で手動でトラックやクリップを調整してください。"
+            ),
+        }
+
+    def validate_track_part_mapping(self, candidate_id: str) -> dict[str, Any]:
+        """Validate mapping between candidate parts and Live set tracks, including Arrangement collisions."""
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "valid": False, "error": "指定した候補がありません"}
+
+        live = self._live_health()
+        if live.get("state") != "ready":
+            return {
+                "ok": False,
+                "valid": False,
+                "error": live.get("message") or "Liveに接続されていません",
+                "live_set_name": "UNKNOWN",
+                "safety_verdict": "UNKNOWN",
+            }
+
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return {
+                "ok": False,
+                "valid": False,
+                "error": (failure or {}).get("error") or "Live状態を取得できません",
+                "live_set_name": "UNKNOWN",
+                "safety_verdict": "UNKNOWN",
+            }
+
+        short_id = candidate.candidate_id[:8]
+        mapping: dict[str, Any] = {}
+        missing_parts: list[str] = []
+        conflicts: list[dict[str, Any]] = []
+
+        beats_per_bar = snapshot.time_signature.beats_per_bar
+
+        for part in candidate.parts:
+            expected_track_name = managed_track_name(f"KIHACHI {part} {short_id}")
+            track = snapshot.track_by_name(expected_track_name)
+            clips = candidate.clips_for_part(part)
+            if track is not None:
+                existing_clips = snapshot.arrangement_clips_on(track.index)
+                for clip in clips:
+                    start_b = (clip.start_bar - 1) * beats_per_bar
+                    end_b = start_b + (clip.length_bars * beats_per_bar)
+                    for ex in existing_clips:
+                        if start_b < ex.end_beats and ex.start_beats < end_b:
+                            conflicts.append({
+                                "type": "arrangement_range_occupied",
+                                "part": part,
+                                "track_name": track.name,
+                                "clip_section": clip.section_name,
+                                "start_bar": clip.start_bar,
+                                "length_bars": clip.length_bars,
+                                "existing_clip": ex.name,
+                                "message": (
+                                    f"{track.name} の {clip.start_bar}〜"
+                                    f"{clip.start_bar + clip.length_bars - 1}小節には "
+                                    f"'{ex.name}' が存在します。既存のクリップは上書き・移動しません"
+                                ),
+                            })
+
+                mapping[part] = {
+                    "matched": True,
+                    "track_index": track.index,
+                    "track_name": track.name,
+                    "is_new": False,
+                    "existing_clips_count": len(existing_clips),
+                }
+            else:
+                mapping[part] = {
+                    "matched": True,
+                    "track_index": None,
+                    "track_name": expected_track_name,
+                    "is_new": True,
+                    "existing_clips_count": 0,
+                }
+
+        live_set_name = snapshot.set_name if snapshot.set_name else "UNKNOWN"
+
+        live_tracks_audit = [
+            {
+                "index": t.index,
+                "name": t.name,
+                "track_type": t.track_type,
+                "arrangement_clips_count": len(snapshot.arrangement_clips_on(t.index)),
+                "is_managed": t.is_managed,
+            }
+            for t in snapshot.tracks
+        ]
+
+        return {
+            "ok": True,
+            "valid": len(conflicts) == 0,
+            "candidate_id": candidate_id,
+            "live_set_name": live_set_name,
+            "live_set_fingerprint": snapshot.set_fingerprint,
+            "mapping": mapping,
+            "missing_parts": missing_parts,
+            "live_track_count": len(snapshot.tracks),
+            "live_tracks_audit": live_tracks_audit,
+            "conflicts": conflicts,
+            "safety_verdict": "PASS" if len(conflicts) == 0 else "FAIL",
+        }
 
     # --- Ableton: dry run, send, read-back verification -----------------------
 
@@ -1149,28 +1600,165 @@ class StudioRuntime:
         plan = self.ableton_plan(candidate_id)
         if not plan.get("ok"):
             return plan
+        candidate = self._lookup(candidate_id)
         live = self._live_health()
         preview: dict[str, Any] | None = None
+        snapshot: LiveStateSnapshot | None = None
         if live.get("state") == "ready":
             preview = self.apply_preview(
                 candidate_id, change_tempo=change_tempo, skip_instruments=skip_instruments
             )
+            snapshot, _ = self._snapshot()
+            if snapshot:
+                self._last_dry_run_set_fingerprint[candidate_id] = snapshot.set_fingerprint
         operations: dict[str, int] = {}
         for operation in ((preview or {}).get("plan") or {}).get("operations") or []:
             operations[operation["op"]] = operations.get(operation["op"], 0) + 1
         approved = self.is_approved(candidate_id)
-        already = candidate_id in self._applied_ids or self._applied_on_disk(candidate_id)
+        already = self._is_applied_or_in_progress(candidate_id)
         blockers = []
         if not approved:
             blockers.append("まだ承認されていません。レビューを確認して「この候補を承認」を押してください")
         if already:
             blockers.append("この候補はすでに送信を試行済みです（重複配置を防ぐため再送しません）")
-        if preview is None:
+        if preview is None or snapshot is None:
             blockers.append("Liveに接続していないため、Setとの照合ができません（EXTERNAL VERIFICATION REQUIRED）")
         elif not preview.get("ok"):
             blockers.append(preview.get("error") or "Liveの状態と計画が衝突しています")
         elif not preview.get("notes_match_preview"):
             blockers.append("プレビューと適用計画のノートが一致しません")
+
+        # Track part mapping and arrangement conflict check
+        track_mapping = (
+            self.validate_track_part_mapping(candidate_id)
+            if live.get("state") == "ready"
+            else None
+        )
+
+        all_conflicts = [
+            c.to_dict() if hasattr(c, "to_dict") else c
+            for c in ((preview or {}).get("conflicts") or [])
+        ]
+        if track_mapping and track_mapping.get("conflicts"):
+            for mc in track_mapping["conflicts"]:
+                if mc not in all_conflicts:
+                    all_conflicts.append(mc)
+                blockers.append(mc.get("message") or "Arrangementに既存クリップとの重複・衝突があります")
+
+        # Safety verdict calculation
+        if live.get("state") != "ready" or snapshot is None:
+            safety_verdict = "UNKNOWN"
+        elif blockers or all_conflicts:
+            safety_verdict = "FAIL"
+        else:
+            safety_verdict = "PASS"
+
+        safe_to_deliver = (safety_verdict == "PASS") and not blockers
+        now = self._clock()
+        live_set_name = snapshot.set_name if (snapshot and snapshot.set_name) else "UNKNOWN"
+        requires_target_confirmation = (live_set_name == "UNKNOWN")
+        is_target_conf = (
+            self.is_target_confirmed(candidate_id, snapshot.set_fingerprint)
+            if snapshot
+            else False
+        )
+
+        # Record Dry Run state with timestamp & TTL for verification before sending
+        if candidate is not None:
+            self._dry_run_records[candidate_id] = {
+                "candidate_id": candidate_id,
+                "content_hash": candidate.content_hash,
+                "note_fingerprint": candidate.note_fingerprint,
+                "set_fingerprint": snapshot.set_fingerprint if snapshot else None,
+                "live_set_name": live_set_name,
+                "change_tempo": change_tempo,
+                "skip_instruments": skip_instruments,
+                "safety_verdict": safety_verdict,
+                "safe_to_deliver": safe_to_deliver,
+                "live_state": live.get("state"),
+                "created_at": now,
+                "expires_at": now + DRY_RUN_TTL_SECONDS,
+            }
+
+        # Build Dry Run Diff Report
+        diff_report: dict[str, Any] = {
+            "candidate_id": candidate_id,
+            "project_id": (
+                getattr(candidate.brief, "production_id", candidate_id)
+                if candidate
+                else "UNKNOWN"
+            ),
+            "live_set_name": live_set_name,
+            "live_set_fingerprint": snapshot.set_fingerprint if snapshot else None,
+            "live_state": live.get("state"),
+            "live_track_count": len(snapshot.tracks) if snapshot else 0,
+            "safety_verdict": safety_verdict,
+            "safe_to_deliver": safe_to_deliver,
+            "requires_target_confirmation": requires_target_confirmation,
+            "target_confirmed": is_target_conf,
+            "created_at": now,
+            "expires_at": now + DRY_RUN_TTL_SECONDS,
+            "ttl_seconds": DRY_RUN_TTL_SECONDS,
+            "songspec": (
+                {
+                    "tempo": candidate.brief.tempo.value,
+                    "key": candidate.brief.key.value,
+                    "genre": candidate.brief.genre.value,
+                    "bars": candidate.brief.bars.value,
+                }
+                if candidate
+                else None
+            ),
+            "content_hash": candidate.content_hash if candidate else None,
+            "note_fingerprint": candidate.note_fingerprint if candidate else None,
+            "tempo_changed": change_tempo,
+            "tracks_diff": [
+                {
+                    "part": part,
+                    "clips_to_create": (
+                        len(candidate.clips_for_part(part)) if candidate else 0
+                    ),
+                    "notes_to_create": candidate.note_count(part) if candidate else 0,
+                    "mapping": (
+                        (track_mapping.get("mapping") or {}).get(part)
+                        if track_mapping
+                        else None
+                    ),
+                    "bars_range": (
+                        f"{min(c.start_bar for c in candidate.clips_for_part(part))}〜"
+                        f"{max(c.start_bar + c.length_bars - 1 for c in candidate.clips_for_part(part))}小節"
+                        if candidate and candidate.clips_for_part(part)
+                        else "-"
+                    ),
+                }
+                for part in (candidate.parts if candidate else [])
+            ],
+            "arrangement_summary": {
+                "sections": [
+                    {
+                        "name": s.name,
+                        "start_bar": s.start_bar,
+                        "length_bars": s.length_bars,
+                        "end_bar": s.start_bar + s.length_bars - 1,
+                    }
+                    for s in (candidate.brief.sections if candidate else [])
+                ],
+                "planned_clips_count": len(candidate.clips) if candidate else 0,
+                "total_notes": candidate.note_count() if candidate else 0,
+                "bars_total": candidate.brief.bars.value if candidate else 0,
+            },
+            "total_clips": len(candidate.clips) if candidate else 0,
+            "total_notes": candidate.note_count() if candidate else 0,
+            "operations_count": operations,
+            "conflicts": all_conflicts,
+            "warnings": (preview or {}).get("warnings") or [],
+            "safe_to_deliver": safe_to_deliver,
+            "blockers": blockers,
+            "live_tracks_audit": (
+                track_mapping.get("live_tracks_audit", []) if track_mapping else []
+            ),
+        }
+
         return {
             "ok": True,
             "candidate_id": candidate_id,
@@ -1178,8 +1766,10 @@ class StudioRuntime:
             "live": {"state": live.get("state"), "message": live.get("message")},
             "live_preview": preview,
             "live_operations": operations,
+            "diff_report": diff_report,
             "approved": approved,
-            "can_send": not blockers,
+            "safety_verdict": safety_verdict,
+            "can_send": safe_to_deliver,
             "blockers": blockers,
             "changes_live": False,
         }
@@ -1190,22 +1780,232 @@ class StudioRuntime:
         confirmed: bool = False,
         change_tempo: bool = False,
         skip_instruments: bool = False,
+        target_confirmed: bool = False,
     ) -> dict[str, Any]:
-        """Approved candidates only: apply once, then read Live back and compare."""
+        """Approved candidates only: strictly requires valid Dry Run PASS before sending."""
+        # 1. Approval check
         if not self.is_approved(candidate_id):
             return {
                 "ok": False,
                 "error": "承認されていない候補はLiveへ送りません。先に「この候補を承認」を押してください",
             }
+
+        candidate = self._lookup(candidate_id)
+        if candidate is None:
+            return {"ok": False, "error": "指定した候補がありません"}
+
+        record = self._approval_records.get(candidate_id)
+        if record is None or not record.get("content_hash"):
+            return {
+                "ok": False,
+                "error": "レガシーまたはハッシュ未検証の承認です。Live書き込みには再承認が必要です",
+            }
+
+        # 2. Approved content hash match
+        if record["content_hash"] != candidate.content_hash:
+            self.invalidate_approval(candidate_id, "content_hash_mismatch_at_send")
+            return {
+                "ok": False,
+                "error": "承認後に候補の内容（SongSpec/Arrangement/MIDI）が変更されたため、承認を無効化しました。再承認が必要です",
+            }
+
+        # 3. Dry Run execution requirement
+        dry_record = self._dry_run_records.get(candidate_id)
+        if dry_record is None:
+            return {
+                "ok": False,
+                "error": "Dry Runが実行されていません。Live書き込みの前にDry Runで差分と安全性を検証してください",
+            }
+
+        # 4. Dry Run expiration & time monotonicity check (Task 1)
+        now = self._clock()
+        created_at = dry_record.get("created_at", 0.0)
+        expires_at = dry_record.get("expires_at", 0.0)
+        if now < created_at:
+            self._dry_run_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": "Dry Runの作成日時が不正（未来の日時または時刻の逆行）です。再度Dry Runを実行してください",
+            }
+        if now > expires_at:
+            self._dry_run_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": f"Dry Runの有効期限（{int(DRY_RUN_TTL_SECONDS / 60)}分）が切れています。安全のため最新の状態で再度Dry Runを実行してください",
+            }
+
+        # 5. Dry Run safety verdict requirement
+        if dry_record.get("safety_verdict") != "PASS" or not dry_record.get("safe_to_deliver"):
+            return {
+                "ok": False,
+                "error": (
+                    f"Dry Runの安全判定がPASSではありません（現在: {dry_record.get('safety_verdict')}）。"
+                    "Liveへの書き込みは拒否されました"
+                ),
+            }
+
+        # 6. Candidate content_hash match with Dry Run time
+        if dry_record.get("content_hash") != candidate.content_hash:
+            self._dry_run_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": "Dry Run後に候補の内容が変更されました。差分不整合を防ぐため、再度のDry Runが必要です",
+            }
+
+        # 7. Apply options match with Dry Run time
+        if (
+            dry_record.get("change_tempo") != change_tempo
+            or dry_record.get("skip_instruments") != skip_instruments
+        ):
+            self._dry_run_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": (
+                    "Dry Run実行時と適用オプション（change_tempo, skip_instruments）が異なります。"
+                    "再度のDry Runが必要です"
+                ),
+            }
+
+        # 8. Live health and transport state check
+        live = self._live_health()
+        if live.get("state") != "ready":
+            return {
+                "ok": False,
+                "error": f"Live未接続またはエラーのため送信できません（{live.get('state')}）",
+            }
+
+        snapshot, failure = self._snapshot()
+        if snapshot is None:
+            return {
+                "ok": False,
+                "error": (failure or {}).get("error") or "Live状態を取得できません",
+            }
+
+        if snapshot.is_playing:
+            return {"ok": False, "error": "Liveが再生中のため書き込みできません"}
+        if snapshot.is_recording:
+            return {"ok": False, "error": "Liveが録音中のため書き込みできません"}
+
+        # 9. Live Set fingerprint match with Dry Run time
+        expected_set_fp = dry_record.get("set_fingerprint")
+        if not expected_set_fp:
+            self._dry_run_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": "Dry Run実行時のLive Set指紋が未取得です。再度のDry Runが必要です",
+            }
+
+        if expected_set_fp != snapshot.set_fingerprint:
+            self._dry_run_records.pop(candidate_id, None)
+            self._last_dry_run_set_fingerprint.pop(candidate_id, None)
+            self._target_confirmed_records.pop(candidate_id, None)
+            return {
+                "ok": False,
+                "error": "Live Setの状態または接続先が変更されました。安全のため既存Dry Runおよび対象確認を無効化しました。再度のDry Runが必要です",
+            }
+
+        # 10. Live Set target confirmation when set_name is UNKNOWN (Task 2)
+        if dry_record.get("live_set_name") == "UNKNOWN":
+            if target_confirmed:
+                self.confirm_target_live_set(candidate_id)
+            if not self.is_target_confirmed(candidate_id, snapshot.set_fingerprint):
+                return {
+                    "ok": False,
+                    "error": (
+                        "Live Set名がUNKNOWNです。誤ったSetへの反映を防ぐため、対象Live Setの"
+                        "明示的な確認（confirm_target_live_set または target_confirmed=True）が必要です"
+                    ),
+                    "requires_target_confirmation": True,
+                }
+
+        # 11. Arrangement conflict re-validation before writing
+        mapping_check = self.validate_track_part_mapping(candidate_id)
+        if not mapping_check.get("valid") or mapping_check.get("conflicts"):
+            return {
+                "ok": False,
+                "error": "Arrangementに既存クリップとの衝突が検出されたため、書き込みを拒否しました",
+                "conflicts": mapping_check.get("conflicts"),
+            }
+
+        # 12. Persist APPLYING state BEFORE initiating any Live write operations (Task 2)
+        applying_record = {
+            "candidate_id": candidate_id,
+            "delivery_status": "APPLYING",
+            "started_at": now,
+            "content_hash": candidate.content_hash,
+            "set_fingerprint_before": snapshot.set_fingerprint,
+            "change_tempo": change_tempo,
+            "skip_instruments": skip_instruments,
+        }
+        try:
+            self._save_delivery_audit(candidate_id, applying_record)
+        except Exception as exc:
+            # If persistence fails, refuse write immediately to prevent untracked mutations
+            return {
+                "ok": False,
+                "error": f"配信監査記録の永続化に失敗したため、Liveへの書き込みを拒否しました: {exc}",
+            }
+
         result = self.apply(
             candidate_id,
             confirmed=confirmed,
             change_tempo=change_tempo,
             skip_instruments=skip_instruments,
         )
-        if (result.get("receipt") or {}).get("status") == "verified":
+
+        receipt_dict = result.get("receipt") or {}
+        receipt_status = receipt_dict.get("status")
+
+        if receipt_status == "verified":
+            delivery_status = "VERIFIED"
+        elif receipt_status in ("partially_applied", "partial") or result.get("partial"):
+            delivery_status = "PARTIAL"
+        elif result.get("ok"):
+            delivery_status = "VERIFIED"
+        else:
+            delivery_status = "FAILED"
+
+        recovery_diff_report = None
+        if delivery_status in ("PARTIAL", "FAILED"):
+            completed_ops = receipt_dict.get("completed_operations") or []
+            attempted_ops = receipt_dict.get("attempted_operations") or []
+            recovery_diff_report = {
+                "status": delivery_status,
+                "candidate_id": candidate_id,
+                "attempted_operations_count": len(attempted_ops),
+                "completed_operations_count": len(completed_ops),
+                "failed_operation": receipt_dict.get("failed_operation") or "",
+                "error": result.get("error") or receipt_dict.get("error") or "一部の操作が失敗しました",
+                "set_fingerprint_before": receipt_dict.get("set_fingerprint_before") or "",
+                "set_fingerprint_after": receipt_dict.get("set_fingerprint_after") or "",
+                "manual_recovery_guide": (
+                    f"自動ロールバックや削除は行いません。Live上で完了した操作（{len(completed_ops)}件）"
+                    "の配置状況を確認し、必要に応じて手動でトラックやクリップを調整してください。"
+                    "重複配置を防ぐため自動再送はブロックされています。"
+                ),
+            }
+
+        final_audit_record = {
+            "candidate_id": candidate_id,
+            "delivery_status": delivery_status,
+            "completed_at": self._clock(),
+            "receipt": receipt_dict,
+            "recovery_diff_report": recovery_diff_report,
+        }
+        try:
+            self._save_delivery_audit(candidate_id, final_audit_record)
+        except Exception:
+            self._delivery_audit_records[candidate_id] = final_audit_record
+
+        result["delivery_status"] = delivery_status
+        if recovery_diff_report:
+            result["recovery_diff_report"] = recovery_diff_report
+
+        if delivery_status == "VERIFIED" and (receipt_dict.get("status") == "verified"):
             result["verification"] = self.verify(candidate_id)
+
         return result
+
 
     def verify(self, candidate_id: str) -> dict[str, Any]:
         """Read tempo, tracks, clips, notes and arrangement bounds back from Live."""
@@ -1327,9 +2127,16 @@ class StudioRuntime:
         candidate = self._lookup(candidate_id)
         if candidate is None:
             return {"ok": False, "error": "指定した候補がありません"}
-        snapshot, failure = self._coverage_snapshot()
-        if snapshot is None:
-            return failure or {"ok": False, "error": "Live状態を取得できません"}
+        try:
+            snapshot = self._coverage_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "error": f"{exc.code}: {exc.message}",
+                "error_code": exc.code,
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
         expected_name = managed_track_name(
             f"KIHACHI Kick {candidate.candidate_id[:8]}"
         )
@@ -1350,11 +2157,18 @@ class StudioRuntime:
             {
                 "note": pad.get("note"),
                 "sample_path": pad.get("sample_path") or "",
+                "device_class_name": pad.get("device_class_name") or "",
             }
             for device in summary.get("devices") or []
             for pad in device.get("occupied_pads") or []
         ]
         current_path = str(pads[0].get("sample_path") or "") if len(pads) == 1 else ""
+        if pads and not current_path:
+            return {
+                "ok": False,
+                "error": "Kickパッド36の現在サンプルを読み取れません。差し替えを停止します",
+                "observed_pads": observed_pads,
+            }
         plan = create_sample_replacement_plan(
             snapshot,
             track_index=track.index,
@@ -1396,7 +2210,9 @@ class StudioRuntime:
                 token = self._gate.approve(plan)
             except ApprovalError as exc:
                 return {"ok": False, "error": exc.message}
-            receipt = self._executor.execute(plan, approved=True, approval_token=token)
+            receipt = self._sample_executor.execute(
+                plan, approved=True, approval_token=token
+            )
             return {
                 "ok": receipt.status == "verified",
                 "receipt": receipt.to_dict(),
@@ -1763,6 +2579,10 @@ class StudioRuntime:
         path = self._candidate_path(candidate.candidate_id)
         if path is not None:
             _write_json_atomic(path, candidate.to_dict())
+            _write_json_atomic(
+                self._candidate_dir / SELECTED_CANDIDATE_FILE,
+                {"candidate_id": candidate.candidate_id},
+            )
 
     def _lookup(self, candidate_id: str) -> MidiCandidate | None:
         """Return a candidate from memory, or the one saved before a restart."""
@@ -1995,6 +2815,18 @@ def _latest_saved_id(directory: Path) -> str:
     return max(saved, key=lambda path: path.stat().st_mtime).stem
 
 
+def _read_selected_id(directory: Path) -> str:
+    """Read the explicit Studio selection, ignoring malformed or stale state."""
+    try:
+        data = json.loads((directory / SELECTED_CANDIDATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    candidate_id = data.get("candidate_id") if isinstance(data, dict) else None
+    if isinstance(candidate_id, str) and _CANDIDATE_ID_RE.fullmatch(candidate_id):
+        return candidate_id
+    return ""
+
+
 def _setting_reading(parameter: dict[str, Any] | None, setting: Any) -> Any:
     """What Live holds for one recipe setting: the switch item, or 0..1."""
     if parameter is None:
@@ -2178,10 +3010,7 @@ def _notes_from_plan(plan: Any) -> list[list[dict[str, Any]]]:
 def _apply_summary(
     candidate: MidiCandidate, plan: Any, snapshot: Any, change_tempo: bool
 ) -> dict[str, Any]:
-    from kihachi_mcp.models.live_contract import (
-        OP_CREATE_MIDI_TRACK,
-        OP_REPLACE_CLIP_NOTES,
-    )
+    from kihachi_mcp.models.live_contract import OP_REPLACE_CLIP_NOTES
 
     create_tracks = [
         operation.arguments.get("name")

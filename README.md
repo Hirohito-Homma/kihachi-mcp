@@ -2,9 +2,10 @@
 
 Current milestone
 
-KIHACHI MUSIC AI Studio 統合 ／ 実機スモークテスト済み（Live 12.4.5、2026-09-28、[CURRENT_SYSTEM_STATUS](docs/CURRENT_SYSTEM_STATUS.md)）
+KIHACHI MUSIC AI Studio 統合 ／ 8小節の実機適用・書き出し検証済み（Live 12.4.5、2026-10-01、[RELEASE_ACCEPTANCE](docs/RELEASE_ACCEPTANCE.md)）
 
 最短手順は [docs/QUICKSTART.md](docs/QUICKSTART.md)。初回インストールは `scripts/インストール.command`、詳しい操作は [docs/MANUAL.md](docs/MANUAL.md)、macOSアプリのビルドと署名は [docs/MAC_APP.md](docs/MAC_APP.md) を参照してください。
+配布版としての未完了項目と判定条件は [docs/RELEASE_ACCEPTANCE.md](docs/RELEASE_ACCEPTANCE.md) に記録しています。
 
 # KIHACHI Brain
 
@@ -49,6 +50,18 @@ uv run kihachi ableton plan|dry-run|execute|verify <候補ID>
 ```
 
 制作画面・CLI・MCP は同じ `StudioRuntime` を使います。Live に触れる `ableton dry-run / execute / verify` は起動中の制作画面を通します。
+
+## MCP Gateway
+
+既存の stdio MCP はそのままです。Manus など外部クライアント向けには、同じ FastMCP サーバーを Streamable HTTP でループバック待受します。Ableton Live と AbletonGPT（TCP 9877）は公開しません。
+
+```bash
+export KIHACHI_MCP_API_TOKEN="$(openssl rand -hex 32)"
+uv run kihachi serve --transport streamable-http
+# http://127.0.0.1:8787/mcp    健康確認は GET /health
+```
+
+`set_tempo` と `produce_ableton_song` は `confirm=true` が無いと Live を変えません。曲の手順は [docs/ABLETON_SONG_PRODUCTION.md](docs/ABLETON_SONG_PRODUCTION.md)。登録とトンネルは [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) と [docs/MANUS_MCP.md](docs/MANUS_MCP.md)。
 
 ## 前提
 
@@ -123,11 +136,11 @@ export KIHACHI_LIVE_APPROVAL_PATH="$HOME/.kihachi/live-approvals.json"
 
 ## Ableton Live セットアップ
 
-1. [maxforlive/README.md](maxforlive/README.md) の手順で `KIHACHI Live Device.amxd` を作ります。**`.amxd` バイナリはリポジトリに含まれていません**（偽のデバイスファイルを置かないため）。JavaScript ソース、プロトコル仕様、パッケージ化手順が揃っています。
-2. Live で Set を開き、デバイスをトラックへロードします。
+1. macOSではLiveを終了し、`scripts/Liveデバイスをインストール.command` を開いてLiveのUser Libraryを選びます。実機で保存した `.amxd` と2つのJSを同梱しています。既存ファイルが異なるときはバックアップしてから導入します。詳しくは [docs/ABLETON_SETUP.md](docs/ABLETON_SETUP.md)。
+2. LiveでSetを開き、User Libraryのデバイスをトラックへ1つロードします。
 3. `inspect_live_state` で `health.connected` が `true` になることを確認します。
 
-macOS と Windows の両方に対応しています。パス差は `kihachi_mcp.services.live_paths` と `kihachi_mcp.models.live_paths` に閉じています。
+Python側の通信パスはmacOSとWindowsに対応しています。今回の `.amxd` 同梱と `.command` による導入はIntel Mac / Live 12.4.5で検証済みで、Apple SiliconとWindowsでの導入は未検証です。
 
 | 用途 | macOS | Windows |
 | --- | --- | --- |

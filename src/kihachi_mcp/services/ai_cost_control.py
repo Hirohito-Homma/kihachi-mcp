@@ -21,9 +21,9 @@ class ModelPrice:
 
 # Standard, short-context prices read from the official OpenAI pricing page.
 OPENAI_PRICES = {
-    "gpt-6-luna": ModelPrice(0.05, 0.25),
-    "gpt-6.1-sol": ModelPrice(1.0, 5.0),
-    "gpt-6-astra": ModelPrice(5.0, 25.0),
+    "gpt-6-luna": ModelPrice(0.10, 0.50),
+    "gpt-6.1-sol": ModelPrice(2.0, 10.0),
+    "gpt-6-astra": ModelPrice(10.0, 50.0),
 }
 
 

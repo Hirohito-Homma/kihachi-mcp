@@ -130,6 +130,167 @@ class OllamaProvider:
         )
 
 
+class OllamaCloudProvider:
+    """Ollama Cloud hosted models. The API key stays in the environment.
+
+    Mirrors OllamaProvider's contract against https://ollama.com, so the
+    part-wise MIDI Composer and brief interpretation work unchanged while
+    generation runs on hosted models such as gemma4:31b (seconds instead of
+    the local timeout-bound minutes). Usage is billed to the user's Ollama
+    plan credits, not the Studio JPY cost guard, so ``paid_api`` is False.
+    The key is read from OLLAMA_API_KEY only — never from settings or files.
+    """
+
+    HOST = "ollama.com"
+    DEFAULT_CLOUD_MODEL = "gemma4:31b"
+
+    def __init__(
+        self,
+        model: str = DEFAULT_CLOUD_MODEL,
+        timeout: float = 180.0,
+        api_key: str | None = None,
+    ) -> None:
+        self.model = model
+        self._timeout = timeout
+        self._api_key = api_key
+
+    def _key(self) -> str | None:
+        key = self._api_key if self._api_key is not None else os.environ.get("OLLAMA_API_KEY")
+        return key or None
+
+    def health(self) -> dict[str, Any]:
+        if not self._key():
+            return {
+                "ok": False,
+                "state": "api_key_missing",
+                "provider": "ollama_cloud",
+                "model": self.model,
+                "installed_models": [],
+                "message": "OLLAMA_API_KEYが設定されていません",
+            }
+        try:
+            models = self.list_models()
+        except InterpretationError as exc:
+            return {
+                "ok": False,
+                "state": "unreachable",
+                "provider": "ollama_cloud",
+                "model": self.model,
+                "installed_models": [],
+                "message": str(exc),
+            }
+        return {
+            "ok": True,
+            "state": "ready",
+            "provider": "ollama_cloud",
+            "model": self.model,
+            "installed_models": models,
+            "message": "Ollama Cloudを利用できます",
+        }
+
+    def list_models(self) -> list[str]:
+        data = self._request("GET", "/api/tags")
+        return [str(item.get("name")) for item in data.get("models") or [] if item.get("name")]
+
+    def generate(self, prompt: str) -> str:
+        result = self._chat({
+            "model": self.model,
+            "stream": False,
+            "think": False,
+            "messages": [{"role": "user", "content": prompt}],
+        })
+        return str(result["message"]["content"])
+
+    def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        result = self._chat({
+            "model": self.model,
+            "stream": False,
+            "think": False,
+            "format": schema,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Reply with JSON matching the schema. Do not add keys.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        })
+        try:
+            parsed = parse_model_json(result["message"]["content"])
+        except (KeyError, TypeError) as exc:
+            raise InterpretationError("AI応答をJSONとして読めません") from exc
+        if not isinstance(parsed, dict):
+            raise InterpretationError("AI応答のJSONがオブジェクトではありません")
+        return parsed
+
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "provider": "ollama_cloud",
+            "structured_output": True,
+            "downloads_models": False,
+            "paid_api": False,
+        }
+
+    def interpret(self, brief: str) -> ProductionBrief:
+        """Interpret a brief via the cloud model, falling back when unusable."""
+        if not self._key():
+            return interpret_brief_offline(brief)
+        from kihachi_mcp.services.studio_interpreter import (
+            assemble_brief,
+            extract_explicit,
+        )
+
+        prompt = (
+            "Translate this Japanese music brief into the supplied schema. Preserve explicit tempo, key, bars and drop bar. "
+            "Defaults: tech_house, 125, Dm, 96. Do not invent Ableton operations.\n\n"
+            + brief
+        )
+        try:
+            intent = self.generate_structured(prompt, STUDIO_SCHEMA)
+        except InterpretationError:
+            return interpret_brief_offline(brief)
+        return assemble_brief(extract_explicit(brief), intent, model=self.model)
+
+    def _chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/api/chat", payload)
+
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        key = self._key()
+        if not key:
+            raise InterpretationError("OLLAMA_API_KEYが設定されていません")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        connection = HTTPSConnection(self.HOST, timeout=self._timeout)
+        try:
+            connection.request(method, path, body, {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            })
+            response = connection.getresponse()
+            raw = response.read()
+            status = response.status
+        except OSError as exc:
+            raise InterpretationError("Ollama Cloudに接続できません") from exc
+        finally:
+            connection.close()
+        if status == 401:
+            raise InterpretationError("OLLAMA_API_KEYが無効です")
+        if status == 402:
+            raise InterpretationError("Ollama Cloudの利用枠（クレジット）が不足しています")
+        if status == 404:
+            raise InterpretationError(f"Ollama Cloudにモデル {self.model} が見つかりません")
+        if status == 429:
+            raise InterpretationError("Ollama Cloudの利用上限に達しました")
+        if status >= 400:
+            raise InterpretationError(f"Ollama Cloudが応答を拒否しました (HTTP {status})")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise InterpretationError("Ollama Cloudの応答を読めません") from exc
+        if not isinstance(data, dict):
+            raise InterpretationError("Ollama Cloudの応答を読めません")
+        return data
+
+
 class DeterministicProvider:
     """Preset interpretation used when no model is selected."""
 
@@ -191,6 +352,42 @@ class OpenAIProvider:
     def list_models(self) -> list[str]:
         return list(self.ALLOWED_MODELS)
 
+    def test_connection(self) -> dict[str, Any]:
+        """Check credentials and model access without creating a paid response."""
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            return {"ok": False, "model": self.model, "message": "OPENAI_API_KEYが設定されていません。GPT-6用ランチャーからStudioを起動してください。"}
+        connection = HTTPSConnection("api.openai.com", timeout=10)
+        try:
+            connection.request("GET", f"/v1/models/{self.model}", headers={"Authorization": f"Bearer {key}"})
+            response = connection.getresponse()
+            raw = response.read()
+        except OSError:
+            return {"ok": False, "model": self.model, "message": "OpenAI APIに接続できません。ネットワークを確認してください。"}
+        finally:
+            connection.close()
+        try:
+            error_data = json.loads(raw)
+        except json.JSONDecodeError:
+            error_data = {}
+        error = error_data.get("error") if isinstance(error_data, dict) else None
+        error_code = error.get("code") if isinstance(error, dict) else None
+        if response.status == 401 and error_code == "ip_not_authorized":
+            message = "接続元IPがOpenAIプロジェクトの許可リストにありません（HTTP 401）。"
+        elif response.status == 401:
+            message = "APIキーが認証されませんでした（HTTP 401）。キー・プロジェクト・権限を確認してください。"
+        elif response.status == 403:
+            message = "このキーではモデルにアクセスできません（HTTP 403）。プロジェクトの権限を確認してください。"
+        elif response.status == 404:
+            message = "選択モデルが見つからないか、利用できません（HTTP 404）。"
+        elif response.status >= 400:
+            message = f"OpenAI APIが応答を拒否しました（HTTP {response.status}）。"
+        else:
+            if isinstance(error_data, dict) and error_data.get("id") == self.model:
+                return {"ok": True, "model": self.model, "message": "APIキーとモデルへのアクセスを確認しました。生成は実行していません。"}
+            message = "OpenAI APIのモデル情報を確認できませんでした。"
+        return {"ok": False, "model": self.model, "message": message}
+
     def generate(self, prompt: str) -> str:
         data = self._request({
             "model": self.model,
@@ -208,7 +405,7 @@ class OpenAIProvider:
             "store": False,
             "text": {"format": {"type": "json_schema", "name": "kihachi_result", "strict": True, "schema": schema}},
         })
-        parsed = parse_model_json(_response_text(data))
+        parsed = _structured_payload(data)
         if not isinstance(parsed, dict):
             raise InterpretationError("AI応答のJSONがオブジェクトではありません")
         return parsed
@@ -268,25 +465,55 @@ class OpenAIProvider:
         return data
 
 
+def _structured_payload(data: dict[str, Any]) -> Any:
+    """Read JSON from a Responses API payload. Reasoning-only replies are not treated as JSON."""
+    if data.get("status") == "incomplete":
+        reason = (data.get("incomplete_details") or {}).get("reason") or "unknown"
+        raise InterpretationError(f"OpenAI APIの応答が途切れました（{reason}）")
+    for item in data.get("output") or []:
+        if item.get("type") in {"refusal", "refused"} or item.get("status") == "refused":
+            raise InterpretationError("OpenAI APIが応答を拒否しました")
+        for content in item.get("content") or []:
+            if content.get("type") == "refusal" or content.get("refusal"):
+                raise InterpretationError("OpenAI APIが応答を拒否しました")
+            parsed = content.get("parsed")
+            if isinstance(parsed, (dict, list)):
+                return parsed
+            if content.get("type") in {"output_json", "json"} and isinstance(content.get("json"), (dict, list)):
+                return content["json"]
+    return parse_model_json(_response_text(data))
+
+
 def _response_text(data: dict[str, Any]) -> str:
     direct = data.get("output_text")
-    if isinstance(direct, str):
+    if isinstance(direct, str) and direct.strip():
         return direct
+    chunks: list[str] = []
     for item in data.get("output") or []:
+        if item.get("type") == "reasoning":
+            continue
         for content in item.get("content") or []:
             text = content.get("text")
-            if isinstance(text, str):
-                return text
+            if isinstance(text, str) and text.strip():
+                chunks.append(text)
+    if chunks:
+        return "\n".join(chunks)
     raise InterpretationError("OpenAI APIの応答にテキストがありません")
 
 
-def provider_from_settings(settings: dict[str, Any]) -> OllamaProvider | DeterministicProvider | OpenAIProvider:
+def provider_from_settings(
+    settings: dict[str, Any],
+) -> OllamaProvider | OllamaCloudProvider | DeterministicProvider | OpenAIProvider:
     """Build only the provider explicitly selected in Studio settings."""
     name = str(settings.get("ai_provider") or "ollama")
     if name == "deterministic":
         return DeterministicProvider()
     if name == "openai":
         return OpenAIProvider(model=str(settings.get("openai_model") or "gpt-6.1-sol"))
+    if name == "ollama_cloud":
+        return OllamaCloudProvider(
+            model=str(settings.get("ollama_cloud_model") or OllamaCloudProvider.DEFAULT_CLOUD_MODEL)
+        )
     return OllamaProvider(
         url=str(settings.get("ollama_url") or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"),
         model=str(settings.get("ollama_model") or DEFAULT_MODEL),

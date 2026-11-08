@@ -25,6 +25,61 @@ def test_deterministic_composer_supports_every_required_role(role: str) -> None:
     assert all(65 <= note.velocity <= 118 for note in notes)
 
 
+def test_every_studio_part_is_a_composer_role() -> None:
+    from kihachi_mcp.models.production_brief import PART_ORDER
+
+    for part in PART_ORDER:
+        constraints = MusicalConstraints(key="D#m", tempo=124, bars=1, role=part)
+        notes = DeterministicMIDIComposer(seed=3).compose(MidiCompositionRequest(constraints))
+        assert notes
+    kick = DeterministicMIDIComposer(seed=3).compose(
+        MidiCompositionRequest(MusicalConstraints(key="D#m", tempo=124, bars=1, role="Kick"))
+    )
+    assert {note.pitch for note in kick} == {36}
+
+
+def test_midi_constraints_carry_genre_mood_and_prompt() -> None:
+    empty = MusicalConstraints(key="D#m", tempo=124, bars=1, role="bass")
+    assert "genre" not in empty.to_dict()
+    filled = MusicalConstraints.from_dict(
+        {
+            "key": "D#m",
+            "tempo": 124,
+            "bars": 8,
+            "role": "全パート",
+            "genre": "mutation_funk",
+            "mood": "暗い",
+            "prompt": "キックは短め。ミューテーションファンクを作って",
+        }
+    )
+    payload = filled.to_dict()
+    assert payload["genre"] == "mutation_funk"
+    assert payload["mood"] == "暗い"
+    assert "ミューテーションファンク" in payload["prompt"]
+    captured: list[str] = []
+
+    class Recorder:
+        def capabilities(self):
+            return {"structured_output": True}
+
+        def generate_structured(self, prompt, schema):
+            captured.append(prompt)
+            return {"notes": [{"pitch": 36, "start": 0, "duration": 0.25, "velocity": 90, "channel": 0}]}
+
+    notes = ProviderMIDIComposer(Recorder()).compose(MidiCompositionRequest(filled))
+    assert notes
+    assert "musical direction only" in captured[0]
+    assert "mutation_funk" in captured[0]
+
+
+def test_all_parts_role_combines_every_studio_part() -> None:
+    notes = DeterministicMIDIComposer(seed=3).compose(
+        MidiCompositionRequest(MusicalConstraints(key="D#m", tempo=124, bars=1, role="全パート"))
+    )
+    assert 36 in {note.pitch for note in notes}
+    assert len({note.pitch for note in notes}) > 1
+
+
 def test_bass_constraints_avoid_kick_and_create_syncopation() -> None:
     constraints = MusicalConstraints(
         key="D#m",

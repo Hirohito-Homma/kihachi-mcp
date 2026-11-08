@@ -243,10 +243,15 @@ def interpret_brief(
 
 
 def parse_model_json(content: Any) -> Any:
-    """Parse model JSON, repairing only code fences and text around one object."""
+    """Parse model JSON, repairing think tags, code fences, and text around one object."""
+    if isinstance(content, (dict, list)):
+        return content
     if not isinstance(content, str):
         raise InterpretationError("AI応答をJSONとして読めません")
-    text = content.strip()
+    text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:

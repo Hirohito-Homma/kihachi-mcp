@@ -12,6 +12,7 @@ from kihachi_mcp.models.midi_composer import (
     PART_PITCH,
     ROLE_ALL,
     ComposedMidiNote,
+    ContextPart,
     MidiCompositionRequest,
     MusicalConstraints,
 )
@@ -147,6 +148,8 @@ class ProviderMIDIComposer:
                     f" Its energy is {c.section_energy:.2f} on a 0..1 scale; "
                     "let density and dynamics follow it."
                 )
+        if request.context_parts:
+            prompt += " " + _context_prompt_text(request.context_parts)
         prompt += (
             ' Return one JSON object like {"notes": [{"pitch": 39, "start": 0.75, "duration": 0.25, '
             '"velocity": 96, "channel": 0}]}; "start" and "duration" are numbers in beats, '
@@ -166,11 +169,17 @@ class ProviderMIDIComposer:
                 notes = _convert_notes(payload)
                 try:
                     _validate_result(notes, request.constraints)
+                    _validate_context(notes, request)
                 except ValueError:
                     if request.operation == "generate":
                         rescued = _rescue_transpose(notes, request.constraints)
                         if rescued is not None:
-                            return rescued
+                            try:
+                                _validate_context(rescued, request)
+                            except ValueError:
+                                pass
+                            else:
+                                return rescued
                     raise
                 return notes
             except ValueError as exc:
@@ -401,6 +410,87 @@ def _progression_prompt_text(c: MusicalConstraints) -> str:
         "and arp lines favor that bar's chord tones on strong beats (scale passing "
         "tones are fine elsewhere)."
     )
+
+
+#: Lead-like lines are judged against the bass line: doubling one of its
+#: long notes at the same pitch and time adds mud, not weight.
+_CONTEXT_CHECKED_ENGINES = frozenset({"melody", "arp"})
+_CONTEXT_COLLISION_LIMIT = 0.5
+_ONSETS_SHOWN = 32
+
+
+def context_collision_ratio(
+    notes: tuple[ComposedMidiNote, ...],
+    c: MusicalConstraints,
+    context_parts: tuple[ContextPart, ...],
+) -> float | None:
+    """Share of new notes doubling a long Bass/Sub note at pitch and time.
+
+    Only melody and arp lines are judged, and only against long notes
+    (>= 1.5 beats) of the Bass and Sub context parts. Returns None when
+    the check does not apply (other engines, or no bass long notes).
+    """
+    if c.role == ROLE_ALL or _engine_for(c.role) not in _CONTEXT_CHECKED_ENGINES:
+        return None
+    long_notes = [
+        long_note
+        for part in context_parts
+        if part.part in ("Bass", "Sub")
+        for long_note in part.long_notes
+    ]
+    if not long_notes or not notes:
+        return None
+    collisions = sum(
+        1
+        for note in notes
+        if any(
+            long_note.pitch == note.pitch
+            and long_note.start <= note.start < long_note.start + long_note.duration
+            for long_note in long_notes
+        )
+    )
+    return collisions / len(notes)
+
+
+def _validate_context(
+    notes: tuple[ComposedMidiNote, ...], request: MidiCompositionRequest
+) -> None:
+    ratio = context_collision_ratio(notes, request.constraints, request.context_parts)
+    if ratio is not None and ratio > _CONTEXT_COLLISION_LIMIT:
+        raise ValueError(
+            f"MIDI ComposerのノートがBassの長い音と衝突しています"
+            f"（衝突 {ratio:.0%}、上限 {_CONTEXT_COLLISION_LIMIT:.0%}）"
+        )
+
+
+def _context_prompt_text(context_parts: tuple[ContextPart, ...]) -> str:
+    """Cross-part context for provider prompts (Phase W)."""
+    lines = ["Other parts in this section already play:"]
+    for part in context_parts:
+        line = f"- {part.part}: {part.note_count} notes"
+        if part.pitches:
+            line += f", pitches {', '.join(str(pitch) for pitch in part.pitches)}"
+        if part.onsets:
+            shown = ", ".join(f"{onset:g}" for onset in part.onsets[:_ONSETS_SHOWN])
+            extra = (
+                f" (+{len(part.onsets) - _ONSETS_SHOWN} more)"
+                if len(part.onsets) > _ONSETS_SHOWN
+                else ""
+            )
+            line += f", onsets at beats {shown}{extra}"
+        if part.long_notes:
+            longs = "; ".join(
+                f"beat {note.start:g} pitch {note.pitch} for {note.duration:g} beats"
+                for note in part.long_notes[:8]
+            )
+            line += f"; long notes: {longs}"
+        lines.append(line)
+    lines.append(
+        "Write a part that fits with them as one song: do not double another "
+        "part's long note at the same pitch and time, rest where they are "
+        "dense, and fill the spaces they leave."
+    )
+    return "\n".join(lines)
 
 
 def _rescue_transpose(

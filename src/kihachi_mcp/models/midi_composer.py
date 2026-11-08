@@ -183,10 +183,75 @@ class ComposedMidiNote:
 
 
 @dataclass(frozen=True)
+class ContextLongNote:
+    """One long note another part already plays, worth not doubling."""
+
+    start: float
+    pitch: int
+    duration: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"start": self.start, "pitch": self.pitch, "duration": self.duration}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            start=float(data.get("start") or 0),
+            pitch=int(data.get("pitch") or 0),
+            duration=float(data.get("duration") or 0),
+        )
+
+
+@dataclass(frozen=True)
+class ContextPart:
+    """Summary of one part that already plays in the target section.
+
+    Cross-part context (Phase W): the composer sees what the other parts
+    in the same section are doing — pitch set for pitched parts, onset
+    positions, and long notes — so a new part can fit with them instead
+    of improvising alone against the design alone. Drum parts carry no
+    pitch set: their pitches are fixed and musically uninformative here.
+    """
+
+    part: str
+    note_count: int
+    pitches: tuple[int, ...] = ()
+    onsets: tuple[float, ...] = ()
+    long_notes: tuple[ContextLongNote, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "part": self.part,
+            "note_count": self.note_count,
+            "pitches": list(self.pitches),
+            "onsets": list(self.onsets),
+            "long_notes": [note.to_dict() for note in self.long_notes],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            part=str(data.get("part") or ""),
+            note_count=int(data.get("note_count") or 0),
+            pitches=tuple(int(value) for value in data.get("pitches") or ()),
+            onsets=tuple(float(value) for value in data.get("onsets") or ()),
+            long_notes=tuple(
+                ContextLongNote.from_dict(item)
+                for item in data.get("long_notes") or ()
+                if isinstance(item, dict)
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class MidiCompositionRequest:
     constraints: MusicalConstraints
     operation: str = "generate"
     source_notes: tuple[ComposedMidiNote, ...] = field(default_factory=tuple)
+    #: Other parts already playing in this clip's section, when the caller
+    #: can supply them. Empty means no cross-part context, in which case
+    #: generation behaves exactly as before this field existed.
+    context_parts: tuple[ContextPart, ...] = ()
 
     def __post_init__(self) -> None:
         if self.operation not in COMPOSITION_OPERATIONS:
@@ -195,8 +260,11 @@ class MidiCompositionRequest:
             raise ValueError("variation and revision require source_notes")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "operation": self.operation,
             "constraints": self.constraints.to_dict(),
             "source_notes": [note.to_dict() for note in self.source_notes],
         }
+        if self.context_parts:
+            data["context_parts"] = [part.to_dict() for part in self.context_parts]
+        return data

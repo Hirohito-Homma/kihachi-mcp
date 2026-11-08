@@ -26,7 +26,10 @@ from kihachi_mcp.models.live_contract import (
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
+    COMPOSITION_ENGINE,
     ComposedMidiNote,
+    ContextLongNote,
+    ContextPart,
     MidiCompositionRequest,
     MusicalConstraints,
 )
@@ -69,6 +72,7 @@ from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_fr
 from kihachi_mcp.services.midi_composer import (
     DeterministicMIDIComposer,
     ProviderMIDIComposer,
+    context_collision_ratio,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
 from kihachi_mcp.services.music_plan_compiler import compile_music_plan
@@ -362,11 +366,15 @@ class StudioRuntime:
         source_notes: list[dict[str, Any]] | None = None,
         songspec: dict[str, Any] | None = None,
         start_bar: int = 1,
+        context_candidate_id: str | None = None,
     ) -> dict[str, Any]:
         """Validate one part request and estimate cost without running a model."""
         try:
             constraints = _apply_songspec_context(constraints, songspec, start_bar)
-            request = _midi_composition_request(constraints, operation, source_notes)
+            context_parts = self._context_parts(constraints, context_candidate_id)
+            request = _midi_composition_request(
+                constraints, operation, source_notes, context_parts
+            )
             provider = provider_from_settings(self._settings)
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -394,16 +402,22 @@ class StudioRuntime:
         seed: int = 0,
         songspec: dict[str, Any] | None = None,
         start_bar: int = 1,
+        context_candidate_id: str | None = None,
     ) -> dict[str, Any]:
         """Compose a reviewable part. Paid providers require this request's confirmation."""
         try:
             constraints = _apply_songspec_context(constraints, songspec, start_bar)
+            context_parts = self._context_parts(constraints, context_candidate_id)
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        preview = self.midi_composer_preview(constraints, operation, source_notes)
+        preview = self.midi_composer_preview(
+            constraints, operation, source_notes, context_candidate_id=context_candidate_id
+        )
         if not preview.get("ok"):
             return preview
-        request = _midi_composition_request(constraints, operation, source_notes)
+        request = _midi_composition_request(
+            constraints, operation, source_notes, context_parts
+        )
         provider = provider_from_settings(self._settings)
         paid = bool(provider.capabilities().get("paid_api"))
         if paid and not confirmed_paid:
@@ -429,7 +443,7 @@ class StudioRuntime:
             if isinstance(provider, OpenAIProvider) and provider.last_usage:
                 self._cost_guard.record(provider.last_usage, cost["estimate"])
         payload = [note.to_dict() for note in notes]
-        return {
+        result: dict[str, Any] = {
             "ok": True,
             "preview": False,
             "provider": preview["provider"],
@@ -441,6 +455,32 @@ class StudioRuntime:
             "applied_to_live": False,
             "next_action": "ノートを確認し、候補クリップへ採用してからAbleton適用を別途承認してください",
         }
+        if context_candidate_id is not None:
+            result["context_parts"] = [part.part for part in context_parts]
+            result["context_collision_ratio"] = context_collision_ratio(
+                notes, request.constraints, context_parts
+            )
+        return result
+
+    def _context_parts(
+        self, constraints: dict[str, Any], context_candidate_id: str | None
+    ) -> tuple[ContextPart, ...]:
+        """Cross-part context (Phase W) for one compose/preview request.
+
+        Builds summaries of the other parts that already play in the
+        target section of the given candidate. Without a candidate id
+        there is no context and behavior is unchanged.
+        """
+        if context_candidate_id is None:
+            return ()
+        candidate = self._lookup(context_candidate_id)
+        if candidate is None:
+            raise ValueError("文脈に使う候補が見つかりません")
+        section = str(constraints.get("section_name") or "")
+        if not section:
+            raise ValueError("パート間文脈を使うにはセクション名が必要です")
+        exclude = _COMPOSER_ROLE_PARTS.get(str(constraints.get("role") or ""))
+        return _section_context_parts(candidate, section, exclude)
 
     def propose_composer_adoption(
         self,
@@ -456,13 +496,7 @@ class StudioRuntime:
             return {"ok": False, "error": "指定した候補がありません"}
         if str(role) == "全パート":
             return {"ok": False, "error": "全パートは一度に採用できません。パートを選んでください。"}
-        part = {
-            "bass": "Bass",
-            "chords": "Stab",
-            "melody": "Lead",
-            "arp": "Arp",
-            "percussion": "Perc",
-        }.get(str(role))
+        part = _COMPOSER_ROLE_PARTS.get(str(role))
         if part is None:
             return {
                 "ok": False,
@@ -2997,6 +3031,58 @@ def _idle_job() -> dict[str, Any]:
     }
 
 
+#: Composer roles the adoption endpoint can replace, by Studio part name.
+_COMPOSER_ROLE_PARTS = {
+    "bass": "Bass",
+    "chords": "Stab",
+    "melody": "Lead",
+    "arp": "Arp",
+    "percussion": "Perc",
+}
+
+_PITCHED_ENGINES = frozenset({"bass", "chords", "melody", "arp"})
+_LONG_NOTE_MIN_BEATS = 1.5
+
+
+def _section_context_parts(
+    candidate: MidiCandidate, section_name: str, exclude_part: str | None
+) -> tuple[ContextPart, ...]:
+    """Summarize a candidate's other parts in one section (Phase W).
+
+    Pitched parts contribute their pitch set and long notes; drum and
+    percussion parts contribute only counts and onset positions, since
+    their pitches are fixed. Onsets are rounded to a 16th-note grid —
+    this is a summary for a composer prompt, not a transcription.
+    """
+    parts: list[ContextPart] = []
+    for clip in candidate.clips:
+        if clip.section_name != section_name or clip.part == exclude_part:
+            continue
+        pitched = COMPOSITION_ENGINE.get(clip.part) in _PITCHED_ENGINES
+        parts.append(
+            ContextPart(
+                part=clip.part,
+                note_count=len(clip.notes),
+                pitches=(
+                    tuple(sorted({note.pitch for note in clip.notes})) if pitched else ()
+                ),
+                onsets=tuple(
+                    sorted({round(note.start_beats * 4) / 4 for note in clip.notes})
+                ),
+                long_notes=tuple(
+                    ContextLongNote(
+                        start=round(note.start_beats, 3),
+                        pitch=note.pitch,
+                        duration=round(note.duration_beats, 3),
+                    )
+                    for note in clip.notes
+                    if pitched and note.duration_beats >= _LONG_NOTE_MIN_BEATS
+                ),
+            )
+        )
+    return tuple(parts)
+
+
 def _apply_songspec_context(
     constraints: dict[str, Any],
     songspec: dict[str, Any] | None,
@@ -3042,6 +3128,7 @@ def _midi_composition_request(
     constraints: dict[str, Any],
     operation: str,
     source_notes: list[dict[str, Any]] | None,
+    context_parts: tuple[ContextPart, ...] = (),
 ) -> MidiCompositionRequest:
     if not isinstance(constraints, dict):
         raise TypeError("musical constraintsが必要です")
@@ -3055,6 +3142,7 @@ def _midi_composition_request(
             for note in source_notes or []
             if isinstance(note, dict)
         ),
+        context_parts=tuple(context_parts),
     )
 
 

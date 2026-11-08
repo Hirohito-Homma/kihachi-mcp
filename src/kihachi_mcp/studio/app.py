@@ -1114,6 +1114,11 @@ def _workflow_post(
                 body.get("source_notes") if isinstance(body.get("source_notes"), list) else None,
                 songspec=body.get("songspec") if isinstance(body.get("songspec"), dict) else None,
                 start_bar=int(body.get("start_bar") or 1),
+                context_candidate_id=(
+                    str(body["context_candidate_id"])
+                    if body.get("context_candidate_id")
+                    else None
+                ),
             )
         )
     elif path == "/api/midi/compose":
@@ -1126,6 +1131,11 @@ def _workflow_post(
                 seed=int(body.get("seed") or 0),
                 songspec=body.get("songspec") if isinstance(body.get("songspec"), dict) else None,
                 start_bar=int(body.get("start_bar") or 1),
+                context_candidate_id=(
+                    str(body["context_candidate_id"])
+                    if body.get("context_candidate_id")
+                    else None
+                ),
             )
         )
     elif path == "/api/midi/adopt-preview":

@@ -69,7 +69,9 @@ def test_a_verified_session_expands_into_locators_and_clips() -> None:
     assert plan.status == STATUS_APPROVAL_REQUIRED
     assert plan.conflicts == []
     assert ops.count(OP_CREATE_LOCATOR) == 2
-    assert ops.count(OP_PLACE_ARRANGEMENT_CLIP) == 4
+    # Sections tile at the 16-beat source length: Intro 64 beats -> 4 tiles,
+    # Drop 128 beats -> 8 tiles, on each of the two tracks.
+    assert ops.count(OP_PLACE_ARRANGEMENT_CLIP) == 24
     assert plan.destructive_operation_count == 0
 
 
@@ -102,10 +104,51 @@ def test_placements_use_the_planned_bar_grid() -> None:
         if operation.op == OP_PLACE_ARRANGEMENT_CLIP
     ]
 
-    assert (0, 0.0, 64.0) in placements
-    assert (0, 64.0, 128.0) in placements
-    assert (1, 0.0, 64.0) in placements
-    assert (1, 64.0, 128.0) in placements
+    # Every placement is one source-length tile (16 beats); together the
+    # tiles cover each section's full range on the bar grid.
+    assert all(length == 16.0 for _, _, length in placements)
+    for track_index in (0, 1):
+        starts = sorted(
+            start
+            for placed_track, start, _ in placements
+            if placed_track == track_index
+        )
+        assert starts == [float(step) for step in range(0, 192, 16)]
+
+
+def test_a_section_twice_the_source_length_tiles_into_two_placements() -> None:
+    # W3-06b regression: an 8-bar section (32 beats) built from a 4-bar
+    # Session clip (16 beats) must plan two 16-beat placements, because the
+    # device cannot extend a duplicated clip past its source length.
+    transport, _, receipt, _ = _verified_session()
+    sections = [
+        Arrangement(name="Intro", start_bar=1, length_bars=8),
+        Arrangement(name="Drop", start_bar=9, length_bars=8),
+    ]
+
+    plan = _expander().create_arrangement_plan(
+        project_plan(sections=sections), snapshot_of(transport), receipt
+    )
+    placements = sorted(
+        (
+            operation.target["track_index"],
+            operation.arguments["start_beats"],
+            operation.arguments["length_beats"],
+        )
+        for operation in plan.operations
+        if operation.op == OP_PLACE_ARRANGEMENT_CLIP
+    )
+
+    assert placements == [
+        (0, 0.0, 16.0),
+        (0, 16.0, 16.0),
+        (0, 32.0, 16.0),
+        (0, 48.0, 16.0),
+        (1, 0.0, 16.0),
+        (1, 16.0, 16.0),
+        (1, 32.0, 16.0),
+        (1, 48.0, 16.0),
+    ]
 
 
 def test_an_unverified_session_blocks_expansion() -> None:
@@ -243,13 +286,14 @@ def test_an_approved_arrangement_plan_executes_and_verifies() -> None:
     )
 
     assert result.status == STATUS_VERIFIED
-    assert len(transport.live_set.arrangement_clips) == 4
+    assert len(transport.live_set.arrangement_clips) == 24
     assert len(transport.live_set.locators) == 2
     placed = sorted(
         (clip.track_index, clip.start_beats, clip.length_beats, clip.note_count)
         for clip in transport.live_set.arrangement_clips
     )
-    assert placed[0][:3] == (0, 0.0, 64.0)
+    assert placed[0][:3] == (0, 0.0, 16.0)
+    assert all(entry[2] == 16.0 for entry in placed)
     assert all(entry[3] > 0 for entry in placed)
 
 
@@ -266,4 +310,25 @@ def test_a_three_four_set_places_clips_on_a_three_beat_grid() -> None:
         if operation.op == OP_PLACE_ARRANGEMENT_CLIP
     )
 
-    assert starts == [0.0, 0.0, 48.0, 48.0]
+    # Sections convert on the 3-beat grid (Intro at 0, Drop at 48) and tile
+    # at the 16-beat source length on each track.
+    assert starts == [
+        0.0,
+        0.0,
+        16.0,
+        16.0,
+        32.0,
+        32.0,
+        48.0,
+        48.0,
+        64.0,
+        64.0,
+        80.0,
+        80.0,
+        96.0,
+        96.0,
+        112.0,
+        112.0,
+        128.0,
+        128.0,
+    ]

@@ -71,12 +71,23 @@ class StudioApp:
         self._music_plans: dict[str, LiveMutationPlan] = {}
         self._music_sources: dict[str, tuple[MusicPlan | None, dict[str, Any] | None]] = {}
         self._live_bound: set[str] = set()
-        self._eval_path = self.runtime._candidate_dir / "evaluations.json"
+        # Evaluations persist next to the candidates when the runtime has a
+        # candidate store; without one (memory-only runtime, or a runtime
+        # stand-in that is not a StudioRuntime) they stay in memory,
+        # mirroring StudioRuntime's own no-candidate-dir contract.
+        candidate_dir = (
+            self.runtime._candidate_dir
+            if isinstance(self.runtime, StudioRuntime)
+            else None
+        )
+        self._eval_path = (
+            candidate_dir / "evaluations.json" if candidate_dir is not None else None
+        )
         self._evaluations: dict[str, dict[str, Any]] = self._load_evaluations()
         self.plan_simulator = FakeLiveTransport(FakeLiveSet(tempo=110.0))
 
     def _load_evaluations(self) -> dict[str, dict[str, Any]]:
-        if self._eval_path.is_file():
+        if self._eval_path is not None and self._eval_path.is_file():
             try:
                 data = json.loads(self._eval_path.read_text("utf-8"))
                 return data if isinstance(data, dict) else {}
@@ -86,6 +97,8 @@ class StudioApp:
 
     def save_evaluation(self, candidate_id: str, record: dict[str, Any]) -> None:
         self._evaluations[candidate_id] = record
+        if self._eval_path is None:
+            return
         try:
             self._eval_path.parent.mkdir(parents=True, exist_ok=True)
             self._eval_path.write_text(json.dumps(self._evaluations, ensure_ascii=False, indent=2), "utf-8")

@@ -72,6 +72,7 @@ from kihachi_mcp.services.midi_candidate_builder import build_candidate, seed_fr
 from kihachi_mcp.services.midi_composer import (
     DeterministicMIDIComposer,
     ProviderMIDIComposer,
+    _scale_pitch_classes,
     context_collision_ratio,
 )
 from kihachi_mcp.services.midi_writer import candidate_to_midi_bytes
@@ -480,7 +481,8 @@ class StudioRuntime:
         if not section:
             raise ValueError("パート間文脈を使うにはセクション名が必要です")
         exclude = _COMPOSER_ROLE_PARTS.get(str(constraints.get("role") or ""))
-        return _section_context_parts(candidate, section, exclude)
+        allowed = _scale_pitch_classes(str(constraints.get("key") or "Cm"))
+        return _section_context_parts(candidate, section, exclude, allowed)
 
     def propose_composer_adoption(
         self,
@@ -3045,7 +3047,10 @@ _LONG_NOTE_MIN_BEATS = 1.5
 
 
 def _section_context_parts(
-    candidate: MidiCandidate, section_name: str, exclude_part: str | None
+    candidate: MidiCandidate,
+    section_name: str,
+    exclude_part: str | None,
+    allowed_pcs: frozenset[int] | None = None,
 ) -> tuple[ContextPart, ...]:
     """Summarize a candidate's other parts in one section (Phase W).
 
@@ -3053,6 +3058,13 @@ def _section_context_parts(
     percussion parts contribute only counts and onset positions, since
     their pitches are fixed. Onsets are rounded to a 16th-note grid —
     this is a summary for a composer prompt, not a transcription.
+
+    Pitches are filtered to the song scale (``allowed_pcs``) when given:
+    the summary guides a part that must stay in key, and base material
+    can contain off-scale notes (found in practice: a base candidate
+    whose Sub/Lead lines sat outside the song key poisoned generation —
+    the provider imitated their pitch classes and failed validation).
+    Counts and onsets stay unfiltered; they describe rhythm truthfully.
     """
     parts: list[ContextPart] = []
     for clip in candidate.clips:
@@ -3064,7 +3076,13 @@ def _section_context_parts(
                 part=clip.part,
                 note_count=len(clip.notes),
                 pitches=(
-                    tuple(sorted({note.pitch for note in clip.notes})) if pitched else ()
+                    tuple(
+                        pitch
+                        for pitch in sorted({note.pitch for note in clip.notes})
+                        if allowed_pcs is None or pitch % 12 in allowed_pcs
+                    )
+                    if pitched
+                    else ()
                 ),
                 onsets=tuple(
                     sorted({round(note.start_beats * 4) / 4 for note in clip.notes})
@@ -3076,7 +3094,9 @@ def _section_context_parts(
                         duration=round(note.duration_beats, 3),
                     )
                     for note in clip.notes
-                    if pitched and note.duration_beats >= _LONG_NOTE_MIN_BEATS
+                    if pitched
+                    and note.duration_beats >= _LONG_NOTE_MIN_BEATS
+                    and (allowed_pcs is None or note.pitch % 12 in allowed_pcs)
                 ),
             )
         )

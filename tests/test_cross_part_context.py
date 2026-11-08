@@ -130,7 +130,7 @@ def test_runtime_preview_builds_context_from_candidate(tmp_path) -> None:
         clip.section_name for clip in parent.clips if clip.part == "Bass"
     )
     preview = runtime.midi_composer_preview(
-        {"key": "D#m", "tempo": 110, "bars": 4, "role": "melody", "section_name": section},
+        {"key": "Cm", "tempo": 120, "bars": 4, "role": "melody", "section_name": section},
         context_candidate_id=parent_id,
     )
     assert preview["ok"] is True
@@ -139,6 +139,29 @@ def test_runtime_preview_builds_context_from_candidate(tmp_path) -> None:
     assert parts["Bass"]["pitches"]  # pitched parts carry a pitch set
     assert parts["Kick"]["pitches"] == []  # drum parts carry onsets only
     assert parts["Kick"]["onsets"]
+
+
+def test_runtime_context_pitches_are_filtered_to_the_song_scale(tmp_path) -> None:
+    # The SMOKE candidate is in C minor. Summarizing it for a D# minor
+    # request must drop C-minor-only pitch classes (e.g. C itself):
+    # off-scale context pitches invite the provider to imitate them.
+    runtime, _live = _studio(tmp_path)
+    parent_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    parent = runtime.get_candidate(parent_id)
+    section = next(
+        clip.section_name for clip in parent.clips if clip.part == "Bass"
+    )
+    preview = runtime.midi_composer_preview(
+        {"key": "D#m", "tempo": 110, "bars": 4, "role": "melody", "section_name": section},
+        context_candidate_id=parent_id,
+    )
+    assert preview["ok"] is True
+    d_sharp_minor_pcs = {1, 3, 5, 6, 8, 10, 11}
+    for part in preview["request"]["context_parts"]:
+        assert all(pitch % 12 in d_sharp_minor_pcs for pitch in part["pitches"])
+        assert all(
+            note["pitch"] % 12 in d_sharp_minor_pcs for note in part["long_notes"]
+        )
 
 
 def test_runtime_context_unknown_candidate_is_an_error(tmp_path) -> None:

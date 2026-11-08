@@ -617,9 +617,30 @@ def _enforce_monophonic(notes: list[ComposedMidiNote]) -> list[ComposedMidiNote]
             previous_end = previous.start + previous.duration
             if note.start < previous_end - 1e-6:
                 if abs(note.start - previous.start) <= 1e-6:
-                    # Shared onset: keep the louder note, drop the other.
+                    # Shared onset: the louder note keeps the onset. The
+                    # quieter hit survives as a pickup ending exactly where
+                    # the main note starts, when that pocket is free.
                     if note.velocity > previous.velocity:
                         kept[-1] = note
+                    else:
+                        pickup_start = previous.start - note.duration
+                        before = kept[-2] if len(kept) >= 2 else None
+                        if pickup_start >= 0 and (
+                            before is None
+                            or pickup_start >= before.start + before.duration - 1e-6
+                        ):
+                            kept.insert(
+                                len(kept) - 1,
+                                ComposedMidiNote(
+                                    note.pitch,
+                                    pickup_start,
+                                    note.duration,
+                                    note.velocity,
+                                    note.channel,
+                                    note.probability,
+                                    note.expression,
+                                ),
+                            )
                     continue
                 truncated = note.start - previous.start
                 if truncated <= 0.02:

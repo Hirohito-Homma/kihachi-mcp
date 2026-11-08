@@ -49,7 +49,18 @@ class DeterministicMIDIComposer:
             return _part_drum_notes(c, rng, PART_PITCH[c.role])
         engine = COMPOSITION_ENGINE.get(c.role, c.role)
         if engine in {"drums", "percussion"}:
-            return _rhythm_notes(c, rng, percussion=engine == "percussion")
+            # Structural choices (ghost notes, extra 16th hats) draw from a
+            # dedicated stream seeded without tempo / key / bars, so the
+            # groove pattern itself stays invariant under those changes
+            # (DOC-003 determinism). Velocity humanization keeps the
+            # shared stream above and may still reshuffle.
+            structure_rng = Random(
+                f"{self._seed}:structure:{c.role}:{c.ghost_notes}:{c.grid}"
+                f":{c.mpc_groove}:{c.triplet_rolls}"
+            )
+            return _rhythm_notes(
+                c, rng, percussion=engine == "percussion", structure_rng=structure_rng
+            )
         root = root_pitch(c.key, octave_offset={"bass": 0, "chords": 2, "melody": 2, "arp": 2}[engine])
         if engine == "bass":
             return _bass_notes(c, root, rng)
@@ -404,8 +415,15 @@ def _velocity(
 
 
 def _rhythm_notes(
-    c: MusicalConstraints, rng: Random, percussion: bool | None = None
+    c: MusicalConstraints,
+    rng: Random,
+    percussion: bool | None = None,
+    structure_rng: Random | None = None,
 ) -> list[ComposedMidiNote]:
+    # Structural gates draw from structure_rng (seeded without tempo / key /
+    # bars); fall back to the shared stream for direct callers.
+    if structure_rng is None:
+        structure_rng = rng
     notes: list[ComposedMidiNote] = []
     drum_part = c.role == "drums" if percussion is None else not percussion
     swing = getattr(c, "swing", 0.5)
@@ -431,9 +449,9 @@ def _rhythm_notes(
                     notes.append(ComposedMidiNote(38, snare_time, 0.125, _velocity(c, rng, accent=True), 9))
 
             # Ghost snare hits in funk/tech groove
-            if c.ghost_notes and (bar % 2 == 1 or rng.random() < 0.6):
+            if c.ghost_notes and (bar % 2 == 1 or structure_rng.random() < 0.6):
                 for ghost_offset in (1.75, 3.25):
-                    if rng.random() < 0.7:
+                    if structure_rng.random() < 0.7:
                         g_time = warp_fn(base + ghost_offset, swing, c.grid)
                         if g_time + 0.08 <= max_beats:
                             notes.append(ComposedMidiNote(38, g_time, 0.08, _velocity(c, rng, ghost=True), 9))
@@ -452,7 +470,7 @@ def _rhythm_notes(
                 if hat_time + 0.1 <= max_beats:
                     notes.append(ComposedMidiNote(pitch, hat_time, 0.1, _velocity(c, rng, accent=accent), 9))
 
-                if c.grid == "1/16" and (bar % 4 in (1, 3)) and rng.random() < 0.5:
+                if c.grid == "1/16" and (bar % 4 in (1, 3)) and structure_rng.random() < 0.5:
                     semi_offset = raw_offset + 0.25
                     semi_time = warp_fn(base + semi_offset, swing, c.grid)
                     if semi_time + 0.06 <= max_beats:

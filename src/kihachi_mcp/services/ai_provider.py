@@ -341,18 +341,33 @@ class GeminiProvider:
     """
 
     HOST = "generativelanguage.googleapis.com"
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    # gemini-2.5-flash is closed to new API users (HTTP 404); Google names
+    # gemini-3.8-flash as its successor, so it is the default.
+    DEFAULT_MODEL = "gemini-3.8-flash"
 
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
         timeout: float = 180.0,
         api_key: str | None = None,
+        thinking_budget: int | None = 0,
     ) -> None:
         self.model = model
         self._timeout = timeout
         self._api_key = api_key
+        # 0 disables the model's internal thinking phase. That is the
+        # default here: composition output is already checked by
+        # server-side validation with regeneration, and thinking made a
+        # single cell take minutes. None leaves the API default untouched.
+        self.thinking_budget = thinking_budget
         self.last_usage: dict[str, int] = {}
+
+    def _with_thinking(self, config: dict[str, Any]) -> dict[str, Any]:
+        if self.thinking_budget is None:
+            return config
+        merged = dict(config)
+        merged["thinkingConfig"] = {"thinkingBudget": self.thinking_budget}
+        return merged
 
     def _key(self) -> str | None:
         key = (
@@ -405,10 +420,18 @@ class GeminiProvider:
         return names
 
     def generate(self, prompt: str) -> str:
-        data = self._generate_content({
+        payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 8192},
-        })
+            "generationConfig": self._with_thinking({"maxOutputTokens": 8192}),
+        }
+        try:
+            data = self._generate_content(payload)
+        except InterpretationError as exc:
+            if "HTTP 400" not in str(exc) or self.thinking_budget is None:
+                raise
+            # The model rejected thinkingConfig: retry once without it.
+            payload["generationConfig"] = {"maxOutputTokens": 8192}
+            data = self._generate_content(payload)
         return self._text_of(data)
 
     def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -423,14 +446,18 @@ class GeminiProvider:
             },
         }
         with_schema = json.loads(json.dumps(base))
+        with_schema["generationConfig"] = self._with_thinking(
+            with_schema["generationConfig"]
+        )
         with_schema["generationConfig"]["responseSchema"] = _gemini_schema(schema)
         try:
             data = self._generate_content(with_schema)
         except InterpretationError as exc:
             if "HTTP 400" not in str(exc):
                 raise
-            # The endpoint rejected the (reduced) schema: retry once in
-            # plain JSON mode. Server-side validation still gates notes.
+            # The endpoint rejected the schema and/or thinkingConfig:
+            # retry once in plain JSON mode with neither. Server-side
+            # validation still gates notes.
             data = self._generate_content(base)
         parsed = parse_model_json(self._text_of(data))
         if not isinstance(parsed, dict):
@@ -747,8 +774,16 @@ def provider_from_settings(
             model=str(settings.get("ollama_cloud_model") or OllamaCloudProvider.DEFAULT_CLOUD_MODEL)
         )
     if name == "gemini":
+        budget = settings.get("gemini_thinking_budget")
+        if (
+            not isinstance(budget, int)
+            or isinstance(budget, bool)
+            or not 0 <= budget <= 24_576
+        ):
+            budget = 0
         return GeminiProvider(
-            model=str(settings.get("gemini_model") or GeminiProvider.DEFAULT_MODEL)
+            model=str(settings.get("gemini_model") or GeminiProvider.DEFAULT_MODEL),
+            thinking_budget=budget,
         )
     return OllamaProvider(
         url=str(settings.get("ollama_url") or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"),

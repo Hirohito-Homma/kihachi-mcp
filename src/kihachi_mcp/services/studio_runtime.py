@@ -320,6 +320,7 @@ class StudioRuntime:
                 "ollama_model",
                 "ollama_cloud_model",
                 "gemini_model",
+                "gemini_thinking_budget",
                 "openai_model",
                 "monthly_ai_limit_jpy",
                 "ableton_host",

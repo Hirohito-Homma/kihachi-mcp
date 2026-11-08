@@ -32,7 +32,7 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 
 #: Keys the Studio may change. Anything else in a request is ignored.
-EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model", "ollama_cloud_model", "gemini_model", "openai_model", "monthly_ai_limit_jpy")
+EDITABLE_SETTINGS = ("ai_provider", "ollama_url", "ollama_model", "ollama_cloud_model", "gemini_model", "gemini_thinking_budget", "openai_model", "monthly_ai_limit_jpy")
 AI_PROVIDERS = ("ollama", "ollama_cloud", "gemini", "openai", "deterministic")
 
 
@@ -306,6 +306,13 @@ def validate_settings(changes: dict[str, Any], installed_models: list[str]) -> s
     gemini_model = changes.get("gemini_model")
     if gemini_model is not None and (not isinstance(gemini_model, str) or not gemini_model.strip()):
         return "モデル名が空です"
+    thinking_budget = changes.get("gemini_thinking_budget")
+    if thinking_budget is not None and (
+        not isinstance(thinking_budget, int)
+        or isinstance(thinking_budget, bool)
+        or not 0 <= thinking_budget <= 24_576
+    ):
+        return "Geminiの思考予算は0〜24576の整数で指定してください"
     openai_model = changes.get("openai_model")
     if openai_model is not None and openai_model not in {"gpt-6.1-sol", "gpt-6-astra"}:
         return "OpenAIモデルは Sol または Astra を選んでください"

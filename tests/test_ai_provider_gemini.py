@@ -8,12 +8,14 @@ from kihachi_mcp.services.ai_provider import (
     provider_from_settings,
 )
 from kihachi_mcp.services.studio_interpreter import InterpretationError
+from kihachi_mcp.services.studio_workflow import validate_settings
 
 
 def test_provider_from_settings_selects_gemini_with_default_model() -> None:
     provider = provider_from_settings({"ai_provider": "gemini"})
     assert isinstance(provider, GeminiProvider)
-    assert provider.model == "gemini-2.5-flash"
+    assert provider.model == "gemini-3.8-flash"
+    assert provider.thinking_budget == 0
     assert provider.capabilities() == {
         "provider": "gemini",
         "structured_output": True,
@@ -92,7 +94,7 @@ class _FakeGemini(GeminiProvider):
         return response
 
 
-_GENERATE_PATH = "/v1beta/models/gemini-2.5-flash:generateContent"
+_GENERATE_PATH = "/v1beta/models/gemini-3.8-flash:generateContent"
 
 
 def test_gemini_generate_structured_parses_candidate_text() -> None:
@@ -116,6 +118,7 @@ def test_gemini_generate_structured_parses_candidate_text() -> None:
     config = body["generationConfig"]
     assert config["responseMimeType"] == "application/json"
     assert config["responseSchema"] == {"type": "OBJECT"}
+    assert config["thinkingConfig"] == {"thinkingBudget": 0}
     assert provider.last_usage == {"input_tokens": 120, "output_tokens": 45}
 
 
@@ -140,6 +143,7 @@ def test_gemini_generate_structured_retries_without_schema_on_400() -> None:
     assert provider.generate_structured("compose", {"type": "object"}) == {"notes": []}
     assert len(calls) == 2
     assert "responseSchema" not in (calls[1] or {})["generationConfig"]
+    assert "thinkingConfig" not in (calls[1] or {})["generationConfig"]
 
 
 def test_gemini_list_models_strips_prefix_and_filters() -> None:
@@ -163,6 +167,75 @@ def test_gemini_interpret_falls_back_offline_without_key(monkeypatch) -> None:
     provider = GeminiProvider(api_key=None)
     brief = provider.interpret("Mutation Funk、110 BPM、D#マイナー、16小節")
     assert brief.tempo.value == 110
+
+
+def test_provider_from_settings_honours_gemini_thinking_budget() -> None:
+    provider = provider_from_settings(
+        {"ai_provider": "gemini", "gemini_thinking_budget": 512}
+    )
+    assert isinstance(provider, GeminiProvider)
+    assert provider.thinking_budget == 512
+    fallback = provider_from_settings(
+        {"ai_provider": "gemini", "gemini_thinking_budget": "fast"}
+    )
+    assert isinstance(fallback, GeminiProvider)
+    assert fallback.thinking_budget == 0
+
+
+def test_validate_settings_gemini_thinking_budget() -> None:
+    assert validate_settings({"gemini_thinking_budget": 0}, []) == ""
+    assert validate_settings({"gemini_thinking_budget": 1024}, []) == ""
+    assert validate_settings({"gemini_thinking_budget": -1}, []) != ""
+    assert validate_settings({"gemini_thinking_budget": 24_577}, []) != ""
+    assert validate_settings({"gemini_thinking_budget": True}, []) != ""
+    assert validate_settings({"gemini_thinking_budget": "0"}, []) != ""
+
+
+def test_gemini_generate_sends_thinking_budget_by_default() -> None:
+    provider = _FakeGemini({
+        _GENERATE_PATH: {
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}}]
+        }
+    })
+    assert provider.generate("ping") == "ok"
+    _, _, body = provider.requests[0]
+    assert body is not None
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+
+
+def test_gemini_thinking_budget_none_omits_thinking_config() -> None:
+    class _NoThinking(GeminiProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="t", thinking_budget=None)
+            self.bodies: list = []
+
+        def _request(self, method, path, payload=None):  # type: ignore[override]
+            self.bodies.append(payload)
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+
+    provider = _NoThinking()
+    assert provider.generate("ping") == "ok"
+    assert "thinkingConfig" not in provider.bodies[0]["generationConfig"]
+
+
+def test_gemini_generate_retries_without_thinking_on_400() -> None:
+    calls: list = []
+
+    class _ThinkingRejected(GeminiProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="t")
+
+        def _request(self, method, path, payload=None):  # type: ignore[override]
+            calls.append(payload)
+            config = (payload or {}).get("generationConfig") or {}
+            if "thinkingConfig" in config:
+                raise InterpretationError("Geminiが応答を拒否しました (HTTP 400)")
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+
+    provider = _ThinkingRejected()
+    assert provider.generate("ping") == "ok"
+    assert len(calls) == 2
+    assert "thinkingConfig" not in calls[1]["generationConfig"]
 
 
 def test_gemini_request_requires_key() -> None:

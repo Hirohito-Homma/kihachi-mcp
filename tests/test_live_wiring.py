@@ -116,7 +116,9 @@ def test_main_wires_before_running_and_shuts_down_after(monkeypatch) -> None:
         "configure_live_transport_from_environment",
         lambda: calls.append("wire") or True,
     )
-    monkeypatch.setattr(server_module.mcp, "run", lambda: calls.append("run"))
+    monkeypatch.setattr(
+        "kihachi_mcp.gateway.serve.serve_stdio", lambda: calls.append("run")
+    )
     monkeypatch.setattr(
         server_module, "shutdown_live_transport", lambda: calls.append("shutdown")
     )
@@ -133,7 +135,9 @@ def test_main_skips_shutdown_when_nothing_was_wired(monkeypatch) -> None:
         "configure_live_transport_from_environment",
         lambda: calls.append("wire") or False,
     )
-    monkeypatch.setattr(server_module.mcp, "run", lambda: calls.append("run"))
+    monkeypatch.setattr(
+        "kihachi_mcp.gateway.serve.serve_stdio", lambda: calls.append("run")
+    )
     monkeypatch.setattr(
         server_module, "shutdown_live_transport", lambda: calls.append("shutdown")
     )

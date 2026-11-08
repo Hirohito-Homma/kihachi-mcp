@@ -2,6 +2,7 @@ from fastmcp import FastMCP
 
 from kihachi_mcp.tools import (
     compose_midi_part,
+    configure_live_transport_from_environment,
     create_ableton_plan,
     create_live_mutation_plan,
     create_midi_plan,
@@ -19,6 +20,7 @@ from kihachi_mcp.tools import (
     request_live_execution,
     review_songspec,
     search_memory,
+    shutdown_live_transport,
     verify_live_execution,
 )
 from kihachi_mcp.tools.local_ai import preview_local_ai_song
@@ -86,8 +88,18 @@ mcp.add_tool(orchestrate_song)
 
 
 def main() -> None:
-    """Start the KIHACHI MUSIC AI MCP server."""
-    mcp.run()
+    """Start the KIHACHI MUSIC AI MCP server.
+
+    The Live tools stay unwired unless the operator opts in with
+    ``KIHACHI_MCP_LIVE_TRANSPORT=localhost``; see
+    :func:`configure_live_transport_from_environment`.
+    """
+    wired = configure_live_transport_from_environment()
+    try:
+        mcp.run()
+    finally:
+        if wired:
+            shutdown_live_transport()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from kihachi_mcp.tools.composer import compose_midi_part
 from kihachi_mcp.tools.hello import hello
 from kihachi_mcp.tools.live import (
     configure_live_transport,
+    configure_live_transport_from_environment,
     create_live_mutation_plan,
     discover_live_capabilities,
     execute_live_request,
@@ -15,6 +16,7 @@ from kihachi_mcp.tools.live import (
     inspect_live_state,
     live_device_catalogue,
     request_live_execution,
+    shutdown_live_transport,
     verify_live_execution,
 )
 from kihachi_mcp.tools.memory import remember_song, search_memory
@@ -25,6 +27,7 @@ from kihachi_mcp.tools.review import review_songspec
 __all__ = [
     "compose_midi_part",
     "configure_live_transport",
+    "configure_live_transport_from_environment",
     "create_ableton_plan",
     "create_live_mutation_plan",
     "create_midi_plan",
@@ -42,5 +45,6 @@ __all__ = [
     "request_live_execution",
     "review_songspec",
     "search_memory",
+    "shutdown_live_transport",
     "verify_live_execution",
 ]

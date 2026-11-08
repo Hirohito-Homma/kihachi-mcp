@@ -16,6 +16,8 @@ server cannot mutate a Set until one is configured.
 import json
 import logging
 import os
+import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,11 @@ from kihachi_mcp.models.live_receipt import LiveExecutionReceipt
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.services.arrangement_expander import ArrangementExpander
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
+from kihachi_mcp.services.live_bridge import (
+    LiveBridgeSession,
+    LocalhostBridgeTransport,
+    LoopbackUdpChannel,
+)
 from kihachi_mcp.services.live_capabilities import discover_capabilities
 from kihachi_mcp.services.live_device_catalog import catalogue
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
@@ -46,25 +53,47 @@ APPROVAL_FILENAME = "pending-approval.json"
 _logger = logging.getLogger("kihachi.live.tools")
 
 
+def _unique_request_ids() -> Callable[[], str]:
+    """Return request ids that stay unique across server processes.
+
+    The Max device remembers every request id it has handled for as long
+    as it stays loaded and refuses a repeat as a duplicate. The services'
+    default factories restart a counter in every process, so a second
+    server process would collide with the previous one's very first id.
+    The Studio avoids this by injecting unique factories; the MCP tools
+    do the same here.
+    """
+    return lambda: f"mcp-{uuid.uuid4().hex}"
+
+
 class _LiveSession:
     """Process-local wiring for the Live tools."""
 
     def __init__(self) -> None:
         self.transport: LiveTransport | None = None
         self.gate = ApprovalGate()
-        self.inspector = LiveStateInspector()
+        self.inspector = LiveStateInspector(
+            request_id_factory=_unique_request_ids()
+        )
         self.planner = LiveMutationPlanner()
         self.expander = ArrangementExpander()
-        self.executor = LiveExecutionService(approval_gate=self.gate)
+        self.executor = LiveExecutionService(
+            inspector=self.inspector,
+            approval_gate=self.gate,
+            request_id_factory=_unique_request_ids(),
+        )
 
     def configure(self, transport: LiveTransport | None) -> None:
         """Install or clear the transport used by every Live tool."""
         self.transport = transport
-        self.inspector = LiveStateInspector(transport)
+        self.inspector = LiveStateInspector(
+            transport, request_id_factory=_unique_request_ids()
+        )
         self.executor = LiveExecutionService(
             transport=transport,
             inspector=self.inspector,
             approval_gate=self.gate,
+            request_id_factory=_unique_request_ids(),
         )
 
 
@@ -74,6 +103,82 @@ _session = _LiveSession()
 def configure_live_transport(transport: LiveTransport | None) -> None:
     """Install the transport used by every Live tool in this process."""
     _session.configure(transport)
+
+
+LIVE_TRANSPORT_ENV = "KIHACHI_MCP_LIVE_TRANSPORT"
+
+_wired_transport: LocalhostBridgeTransport | None = None
+
+
+def configure_live_transport_from_environment(
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Wire the loopback bridge when the operator opts in via the environment.
+
+    The MCP server starts with no transport on purpose: a freshly launched
+    server must not be able to mutate a Set until a person decides this
+    process owns the bridge. Set ``KIHACHI_MCP_LIVE_TRANSPORT=localhost`` to
+    opt in. Any other non-empty value is rejected (fail-closed) so a typo
+    cannot silently enable Live access.
+
+    Only one process may own the bridge reply port. The channel is bound
+    before the handshake file is written, so when another process (usually
+    the Studio) already owns the port, wiring is refused and that process's
+    handshake is left untouched; this server still starts, with the Live
+    tools reporting ``unavailable``.
+    """
+    global _wired_transport
+    env = environ if environ is not None else os.environ
+    value = str(env.get(LIVE_TRANSPORT_ENV) or "").strip().lower()
+    if value in ("", "off"):
+        return False
+    if value != "localhost":
+        _logger.warning(
+            "live.wiring.refused_unknown_value",
+            extra={"env": LIVE_TRANSPORT_ENV, "value": value},
+        )
+        return False
+    if _wired_transport is not None:
+        return True
+    session = LiveBridgeSession(environ=env)
+    try:
+        channel = LoopbackUdpChannel(
+            device_port=session.device_port,
+            reply_port=session.reply_port,
+        )
+    except LiveTransportError as exc:
+        _logger.error(
+            "live.wiring.refused",
+            extra={"error_code": exc.code, "error": exc.message},
+        )
+        return False
+    session.reply_port = channel.reply_port
+    session.write_handshake()
+    transport = LocalhostBridgeTransport(
+        session=session, channel=channel, timeout_seconds=40.0
+    )
+    configure_live_transport(transport)
+    _wired_transport = transport
+    _logger.info(
+        "live.wiring.configured",
+        extra={
+            "device_port": session.device_port,
+            "reply_port": session.reply_port,
+            "handshake_path": str(session.handshake_path),
+        },
+    )
+    return True
+
+
+def shutdown_live_transport() -> None:
+    """Close the bridge wired at startup, if any, and unwire the tools."""
+    global _wired_transport
+    if _wired_transport is None:
+        return
+    transport = _wired_transport
+    _wired_transport = None
+    configure_live_transport(None)
+    transport.close()
 
 
 def live_device_catalogue() -> dict[str, Any]:
@@ -155,16 +260,32 @@ def create_live_mutation_plan(
 
 
 def request_live_execution(
-    project_plan: dict[str, Any],
+    project_plan: dict[str, Any] | None = None,
     live_state: dict[str, Any] | None = None,
     clip_bars: int = 4,
+    plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one approval-gated Live request without executing anything.
 
-    On success an approval token is written to an owner-only file and its
-    location is returned. The token itself is never included in this result: a
-    person must open that file and pass the token to ``execute_live_request``.
+    Pass ``project_plan`` to plan a Session View layout from scratch, or
+    pass ``plan`` to request approval for a plan another tool already
+    built (an Arrangement plan from ``expand_session_to_arrangement``).
+    Exactly one of the two must be given. The approval binds to the
+    plan's hash either way, and the same out-of-band token rule applies:
+    the token is written to an owner-only file and only its location is
+    returned, so a person must open that file and pass the token to
+    ``execute_live_request``.
     """
+    if (project_plan is None) == (plan is None):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": STATUS_BLOCKED,
+            "approval_required": False,
+            "plan": plan or project_plan or {},
+            "error": "pass exactly one of project_plan or plan",
+        }
+    if plan is not None:
+        return _request_plan_approval(plan)
     planned = create_live_mutation_plan(project_plan, live_state, clip_bars)
     if planned.get("status") in {STATUS_BLOCKED, STATUS_UNAVAILABLE}:
         return {
@@ -174,6 +295,11 @@ def request_live_execution(
             "plan": planned,
             "error": planned.get("error", ""),
         }
+    return _request_plan_approval(planned)
+
+
+def _request_plan_approval(planned: dict[str, Any]) -> dict[str, Any]:
+    """Register human approval for one built plan and file its token."""
     try:
         plan = LiveMutationPlan.from_dict(planned)
         token = _session.gate.approve(plan)

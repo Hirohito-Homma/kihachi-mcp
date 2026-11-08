@@ -34,6 +34,7 @@ def test_mw10_gateway_suite(suite: str) -> None:
     env["PYTHONPATH"] = os.pathsep.join(pythonpath)
     result = subprocess.run(
         [sys.executable, str(script)],
+        check=False,
         capture_output=True,
         text=True,
         env=env,

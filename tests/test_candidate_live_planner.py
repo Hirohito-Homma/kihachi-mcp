@@ -2,7 +2,11 @@ from dataclasses import replace
 
 from live_fixtures import executor, fixed_clock, gate, snapshot_of
 
-from kihachi_mcp.models.live_contract import OP_CREATE_SCENE, OP_REPLACE_CLIP_NOTES
+from kihachi_mcp.models.live_contract import (
+    OP_CREATE_SCENE,
+    OP_PLACE_ARRANGEMENT_CLIP,
+    OP_REPLACE_CLIP_NOTES,
+)
 from kihachi_mcp.models.midi_candidate import CandidateClip
 from kihachi_mcp.models.production_brief import STUDIO_PARTS
 from kihachi_mcp.services.brief_parser import extract_explicit
@@ -135,3 +139,66 @@ def test_user_owned_clip_is_not_replaced() -> None:
         candidate, snapshot_of(FakeLiveTransport(live))
     )
     assert any(conflict.kind == "user_owned_clip" for conflict in plan.conflicts)
+
+
+def _applied_live(candidate):
+    live = FakeLiveSet(live_version="12.4.3")
+    transport = FakeLiveTransport(live)
+    planner = CandidateLivePlanner(clock=fixed_clock())
+    plan = planner.create_plan(
+        candidate, snapshot_of(transport), skip_instruments=True
+    )
+    approval_gate = gate()
+    token = approval_gate.approve(plan)
+    receipt = executor(transport, approval_gate).execute(
+        plan, approved=True, approval_token=token
+    )
+    assert receipt.status == "verified"
+    return live, transport, planner
+
+
+def test_arrangement_plan_places_each_clip_at_its_full_window() -> None:
+    candidate = _candidate()
+    _live, transport, planner = _applied_live(candidate)
+    plan = planner.create_arrangement_plan(candidate, snapshot_of(transport))
+    assert plan.conflicts == []
+    placed = [
+        op for op in plan.operations if op.op == OP_PLACE_ARRANGEMENT_CLIP
+    ]
+    expected = sorted(
+        ((clip.start_bar - 1) * 4, clip.length_bars * 4)
+        for clip in candidate.clips
+    )
+    actual = sorted(
+        (op.arguments["start_beats"], op.arguments["length_beats"])
+        for op in placed
+    )
+    assert actual == expected
+
+
+def test_arrangement_plan_refuses_a_shortened_session_clip() -> None:
+    candidate = _candidate()
+    live, transport, planner = _applied_live(candidate)
+    clip = next(iter(live.session_clips.values()))
+    clip.length_beats = clip.length_beats / 2
+    plan = planner.create_arrangement_plan(candidate, snapshot_of(transport))
+    assert plan.status == "blocked"
+    assert any(
+        conflict.kind == "session_clip_length_mismatch"
+        for conflict in plan.conflicts
+    )
+    assert not any(
+        op.op == OP_PLACE_ARRANGEMENT_CLIP for op in plan.operations
+    )
+
+
+def test_arrangement_plan_ignores_unreported_session_length() -> None:
+    candidate = _candidate()
+    live, transport, planner = _applied_live(candidate)
+    for clip in live.session_clips.values():
+        clip.length_beats = 0.0
+    plan = planner.create_arrangement_plan(candidate, snapshot_of(transport))
+    assert not any(
+        conflict.kind == "session_clip_length_mismatch"
+        for conflict in plan.conflicts
+    )

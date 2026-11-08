@@ -50,6 +50,11 @@ CONFLICT_PLAYING = "live_is_playing"
 CONFLICT_USER_CLIP = "user_owned_clip"
 CONFLICT_SESSION_MISSING = "session_clip_missing"
 CONFLICT_ARRANGEMENT_OCCUPIED = "arrangement_range_occupied"
+CONFLICT_CLIP_LENGTH_MISMATCH = "session_clip_length_mismatch"
+
+# A Session source whose reported length differs from the planned window by
+# more than this is refused, not placed short (see _plan_arrangement_clip).
+_LENGTH_TOLERANCE_BEATS = 1e-3
 
 _TRACK_COLORS = {
     "Kick": "2",
@@ -179,7 +184,9 @@ class CandidateLivePlanner:
         Every Session clip already holds its whole window of notes, so one copy
         per clip at its start bar lays out the song exactly as previewed. The
         snapshot must include Arrangement clips: an occupied range is refused,
-        never moved or trimmed.
+        never moved or trimmed. A Session source whose reported length
+        differs from its planned window is refused the same way, so a short
+        source is never placed silently at a longer planned length.
         """
         builder = _Builder(candidate, snapshot, change_tempo=False)
         operations, conflicts, warnings = builder.build_arrangement()
@@ -562,6 +569,24 @@ class _Builder:
         start = round((clip.start_bar - 1) * beats, 6)
         length = round(clip.length_bars * beats, 6)
         end = start + length
+        source_length = source.length_beats
+        if source_length > 0 and abs(source_length - length) > _LENGTH_TOLERANCE_BEATS:
+            self._conflicts.append(
+                LiveConflict(
+                    CONFLICT_CLIP_LENGTH_MISMATCH,
+                    f"{track_name} の {clip.section_name}（{clip.start_bar}小節目）の"
+                    f"Sessionクリップの長さが計画と一致しません"
+                    f"（実長 {source_length} beats／計画 {length} beats）。"
+                    "短いまま配置すると無言で欠けるため止めます。"
+                    "候補を作り直して適用してください",
+                    {
+                        "track_index": track_index,
+                        "source_length_beats": source_length,
+                        "planned_length_beats": length,
+                    },
+                )
+            )
+            return True
         for existing in self._snapshot.arrangement_clips_on(track_index):
             if start < existing.end_beats and existing.start_beats < end:
                 self._conflicts.append(

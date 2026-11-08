@@ -319,6 +319,7 @@ class StudioRuntime:
                 "ollama_url",
                 "ollama_model",
                 "ollama_cloud_model",
+                "gemini_model",
                 "openai_model",
                 "monthly_ai_limit_jpy",
                 "ableton_host",

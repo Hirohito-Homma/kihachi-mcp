@@ -291,6 +291,238 @@ class OllamaCloudProvider:
         return data
 
 
+# Keys of the JSON Schema subset Gemini's responseSchema accepts.
+_GEMINI_SCHEMA_KEYS = frozenset({
+    "type", "format", "title", "description", "nullable", "enum",
+    "items", "properties", "required", "minimum", "maximum",
+    "minItems", "maxItems", "minLength", "maxLength",
+})
+
+
+def _gemini_schema(schema: Any) -> Any:
+    """Reduce a JSON Schema to the subset Gemini's responseSchema takes.
+
+    Unsupported constraints (additionalProperties, exclusiveMinimum, ...)
+    are dropped, not enforced: the composer's server-side validation
+    remains the real gate, the schema only guides generation. ``type``
+    values are upper-cased to the native API's canonical enum form.
+    """
+    if isinstance(schema, dict):
+        reduced: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key not in _GEMINI_SCHEMA_KEYS:
+                continue
+            if key == "type" and isinstance(value, str):
+                reduced[key] = value.upper()
+            elif key == "properties" and isinstance(value, dict):
+                # A property map: names are user keys, keep them all and
+                # reduce only each property's own schema.
+                reduced[key] = {
+                    name: _gemini_schema(sub) for name, sub in value.items()
+                }
+            else:
+                reduced[key] = _gemini_schema(value)
+        return reduced
+    if isinstance(schema, list):
+        return [_gemini_schema(item) for item in schema]
+    return schema
+
+
+class GeminiProvider:
+    """Google Gemini models via the native generateContent API.
+
+    Mirrors OllamaCloudProvider's contract so the part-wise MIDI Composer
+    and brief interpretation work unchanged while generation runs on
+    hosted Gemini models (seconds per part instead of local minutes).
+    The API key stays in the environment — GEMINI_API_KEY, falling back
+    to GOOGLE_API_KEY — never in settings or files. Billing (or the free
+    tier) belongs to the user's Google account, not the Studio JPY cost
+    guard, so ``paid_api`` is False, as with Ollama Cloud.
+    """
+
+    HOST = "generativelanguage.googleapis.com"
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        timeout: float = 180.0,
+        api_key: str | None = None,
+    ) -> None:
+        self.model = model
+        self._timeout = timeout
+        self._api_key = api_key
+        self.last_usage: dict[str, int] = {}
+
+    def _key(self) -> str | None:
+        key = (
+            self._api_key
+            if self._api_key is not None
+            else os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        )
+        return key or None
+
+    def health(self) -> dict[str, Any]:
+        if not self._key():
+            return {
+                "ok": False,
+                "state": "api_key_missing",
+                "provider": "gemini",
+                "model": self.model,
+                "installed_models": [],
+                "message": "GEMINI_API_KEYが設定されていません",
+            }
+        try:
+            models = self.list_models()
+        except InterpretationError as exc:
+            return {
+                "ok": False,
+                "state": "unreachable",
+                "provider": "gemini",
+                "model": self.model,
+                "installed_models": [],
+                "message": str(exc),
+            }
+        return {
+            "ok": True,
+            "state": "ready",
+            "provider": "gemini",
+            "model": self.model,
+            "installed_models": models,
+            "message": "Geminiを利用できます",
+        }
+
+    def list_models(self) -> list[str]:
+        data = self._request("GET", "/v1beta/models")
+        names: list[str] = []
+        for item in data.get("models") or []:
+            methods = item.get("supportedGenerationMethods") or []
+            if methods and "generateContent" not in methods:
+                continue
+            name = str(item.get("name") or "")
+            if name:
+                names.append(name.removeprefix("models/"))
+        return names
+
+    def generate(self, prompt: str) -> str:
+        data = self._generate_content({
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 8192},
+        })
+        return self._text_of(data)
+
+    def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "systemInstruction": {
+                "parts": [{"text": "Reply with JSON matching the schema. Do not add keys."}]
+            },
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 32768,
+            },
+        }
+        with_schema = json.loads(json.dumps(base))
+        with_schema["generationConfig"]["responseSchema"] = _gemini_schema(schema)
+        try:
+            data = self._generate_content(with_schema)
+        except InterpretationError as exc:
+            if "HTTP 400" not in str(exc):
+                raise
+            # The endpoint rejected the (reduced) schema: retry once in
+            # plain JSON mode. Server-side validation still gates notes.
+            data = self._generate_content(base)
+        parsed = parse_model_json(self._text_of(data))
+        if not isinstance(parsed, dict):
+            raise InterpretationError("AI応答のJSONがオブジェクトではありません")
+        return parsed
+
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "provider": "gemini",
+            "structured_output": True,
+            "downloads_models": False,
+            "paid_api": False,
+        }
+
+    def interpret(self, brief: str) -> ProductionBrief:
+        """Interpret a brief via Gemini, falling back when unusable."""
+        if not self._key():
+            return interpret_brief_offline(brief)
+        from kihachi_mcp.services.studio_interpreter import (
+            assemble_brief,
+            extract_explicit,
+        )
+
+        prompt = (
+            "Translate this Japanese music brief into the supplied schema. Preserve explicit tempo, key, bars and drop bar. "
+            "Defaults: tech_house, 125, Dm, 96. Do not invent Ableton operations.\n\n"
+            + brief
+        )
+        try:
+            intent = self.generate_structured(prompt, STUDIO_SCHEMA)
+        except InterpretationError:
+            return interpret_brief_offline(brief)
+        return assemble_brief(extract_explicit(brief), intent, model=self.model)
+
+    def _generate_content(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/v1beta/models/{self.model}:generateContent", payload
+        )
+
+    def _text_of(self, data: dict[str, Any]) -> str:
+        usage = data.get("usageMetadata")
+        if isinstance(usage, dict):
+            self.last_usage = {
+                "input_tokens": int(usage.get("promptTokenCount") or 0),
+                "output_tokens": int(usage.get("candidatesTokenCount") or 0),
+            }
+        for candidate in data.get("candidates") or []:
+            content = candidate.get("content") or {}
+            chunks = [
+                str(part["text"])
+                for part in content.get("parts") or []
+                if isinstance(part, dict) and part.get("text")
+            ]
+            if chunks:
+                return "\n".join(chunks)
+        raise InterpretationError("Geminiの応答にテキストがありません")
+
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        key = self._key()
+        if not key:
+            raise InterpretationError("GEMINI_API_KEYが設定されていません")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        connection = HTTPSConnection(self.HOST, timeout=self._timeout)
+        try:
+            connection.request(method, path, body, {
+                "x-goog-api-key": key,
+                "Content-Type": "application/json",
+            })
+            response = connection.getresponse()
+            raw = response.read()
+            status = response.status
+        except OSError as exc:
+            raise InterpretationError("Geminiに接続できません") from exc
+        finally:
+            connection.close()
+        if status in (401, 403):
+            raise InterpretationError("GEMINI_API_KEYが無効です")
+        if status == 404:
+            raise InterpretationError(f"Geminiにモデル {self.model} が見つかりません")
+        if status == 429:
+            raise InterpretationError("Geminiの利用上限に達しました")
+        if status >= 400:
+            raise InterpretationError(f"Geminiが応答を拒否しました (HTTP {status})")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise InterpretationError("Geminiの応答を読めません") from exc
+        if not isinstance(data, dict):
+            raise InterpretationError("Geminiの応答を読めません")
+        return data
+
+
 class DeterministicProvider:
     """Preset interpretation used when no model is selected."""
 
@@ -503,7 +735,7 @@ def _response_text(data: dict[str, Any]) -> str:
 
 def provider_from_settings(
     settings: dict[str, Any],
-) -> OllamaProvider | OllamaCloudProvider | DeterministicProvider | OpenAIProvider:
+) -> OllamaProvider | OllamaCloudProvider | GeminiProvider | DeterministicProvider | OpenAIProvider:
     """Build only the provider explicitly selected in Studio settings."""
     name = str(settings.get("ai_provider") or "ollama")
     if name == "deterministic":
@@ -513,6 +745,10 @@ def provider_from_settings(
     if name == "ollama_cloud":
         return OllamaCloudProvider(
             model=str(settings.get("ollama_cloud_model") or OllamaCloudProvider.DEFAULT_CLOUD_MODEL)
+        )
+    if name == "gemini":
+        return GeminiProvider(
+            model=str(settings.get("gemini_model") or GeminiProvider.DEFAULT_MODEL)
         )
     return OllamaProvider(
         url=str(settings.get("ollama_url") or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"),

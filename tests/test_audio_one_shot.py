@@ -350,6 +350,10 @@ class _Track:
         )
 
 
+@pytest.mark.skipif(
+    not _REMOTE.exists(),
+    reason="requires the AbletonGPT remote script installed on KIHACHI's Mac",
+)
 def test_remote_script_one_shot_is_separate_from_the_normal_rejection() -> None:
     surface = _remote_surface()
     track = _Track()

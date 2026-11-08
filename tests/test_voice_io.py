@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -202,7 +203,10 @@ def test_transcription_options_are_bounded_and_deduplicated(tmp_path, monkeypatc
     }
 
 
-@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required")
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not shutil.which("ffmpeg"),
+    reason="macOS speech synthesis and FFmpeg required",
+)
 def test_japanese_reply_is_local_wav_and_temp_files_are_removed():
     data = synthesize_japanese("こんにちは")
     assert data[:4] == b"RIFF"

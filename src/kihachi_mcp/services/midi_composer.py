@@ -598,7 +598,44 @@ def _bass_notes(c: MusicalConstraints, root: int, rng: Random) -> list[ComposedM
 
             notes.append(ComposedMidiNote(pitch, start, duration, vel, 0))
 
-    return notes
+    return _enforce_monophonic(notes)
+
+
+def _enforce_monophonic(notes: list[ComposedMidiNote]) -> list[ComposedMidiNote]:
+    """Keep a single-line part single: no two notes may sound at once.
+
+    The kick-avoidance shift (and swing warping) can move a note onto the
+    onset of another, or into its tail. At a shared onset the louder note
+    wins (a ghost never doubles a main hit); otherwise the earlier note
+    is truncated to end where the next one starts.
+    """
+    ordered = sorted(notes, key=lambda note: (note.start, -note.velocity))
+    kept: list[ComposedMidiNote] = []
+    for note in ordered:
+        if kept:
+            previous = kept[-1]
+            previous_end = previous.start + previous.duration
+            if note.start < previous_end - 1e-6:
+                if abs(note.start - previous.start) <= 1e-6:
+                    # Shared onset: keep the louder note, drop the other.
+                    if note.velocity > previous.velocity:
+                        kept[-1] = note
+                    continue
+                truncated = note.start - previous.start
+                if truncated <= 0.02:
+                    kept.pop()
+                else:
+                    kept[-1] = ComposedMidiNote(
+                        previous.pitch,
+                        previous.start,
+                        truncated,
+                        previous.velocity,
+                        previous.channel,
+                        previous.probability,
+                        previous.expression,
+                    )
+        kept.append(note)
+    return kept
 
 
 def _chord_notes(c: MusicalConstraints, root: int) -> list[ComposedMidiNote]:

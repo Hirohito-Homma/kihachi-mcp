@@ -150,6 +150,20 @@ class ProviderMIDIComposer:
                 )
         if request.context_parts:
             prompt += " " + _context_prompt_text(request.context_parts)
+        if c.role != ROLE_ALL and engine in _SCALE_CHECKED_ENGINES:
+            # An explicit pitch whitelist, placed last so it survives long
+            # prompts: models kept slipping in chromatic approach notes
+            # (e.g. D and G naturals over D# minor) that the scale rule
+            # forbids, however often the rule itself was stated.
+            allowed = _scale_pitch_classes(c.key)
+            anchor = root_pitch(c.key, octave_offset=_ROLE_ROOT_OCTAVES[engine])
+            low, high = (anchor - 12, anchor + 12) if engine == "bass" else (anchor - 12, anchor + 24)
+            whitelist = [p for p in range(low, high + 1) if p % 12 in allowed]
+            prompt += (
+                f" Use ONLY these pitches (the {c.key} scale in this part's "
+                f"register): {', '.join(str(p) for p in whitelist)}. "
+                "Do not use any other pitch, including chromatic approach notes."
+            )
         prompt += (
             ' Return one JSON object like {"notes": [{"pitch": 39, "start": 0.75, "duration": 0.25, '
             '"velocity": 96, "channel": 0}]}; "start" and "duration" are numbers in beats, '

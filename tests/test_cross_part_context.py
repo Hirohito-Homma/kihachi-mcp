@@ -112,6 +112,24 @@ def test_provider_prompt_carries_context() -> None:
     assert "do not double another part's long note" in provider.prompt
 
 
+def test_provider_prompt_whitelists_scale_pitches() -> None:
+    provider = _StubProvider(_note_dicts((39, 0.0), (42, 1.0), (39, 2.0)))
+    composer = ProviderMIDIComposer(provider)
+    request = MidiCompositionRequest(constraints=_constraints(role="bass"))
+    composer.compose(request)
+    assert "Use ONLY these pitches" in provider.prompt
+    whitelist = provider.prompt.split("Use ONLY these pitches")[1].split(
+        "Do not use any other pitch"
+    )[0]
+    listed = {
+        int(token)
+        for token in whitelist.replace(":", " ").replace(",", " ").split()
+        if token.isdigit()
+    }
+    assert 39 in listed and 37 in listed  # D# and C# roots are available
+    assert 38 not in listed and 43 not in listed  # D / G naturals are not
+
+
 def test_provider_rejects_line_doubling_bass_long_notes() -> None:
     provider = _StubProvider(_note_dicts((39, 0.5), (39, 1.5), (39, 2.5)))
     composer = ProviderMIDIComposer(provider)

@@ -16,6 +16,28 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src/kihachi_mcp"
 NAME = "KIHACHI MUSIC AI"
 BUNDLE_ID = "com.kihachi.musicai"
+LIVE_DEVICE_FILES = (
+    "KIHACHI Live Device.amxd",
+    "kihachi.device.js",
+    "kihachi.bridge.js",
+)
+
+
+def copy_live_device_bundle(destination: Path) -> None:
+    """Keep the Finder installer and its assets beside the signed app."""
+    source = ROOT / "maxforlive"
+    installer = ROOT / "scripts" / "Liveデバイスをインストール.command"
+    if not installer.is_file() or not all((source / name).is_file() for name in LIVE_DEVICE_FILES):
+        raise FileNotFoundError("Live device installer or bundled files are missing")
+    if (source / LIVE_DEVICE_FILES[0]).read_bytes()[:4] != b"ampf":
+        raise ValueError("KIHACHI Live Device.amxd has an unexpected format")
+    scripts = destination / "scripts"
+    assets = destination / "maxforlive"
+    scripts.mkdir()
+    assets.mkdir()
+    shutil.copy2(installer, scripts / installer.name)
+    for name in LIVE_DEVICE_FILES:
+        shutil.copy2(source / name, assets / name)
 
 
 def bundled_data() -> list[Path]:
@@ -32,13 +54,13 @@ def bundled_data() -> list[Path]:
     return result
 
 
-def build(identity: str | None = None) -> Path:
+def build(identity: str | None = None, output_root: Path | None = None) -> Path:
     if sys.platform != "darwin":
         raise RuntimeError("A macOS .app must be built on macOS")
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     arch = platform.machine()
     build_kind = "-developer-id" if identity else ""
-    destination = ROOT / "dist" / "macos" / f"{version}-{arch}{build_kind}"
+    destination = (output_root or ROOT / "dist" / "macos") / f"{version}-{arch}{build_kind}"
     app = destination / f"{NAME}.app"
     if destination.exists():
         raise FileExistsError(f"Build output already exists: {destination}")
@@ -68,6 +90,7 @@ def build(identity: str | None = None) -> Path:
             raise FileExistsError(f"Build output appeared during build: {destination}")
         destination.mkdir(parents=True)
         shutil.move(str(built_app), str(app))
+        copy_live_device_bundle(destination)
     print(f"Built {app}")
     print("Developer ID signed" if identity else "Ad-hoc signed: local evaluation only")
     return app
@@ -78,8 +101,11 @@ def main() -> None:
     parser.add_argument(
         "--signing-identity", help="Developer ID Application identity from Keychain"
     )
+    parser.add_argument(
+        "--output-root", type=Path, help="Build in a separate folder without replacing an existing app"
+    )
     args = parser.parse_args()
-    build(args.signing_identity)
+    build(args.signing_identity, args.output_root)
 
 
 if __name__ == "__main__":

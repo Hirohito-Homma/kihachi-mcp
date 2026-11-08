@@ -132,6 +132,57 @@ def test_kick_replacement_requires_preview_then_changes_only_kick(tmp_path: Path
     assert hats["occupied_pads"] == hats_before
 
 
+def test_kick_replacement_uses_compact_snapshot_for_plan_and_execute(
+    tmp_path: Path,
+) -> None:
+    class RecordingTransport(FakeLiveTransport):
+        def __init__(self) -> None:
+            super().__init__(FakeLiveSet(live_version="12.4.3", tempo=125))
+            self.state_payloads: list[dict] = []
+
+        def request(self, message: dict) -> dict:
+            if message.get("method") == "get_state":
+                self.state_payloads.append(dict(message.get("payload") or {}))
+            return super().request(message)
+
+    transport = RecordingTransport()
+    runtime = StudioRuntime(
+        transport=transport,
+        gate=gate(tmp_path),
+        export_dir=tmp_path / "exports",
+    )
+    candidate = _candidate()
+    runtime._store(candidate)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    transport.state_payloads.clear()
+
+    replacement = tmp_path / "fat-kick.wav"
+    replacement.write_bytes(b"fat")
+    preview = runtime.sample_replacement_preview(candidate.candidate_id, str(replacement))
+    assert preview["ok"] is True
+    result = runtime.apply_sample_replacement(preview["replacement_id"], confirmed=True)
+    assert result["ok"] is True
+    assert transport.state_payloads
+    assert all(payload["include_session_clips"] is False for payload in transport.state_payloads)
+
+
+def test_kick_replacement_refuses_occupied_pad_without_readable_sample(
+    tmp_path: Path,
+) -> None:
+    runtime, candidate, transport = _runtime(tmp_path)
+    assert runtime.apply(candidate.candidate_id, confirmed=True)["ok"] is True
+    kick = next(track for track in transport.live_set.tracks if "Kick" in track["name"])
+    kick["occupied_pads"][0]["sample_path"] = ""
+    replacement = tmp_path / "fat-kick.wav"
+    replacement.write_bytes(b"fat")
+
+    preview = runtime.sample_replacement_preview(candidate.candidate_id, str(replacement))
+
+    assert preview["ok"] is False
+    assert "現在サンプルを読み取れません" in preview["error"]
+    assert kick["occupied_pads"][0]["sample_path"] == ""
+
+
 def test_inspect_coverage_lists_leftover_kihachi_tracks(tmp_path: Path) -> None:
     live = FakeLiveSet(live_version="12.4.3", tempo=125)
     live.add_track("KIHACHI Kick ca90283e [KIHACHI]")
@@ -186,6 +237,26 @@ def test_a_saved_candidate_survives_a_restart_with_the_same_notes(tmp_path: Path
     assert restarted.selected_candidate() == reloaded
     preview = restarted.apply_preview(candidate.candidate_id)
     assert preview["notes_match_preview"] is True
+
+
+def test_explicit_selection_survives_newer_candidate_and_restart(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    runtime, original, transport = _runtime(tmp_path, candidate_dir=saved)
+    newer = build_candidate(original.brief, seed=5, candidate_id="runtime02deadbeef")
+    runtime._store(newer)
+    assert runtime.select(original.candidate_id)["ok"] is True
+    restarted = _restarted(tmp_path, transport, saved)
+    assert restarted.selected_id() == original.candidate_id
+    assert restarted.selected_candidate().note_fingerprint == original.note_fingerprint
+
+
+def test_invalid_saved_selection_falls_back_to_candidate(tmp_path: Path) -> None:
+    saved = tmp_path / "candidates"
+    _runtime_a, candidate, transport = _runtime(tmp_path, candidate_dir=saved)
+    (saved / ".kihachi-selected.json").write_text(
+        '{"candidate_id":"../outside"}', encoding="utf-8"
+    )
+    assert _restarted(tmp_path, transport, saved).selected_id() == candidate.candidate_id
 
 
 def test_a_restart_does_not_allow_a_second_apply(tmp_path: Path) -> None:

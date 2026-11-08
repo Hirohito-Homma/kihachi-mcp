@@ -1,3 +1,8 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "kihachi-mcp": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/user/MusicAI/kihachi-mcp", "server.py"]
+    }
+  }
 }

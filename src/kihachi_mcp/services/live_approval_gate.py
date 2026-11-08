@@ -114,9 +114,24 @@ class ApprovalGate:
         self._approvals.pop(token, None)
         self._save()
 
+    def holds(self, plan_hash: str) -> bool:
+        """Report whether this exact plan hash already has an approval token."""
+        return self.token_for(plan_hash) is not None
+
+    def token_for(self, plan_hash: str) -> str | None:
+        """Return the server-side token for this hash. Callers must not send it to a browser."""
+        for token, item in self._approvals.items():
+            if item.get("plan_hash") == plan_hash:
+                return token
+        return None
+
     def is_consumed(self, idempotency_key: str) -> bool:
         """Report whether an idempotency key has already been used."""
         return idempotency_key in self._consumed
+
+    def is_expired(self, plan: LiveMutationPlan) -> bool:
+        """Report whether ``authorize`` would now refuse this plan as expired."""
+        return self._is_expired(plan)
 
     def _is_expired(self, plan: LiveMutationPlan) -> bool:
         if not plan.expires_at:

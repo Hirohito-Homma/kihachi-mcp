@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -175,7 +176,12 @@ def _track(index: int, name: str, track_type: str = "midi") -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _no_live_leak() -> Any:
+def _no_live_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    monkeypatch.setenv("KIHACHI_SAMPLE_LIBRARY_PATHS", "")
+    monkeypatch.setenv("KIHACHI_SAMPLE_INDEX_PATH", str(tmp_path / "index.json"))
+    monkeypatch.setenv("KIHACHI_SAMPLE_MANIFEST_DIR", str(tmp_path / "manifests"))
+    monkeypatch.setenv("KIHACHI_SAMPLE_SELECTION_PATH", str(tmp_path / "selections.json"))
+    monkeypatch.setenv("KIHACHI_VERIFIED_INSTRUMENT_PATH", str(tmp_path / "verified-instrument.json"))
     configure_ableton_client(None)
     yield
     configure_ableton_client(None)

@@ -29,12 +29,15 @@ else
 fi
 
 OLLAMA_URL="${KIHACHI_OLLAMA_URL:-http://127.0.0.1:11434}"
-if curl -fsS -m 3 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-  models="$(curl -fsS -m 3 "$OLLAMA_URL/api/tags" | "$ROOT/.venv/bin/python" -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin).get("models", [])))')"
-  if [ -z "$models" ]; then
-    warn "Ollama は動いていますが、モデルがありません。KIHACHI は自動でダウンロードしません。docs/OLLAMA_SETUP.md を参照してください。"
+if ollama_tags="$(curl -fsS -m 3 "$OLLAMA_URL/api/tags" 2>/dev/null)"; then
+  if models="$(printf '%s' "$ollama_tags" | "$ROOT/.venv/bin/python" -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin).get("models", [])))' 2>/dev/null)"; then
+    if [ -z "$models" ]; then
+      warn "Ollama は動いていますが、モデルがありません。KIHACHI は自動でダウンロードしません。docs/OLLAMA_SETUP.md を参照してください。"
+    else
+      ok "Ollama モデル: $models"
+    fi
   else
-    ok "Ollama モデル: $models"
+    warn "Ollama のモデル一覧を読み取れません。AIなし（既定解釈）でも制作できます。"
   fi
 elif command -v ollama >/dev/null 2>&1; then
   warn "Ollama が $OLLAMA_URL で応答しません。別のターミナルで ollama serve を実行してください。"
@@ -44,9 +47,16 @@ fi
 
 echo
 echo "環境診断:"
-"$ROOT/.venv/bin/kihachi" doctor || true
+if curl -fsS -m 2 http://127.0.0.1:8765/api/health >/dev/null 2>&1; then
+  warn "既にStudioが起動しています。以下のStudio・Live診断はその既存プロセスの状態で、新しいインストールの起動確認ではありません。"
+fi
+if ! "$ROOT/.venv/bin/kihachi" doctor; then
+  fail "必須診断に失敗しました。上の対処を確認してから再実行してください。"
+  exit 1
+fi
 
 echo
 echo "次の手順:"
 echo "  1. scripts/kihachi-studio.command を開く … 制作画面 http://127.0.0.1:8765/"
-echo "  2. Liveへ送るときだけ KIHACHI Live Device を置く（docs/ABLETON_SETUP.md）"
+echo "  2. Liveへ送る前に scripts/Liveデバイスをインストール.command でUser Libraryへ導入"
+echo "  3. LiveのSetにKIHACHI Live Deviceを1つ置く（docs/ABLETON_SETUP.md）"

@@ -45,7 +45,11 @@ def project_view(candidate: MidiCandidate) -> dict[str, Any]:
     sections = []
     densities = []
     for section in brief.sections:
-        clips = [clip for clip in candidate.clips if clip.section_name == section.name]
+        clips = [
+            clip
+            for clip in candidate.clips
+            if section.start_bar <= clip.start_bar <= section.end_bar
+        ]
         notes = sum(len(clip.notes) for clip in clips)
         per_bar = notes / max(1, section.length_bars)
         densities.append(per_bar)
@@ -68,8 +72,14 @@ def project_view(candidate: MidiCandidate) -> dict[str, Any]:
     for section, density in zip(sections, densities, strict=True):
         section["energy"] = round(density / peak, 2) if peak else 0.0
     tracks = []
+    total_bars = max(1, int(brief.bars.value))
     for part in candidate.parts:
         clips = candidate.clips_for_part(part)
+        bar_notes = [0] * total_bars
+        for clip in clips:
+            for note in clip.notes:
+                bar = clip.start_bar - 1 + int(note.start_beats // brief.beats_per_bar)
+                bar_notes[min(max(bar, 0), total_bars - 1)] += 1
         tracks.append(
             {
                 "part": part,
@@ -77,6 +87,7 @@ def project_view(candidate: MidiCandidate) -> dict[str, Any]:
                 "clips": len(clips),
                 "note_count": candidate.note_count(part),
                 "sections": [clip.section_name for clip in clips if clip.notes],
+                "bar_notes": bar_notes,
             }
         )
     return {

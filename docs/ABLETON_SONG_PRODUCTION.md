@@ -97,3 +97,25 @@ AbletonGPT の時間は beats（4 分音符）です。
 Arrangement に、title で始まるトラックが beat 0 から 128 beats（32 小節）置いてあること。Session のスロット 0 に同じクリップがあること。
 
 `rename_track` は Remote Script に無いので、名前は作成時に付けます。デバイスの自動ロード、既存 Set の削除、上書き保存はしません。
+
+## 音源の割り当て
+
+`produce_ableton_song` の dry-run に `sound_plan` が付きます。Studio の SongSpec には足しません。
+
+メーターで確認済みのメロディ（SLAP BASS、SUB BASS、DUB CHORDS、SYNTH STABS、ARP、VOCODER CARRIER）は `source=instrument`、デバイスは Operator、`verified=true` です。人が聞いた確認はしていません。KICK は `source=sample_instrument`、デバイス名は Simpler、サンプルは pending です。Simpler は insert 許可リストに無いので、後のプローブはコマンドを先に確認します。DRUMS は `source=sample`、PERCUSSION / VOCAL / FX は `source=audio`、いずれも pending です。Drum Rack は使いません。この回では置きません。
+
+`confirm=true` でも既存の曲トラックへデバイスは載せません。試験は `KIHACHI DEVICE PROBE` だけです。ブラウザで同名が2件ある項目はロードしません。
+
+将来のサンプルは、ワンショットを Simpler、ループを Arrangement のオーディオクリップに分ける予定です。この文書の時点では置きません。
+
+再生の確認は `get_mix_snapshot` の `output_meter_level` だけです。止まった状態の値より再生中の値が大きいときだけメーター活動とします。人が聞いたとは書きません。`set_transport stop` のあとにまだ再生中なら、もう一度再生しません。
+
+## 手元のサンプル
+
+サンプルの場所は `KIHACHI_SAMPLE_LIBRARY_PATHS` だけです。セミコロン区切りで、引用符は外します。空なら探しません。インデックスは Application Support の JSON だけで、音声ファイルは変更しません。検索結果に絶対パスは出しません。Mutant Dub Circuit（110 BPM、D# minor、32 小節）の候補は KICK、DRUMS、PERCUSSION、VOCAL、FX で各 5 件までです。1 位は自動採用しません。BPM が 20 より離れたループは自動採用しません。
+
+`produce_ableton_song` の dry-run は Sample Plan を返します。既定は `assisted` です。1位の候補は自動採用しません。`confirm=true` でもサンプルは置きません。人が `select_sample` したあと、`place_sample` が別の確認付き操作です。
+
+配置は既存の `import_audio_clip` と `copy_session_clip_to_arrangement` だけです。ワープされていない音声は Session に残し、Arrangement へはコピーしません。ワープを付けるコマンドはありません。
+
+出典はフォルダ名から分かるときだけ `splice` です。pack、creator、license はファイルに無いので埋めません。

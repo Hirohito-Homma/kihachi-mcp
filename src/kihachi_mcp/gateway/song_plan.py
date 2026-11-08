@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from kihachi_mcp.gateway.samples.rank import sample_requirements
 from kihachi_mcp.gateway.song_patterns import (
     ROLES,
     generate_role_notes,
@@ -16,6 +17,7 @@ from kihachi_mcp.gateway.song_time import (
     MAX_NOTES_PER_CLIP,
     validate_note,
 )
+from kihachi_mcp.gateway.sound import sound_plan
 from kihachi_mcp.models.songspec import SongSpec
 
 PRESET_STYLE = "mutation-funk-dub-tech-house"
@@ -90,6 +92,7 @@ def build_song_plan(
                 raise ValueError(f"{role} が D# minor から外れています")
         notes_by_role[role] = rendered
     names = [track_name(checked_title, role) for role in ROLES]
+    requirements = sample_requirements(checked_tempo, checked_key)
     spec = SongSpec.from_dict(
         {
             "genre": checked_style,
@@ -123,9 +126,13 @@ def build_song_plan(
         }
         for role in ROLES
     ]
+    songspec = spec.to_dict()
+    songspec["sample_requirements"] = requirements
     return {
         "plan_id": plan_id,
-        "songspec": spec.to_dict(),
+        "songspec": songspec,
+        "sample_requirements": requirements,
+        "sound_plan": sound_plan(),
         "song": {
             **identity,
             "signature": "4/4",

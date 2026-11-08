@@ -3,6 +3,7 @@
 import json
 import re
 import threading
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -48,6 +49,53 @@ def test_health_no_longer_crashes(studio) -> None:
     status, health = _call(port, "GET", "/api/health")
     assert status == 200
     assert {item["name"] for item in health["statuses"]} >= {"Ollama", "Ableton Live"}
+
+
+def test_live_overview_reads_set_without_mutation(studio) -> None:
+    port, _runtime, live = studio
+    status, overview = _call(port, "GET", "/api/live/overview")
+    assert status == 200
+    assert overview["ok"] is True
+    assert overview["live_changed"] is False
+    assert overview["tempo"] == live.tempo
+    assert overview["tracks"] == []
+    assert overview["note_counts_included"] is False
+    assert live.tracks == []
+
+
+def test_live_candidate_uses_overview_and_keeps_live_unchanged(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    live.tempo = 124
+    received = []
+    monkeypatch.setattr(runtime, "queue_generate", lambda brief: received.append(brief) or {"ok": True, "started": True})
+    status, result = _call(port, "POST", "/api/live/candidate", {"brief": "D minor、8小節のテクノ"})
+    assert status == 200
+    assert result["ok"] is True
+    assert result["live_changed"] is False
+    assert result["live_context"]["sources"]["tempo"] == "live"
+    assert received == ["124 BPM。D minor、8小節のテクノ"]
+    assert live.tracks == []
+
+
+def test_openai_connection_route_checks_saved_provider(studio, monkeypatch) -> None:
+    from kihachi_mcp.services.ai_provider import OpenAIProvider
+
+    port, runtime, _live = studio
+    status, result = _call(port, "GET", "/api/ai/connection")
+    assert status == 200 and result["ok"] is False
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+    monkeypatch.setattr(OpenAIProvider, "test_connection", lambda self: {"ok": True, "model": self.model})
+    status, result = _call(port, "GET", "/api/ai/connection")
+    assert status == 200 and result == {"ok": True, "model": "gpt-6.1-sol"}
+
+
+def test_http_generate_previews_paid_cost_before_start(studio) -> None:
+    port, runtime, _live = studio
+    assert runtime.update_settings({"ai_provider": "openai"}, persist=False)["ok"]
+    status, result = _call(port, "POST", "/api/generate", {"brief": "124 BPM、D# minor"})
+    assert status == 200 and result["ok"] is False
+    assert result["cost"]["estimate"]["estimated_jpy"] > 0
+    assert runtime.job_status()["state"] == "idle"
 
 
 def test_candidate_audio_preview_is_read_only(studio) -> None:
@@ -106,6 +154,15 @@ def test_sample_replacement_http_requires_preview_and_confirmation(tmp_path: Pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_sample_replacement_rejects_unlisted_bundled_asset(studio) -> None:
+    port, _runtime, _live = studio
+    status, response = _call(
+        port, "POST", "/api/samples/replace-preview", {"bundled_sample": "../other.wav"}
+    )
+    assert status == 400
+    assert response["ok"] is False
 
 
 def test_full_studio_flow_over_http(studio) -> None:
@@ -248,6 +305,7 @@ def test_retune_route_needs_parts_and_previews_before_sending(studio) -> None:
     port, runtime, live = studio
     candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
     runtime.approve(candidate_id)
+    runtime.dry_run(candidate_id)
     runtime.send_to_ableton(candidate_id, confirmed=True)
     runtime.apply_effects(candidate_id, confirmed=True)
     _status, empty = _call(port, "POST", "/api/ableton/retune", {"candidate_id": candidate_id})
@@ -287,9 +345,510 @@ def test_page_calls_only_routes_the_server_has() -> None:
         "retune-parts",
         "master-retune",
         "measure-path",
+        "music-plan-view",
+        "music-plan-preview",
+        "music-plan-approve",
+        "music-plan-reject",
+        "music-plan-verify",
+        "music-plan-live",
+        "jarvis-revise",
+        "approval-center",
+        "live-plan-pending",
+        "apply-body",
         "midi-composer-view",
         "composer-preview",
         "composer-run",
         "composer-adopt",
+        "astra-params-view",
+        "astra-genre",
+        "astra-mood",
+        "astra-prompt",
+        "astra-send",
     ):
         assert f'id="{element}"' in page
+    assert "15分" in page
+    assert "remaining_seconds" in page
+    assert "同じ名前のトラック" in page
+    assert "Studioに届きませんでした" in page
+    assert "ジャンル ${direction.genre}" in page
+    assert "def _remaining_seconds" in source
+
+
+def test_music_plan_preview_does_not_touch_live(studio) -> None:
+    port, _runtime, live = studio
+    before = list(live.tracks)
+    status, preview = _call(port, "POST", "/api/music-plan/preview", {})
+    assert status == 200
+    assert preview["ok"] is True
+    assert preview["paid_api"] is False
+    assert preview["executed"] is False
+    assert preview["live_changed"] is False
+    assert preview["save"] is False
+    assert preview["music"]["tempo"] == 110
+    assert preview["music"]["key"] == "D#m"
+    assert preview["dry_run"]["playback"] == "UNKNOWN"
+    assert preview["operations"] == [
+        "create_scene",
+        "create_midi_track",
+        "create_session_clip",
+        "replace_clip_notes",
+    ]
+    assert live.tracks == before
+
+
+def test_all_parts_plan_preview_does_not_touch_live(studio) -> None:
+    port, _runtime, live = studio
+    before = list(live.tracks)
+    status, preview = _call(
+        port,
+        "POST",
+        "/api/music-plan/preview",
+        {"constraints": {"role": "全パート", "key": "D#m", "tempo": 124, "bars": 4}},
+    )
+    assert status == 200
+    assert preview["ok"] is True
+    assert preview["paid_api"] is False
+    assert preview["executed"] is False
+    assert preview["live_changed"] is False
+    assert preview["dry_run"]["changes"]["tracks"] == 15
+    assert preview["approved"] is False
+    assert "direction" not in preview
+    status, directed = _call(
+        port,
+        "POST",
+        "/api/music-plan/preview",
+        {
+            "constraints": {
+                "role": "全パート",
+                "key": "D#m",
+                "tempo": 124,
+                "bars": 4,
+                "genre": "mutation_funk",
+                "mood": "暗い",
+                "prompt": "キックは短め。ミューテーションファンクを作って",
+            }
+        },
+    )
+    assert status == 200
+    assert directed["ok"] is True
+    assert directed["direction"]["genre"] == "mutation_funk"
+    assert directed["direction"]["mood"] == "暗い"
+    assert "ミューテーションファンク" in directed["direction"]["prompt"]
+    assert "方向の記録" in "".join(directed["music"]["warnings"])
+    assert directed["live_changed"] is False
+    assert live.tracks == before
+    status, approved = _call(
+        port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]}
+    )
+    assert status == 200
+    assert approved["ok"] is True
+    assert approved["approved"] is True
+    assert approved["executed"] is False
+    assert approved["live_changed"] is False
+    assert live.tracks == before
+    status, missing = _call(port, "POST", "/api/music-plan/approve", {"plan_hash": "missing"})
+    assert missing["ok"] is False
+    assert live.tracks == before
+
+
+def test_astra_all_parts_preview_does_not_spend_or_touch_live(studio, monkeypatch) -> None:
+    port, runtime, live = studio
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-sent")
+    assert runtime.update_settings(
+        {"ai_provider": "openai", "openai_model": "gpt-6-astra"}, persist=False
+    )["ok"]
+    body = {
+        "operation": "generate",
+        "constraints": {
+            "role": "全パート",
+            "key": "D#m",
+            "tempo": 124,
+            "bars": 8,
+            "grid": "1/16",
+            "syncopation": 0.7,
+            "octave_jump": 0.2,
+            "ghost_notes": True,
+            "velocity_min": 65,
+            "velocity_max": 118,
+            "note_length_min": 0.25,
+            "note_length_max": 0.75,
+            "avoid_kick_collision": True,
+        },
+        "source_notes": [],
+    }
+    status, preview = _call(port, "POST", "/api/midi/preview", body)
+    assert status == 200
+    assert preview["ok"] is True
+    assert preview["preview"] is True
+    assert preview["model"] == "gpt-6-astra"
+    assert preview["paid_api"] is True
+    assert preview["request"]["constraints"]["role"] == "全パート"
+    assert preview["applied_to_live"] is False
+    extras = {
+        **body,
+        "constraints": {
+            **body["constraints"],
+            "genre": "mutation_funk",
+            "mood": "暗い",
+            "prompt": "キックは短め。ミューテーションファンクを作って",
+        },
+    }
+    status, directed = _call(port, "POST", "/api/midi/preview", extras)
+    assert status == 200
+    assert directed["ok"] is True
+    assert directed["request"]["constraints"]["genre"] == "mutation_funk"
+    assert directed["request"]["constraints"]["mood"] == "暗い"
+    assert "ミューテーションファンク" in directed["request"]["constraints"]["prompt"]
+    assert preview["cost"]["estimate"]["estimated_jpy"] > 0
+    assert live.tracks == []
+    status, refused = _call(port, "POST", "/api/midi/compose", body)
+    assert status == 200
+    assert refused["ok"] is False
+    assert live.tracks == []
+
+
+def test_music_plan_reject_creates_no_token_and_does_not_touch_live(studio) -> None:
+    port, runtime, live = studio
+    before = list(live.tracks)
+    _status, preview = _call(
+        port,
+        "POST",
+        "/api/music-plan/preview",
+        {"constraints": {"role": "bass", "key": "D#m", "tempo": 110, "bars": 2}},
+    )
+    status, rejected = _call(
+        port, "POST", "/api/music-plan/reject", {"plan_hash": preview["plan_hash"]}
+    )
+    assert status == 200
+    assert rejected["ok"] is True
+    assert rejected["rejected"] is True
+    assert rejected["approved"] is False
+    assert rejected["executed"] is False
+    assert rejected["live_changed"] is False
+    assert runtime._gate.holds(preview["plan_hash"]) is False
+    assert live.tracks == before
+
+
+def test_music_plan_verify_does_not_complete_an_unread_plan(studio) -> None:
+    port, runtime, live = studio
+    before = list(live.tracks)
+    _status, preview = _call(
+        port,
+        "POST",
+        "/api/music-plan/preview",
+        {"constraints": {"role": "bass", "key": "D#m", "tempo": 110, "bars": 2}},
+    )
+    status, early = _call(port, "POST", "/api/music-plan/verify", {"plan_hash": preview["plan_hash"]})
+    assert status == 200
+    assert early["ok"] is False
+    assert early["state"] == "APPROVAL_REQUIRED"
+    assert early["executed"] is False
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    status, rebound = _call(port, "POST", "/api/music-plan/verify", {"plan_hash": preview["plan_hash"]})
+    assert status == 200
+    assert rebound["ok"] is False
+    assert rebound["state"] == "APPROVAL_REQUIRED"
+    assert rebound["plan_hash"] != preview["plan_hash"]
+    assert rebound["live_changed"] is False
+    assert "もう一度承認" in rebound["reply"]
+    assert runtime._gate.holds(rebound["plan_hash"]) is False
+    assert live.tracks == before
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": rebound["plan_hash"]})
+    status, finished = _call(port, "POST", "/api/music-plan/verify", {"plan_hash": rebound["plan_hash"]})
+    assert status == 200
+    assert finished["ok"] is True
+    assert finished["state"] == "HUMAN_AUDITION_REQUIRED"
+    assert finished["musical_quality_claimed"] is False
+    assert finished["live_changed"] is False
+    assert "実機は見ていません" in finished["reply"]
+    assert live.tracks == before
+
+
+def test_music_plan_live_send_explains_an_expired_read(studio) -> None:
+    port, runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    runtime._gate._clock = lambda: datetime.now(UTC) + timedelta(seconds=1000)
+    _status, late = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert late["executed"] is False
+    assert "15分が過ぎました" in late["reply"]
+    assert "the plan expired" not in late["reply"]
+    assert live.tracks == []
+    _status, reread = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert reread["plan_hash"] != bound["plan_hash"]
+
+
+def _bass_plan(port: int) -> dict:
+    _status, preview = _call(
+        port,
+        "POST",
+        "/api/music-plan/preview",
+        {"constraints": {"role": "bass", "key": "D#m", "tempo": 110, "bars": 2}},
+    )
+    return preview
+
+
+def test_music_plan_reaches_live_only_after_reading_and_a_second_approval(studio) -> None:
+    port, runtime, live = studio
+    live.add_track("User Drums")
+    live.add_scene("Verse")
+    preview = _bass_plan(port)
+    _status, early = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    assert early["state"] == "APPROVAL_REQUIRED"
+    assert early["executed"] is False
+    assert [track["name"] for track in live.tracks] == ["User Drums"]
+
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    assert bound["plan_hash"] != preview["plan_hash"]
+    assert bound["live_changed"] is False
+    assert "もう一度承認" in bound["reply"]
+    assert runtime._gate.holds(bound["plan_hash"]) is False
+    assert [track["name"] for track in live.tracks] == ["User Drums"]
+
+    _status, unapproved = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert unapproved["executed"] is False
+    assert len(live.tracks) == 1
+
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    _status, sent = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert sent["ok"] is True
+    assert sent["state"] == "HUMAN_AUDITION_REQUIRED"
+    assert "COMPLETED" not in sent["states"]
+    assert sent["live_changed"] is True
+    assert sent["save"] is False
+    assert sent["musical_quality_claimed"] is False
+    assert "音源は入れていない" in sent["reply"]
+    assert live.tracks[1]["device_names"] == []
+    assert live.tracks[0]["name"] == "User Drums"
+    assert live.tracks[1]["name"].startswith("KIHACHI Bass ")
+    assert live.tracks[1]["name"].endswith("[KIHACHI]")
+    assert live.scenes[0]["name"] == "Verse"
+    assert len(live.scenes) == 2
+    assert live.session_clips[(1, 1)].notes
+
+    _status, again = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert again["executed"] is False
+    assert len(live.tracks) == 2
+
+
+def test_music_plan_is_not_read_into_live_while_it_plays(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    live.is_playing = True
+    _status, result = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    assert result["executed"] is False
+    assert result["plan_hash"] == preview["plan_hash"]
+    assert "再生中" in result["reply"]
+    assert live.tracks == []
+
+
+def test_music_plan_does_not_read_live_when_disconnected(studio) -> None:
+    port, runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    runtime._snapshot = lambda: (None, {"error": "接続がありません"})
+    _status, result = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    assert result["executed"] is False
+    assert result["live_changed"] is False
+    assert "読めませんでした" in result["reply"]
+    assert live.tracks == []
+
+
+def test_music_plan_keeps_live_binding_when_playback_blocks_the_send(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    live.is_playing = True
+    _status, blocked = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert blocked["executed"] is False
+    assert blocked["plan_hash"] == bound["plan_hash"]
+    assert "承認は残しています" in blocked["reply"]
+    assert live.tracks == []
+    live.is_playing = False
+    _status, sent = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert sent["ok"] is True
+    assert sent["live_changed"] is True
+    assert live.tracks[0]["name"].startswith("KIHACHI Bass ")
+
+
+def test_music_plan_is_not_read_into_live_while_it_records(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    live.is_recording = True
+    _status, result = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    assert result["executed"] is False
+    assert result["plan_hash"] == preview["plan_hash"]
+    assert "録音中" in result["reply"]
+    assert live.tracks == []
+
+
+def test_music_plan_keeps_live_binding_when_recording_blocks_the_send(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    live.is_recording = True
+    _status, blocked = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert blocked["executed"] is False
+    assert blocked["plan_hash"] == bound["plan_hash"]
+    assert "承認は残しています" in blocked["reply"]
+    assert live.tracks == []
+    live.is_recording = False
+    _status, sent = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert sent["ok"] is True
+    assert sent["live_changed"] is True
+    assert live.tracks[0]["name"].startswith("KIHACHI Bass ")
+
+
+def test_music_plan_keeps_live_binding_when_another_apply_is_running(studio) -> None:
+    port, runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    assert runtime._apply_lock.acquire(blocking=False)
+    try:
+        _status, busy = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    finally:
+        runtime._apply_lock.release()
+    assert busy["executed"] is False
+    assert "実行中" in busy["reply"]
+    assert live.tracks == []
+    _status, sent = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert sent["ok"] is True
+    assert sent["live_changed"] is True
+    assert live.tracks[0]["name"].startswith("KIHACHI Bass ")
+
+
+def test_music_plan_does_not_place_a_duplicate_track_name(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    again = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": again["plan_hash"]})
+    _status, duplicate = _call(port, "POST", "/api/music-plan/live", {"plan_hash": again["plan_hash"]})
+    assert duplicate["executed"] is False
+    assert "同じ名前" in duplicate["reply"]
+    assert duplicate["live_changed"] is False
+    assert len(live.tracks) == 1
+
+
+def test_music_plan_live_send_stops_when_the_set_changed(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": bound["plan_hash"]})
+    live.add_track("Added By Hand")
+    _status, result = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert result["executed"] is False
+    assert "Set が変わりました" in result["reply"]
+    assert [track["name"] for track in live.tracks] == ["Added By Hand"]
+    _status, reread = _call(port, "POST", "/api/music-plan/live", {"plan_hash": bound["plan_hash"]})
+    assert reread["plan_hash"] != bound["plan_hash"]
+    assert "もう一度承認" in reread["reply"]
+
+
+def test_jarvis_change_request_becomes_a_revision_proposal_without_live(studio) -> None:
+    port, runtime, live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    runtime.select(candidate_id)
+    hats = next(clip for clip in runtime._lookup(candidate_id).clips_for_part("Hats") if clip.notes)
+    first, last = hats.start_bar, hats.start_bar + hats.length_bars - 1
+    _status, proposal = _call(
+        port, "POST", "/api/jarvis/revision", {"utterance": f"{first}-{last}小節のハットを減らして"}
+    )
+    assert proposal["ok"] is True
+    assert proposal["note_count_after"] < proposal["note_count_before"]
+    assert proposal["requires_approval"] is True
+    assert proposal["live_changed"] is False
+    assert runtime.selected_id() == candidate_id
+    assert live.tracks == []
+    _status, kick = _call(
+        port, "POST", "/api/jarvis/revision", {"utterance": f"{first}-{last}小節のキックを増やして"}
+    )
+    assert kick["ok"] is False and "ハットだけ" in kick["error"]
+    _status, later = _call(port, "POST", "/api/jarvis/revision", {"utterance": "後半のハットを増やして"})
+    assert later["ok"] is True
+    assert later["note_count_after"] > later["note_count_before"]
+    assert later["revision"]["after"][0].startswith("17–32 小節のHats")
+    assert live.tracks == []
+
+
+def test_approval_center_lists_pending_actions_and_changes_nothing(studio) -> None:
+    port, runtime, live = studio
+    _status, empty = _call(port, "GET", "/api/approvals")
+    assert empty == {"ok": True, "music_plans": [], "revisions": [], "live_changed": False}
+
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    runtime.select(candidate_id)
+    _status, proposal = _call(port, "POST", "/api/jarvis/revision", {"utterance": "後半のハットを減らして"})
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+
+    _status, listed = _call(port, "GET", "/api/approvals")
+    assert [item["revision_id"] for item in listed["revisions"]] == [proposal["revision"]["revision_id"]]
+    assert listed["revisions"][0]["note_count_after"] < listed["revisions"][0]["note_count_before"]
+    assert [plan["plan_hash"] for plan in listed["music_plans"]] == [preview["plan_hash"]]
+    assert listed["music_plans"][0]["tracks"] == ["Bass [KIHACHI]"]
+    assert 0 < listed["music_plans"][0]["remaining_seconds"] <= 900
+    assert runtime.selected_id() == candidate_id
+    assert live.tracks == []
+
+    _call(port, "POST", "/api/revision/decide", {"revision_id": proposal["revision"]["revision_id"], "accept": False})
+    _status, after = _call(port, "GET", "/api/approvals")
+    assert after["revisions"] == []
+
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    _status, waiting = _call(port, "GET", "/api/approvals")
+    states = {plan["plan_hash"]: (plan["approved"], plan["live_bound"]) for plan in waiting["music_plans"]}
+    assert states == {bound["plan_hash"]: (False, True)}
+    assert live.tracks == []
+
+    runtime._gate._clock = lambda: datetime.now(UTC) + timedelta(seconds=1000)
+    _status, stale = _call(port, "GET", "/api/approvals")
+    assert stale["music_plans"] == []
+
+
+def test_approval_center_keeps_a_live_bound_plan_when_previews_overflow(studio) -> None:
+    port, _runtime, live = studio
+    preview = _bass_plan(port)
+    _call(port, "POST", "/api/music-plan/approve", {"plan_hash": preview["plan_hash"]})
+    _status, bound = _call(port, "POST", "/api/music-plan/live", {"plan_hash": preview["plan_hash"]})
+    for _ in range(8):
+        _bass_plan(port)
+    _status, waiting = _call(port, "GET", "/api/approvals")
+    states = {plan["plan_hash"]: (plan["approved"], plan["live_bound"]) for plan in waiting["music_plans"]}
+    assert states == {bound["plan_hash"]: (False, True)}
+    assert live.tracks == []
+
+
+def test_jarvis_route_reports_the_open_candidate_without_writing(studio) -> None:
+    port, runtime, live = studio
+    status, idle = _call(port, "GET", "/api/jarvis")
+    assert status == 200 and idle["state"] == "IDLE" and idle["live_changed"] is False
+    status, empty = _call(port, "POST", "/api/jarvis/turn", {"utterance": "今の曲どうなってる？"})
+    assert status == 200 and empty["state"] == "COMPLETED" and empty["executed"] is False
+    assert live.tracks == []
+    runtime.generate(SMOKE_TEST, seed=3)
+    status, result = _call(port, "POST", "/api/jarvis/turn", {"utterance": "今の曲どうなってる？"})
+    assert result["state"] == "COMPLETED"
+    assert result["context"]["tempo"] == 120
+    status, blocked = _call(
+        port, "POST", "/api/jarvis/turn", {"utterance": "512から544のベースを少し減らして"}
+    )
+    assert blocked["state"] == "APPROVAL_REQUIRED"
+    assert blocked["executed"] is False
+    assert blocked["live_changed"] is False
+    assert live.tracks == []

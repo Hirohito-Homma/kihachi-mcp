@@ -93,7 +93,12 @@ def test_bass_constraints_avoid_kick_and_create_syncopation() -> None:
     )
     notes = DeterministicMIDIComposer(seed=2).compose(MidiCompositionRequest(constraints))
     assert {note.start for note in notes}.isdisjoint({0.5, 4.5})
-    assert all(note.start % 1 == 0.5 for note in notes)
+    # Funk design (decided 2026-11-08): thumbs anchor the downbeats while
+    # syncopation places the remaining hits off the beat. Syncopation means
+    # offbeat placement is present — not that every note leaves the downbeat.
+    phases = [note.start % 1 for note in notes]
+    assert any(phase == 0 for phase in phases)
+    assert sum(1 for phase in phases if phase != 0) > len(phases) / 2
     assert max(note.pitch for note in notes) - min(note.pitch for note in notes) == 12
 
 

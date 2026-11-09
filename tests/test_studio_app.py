@@ -13,8 +13,14 @@ import pytest
 import soundfile as sf
 from test_studio_workflow import SMOKE_TEST, _studio
 
+from kihachi_mcp.services.live_transport_fake import (
+    FakeArrangementClip,
+    FakeLiveSet,
+    FakeLiveTransport,
+)
 from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.sample_catalog import SampleCatalog
+from kihachi_mcp.services.studio_runtime import StudioRuntime
 from kihachi_mcp.studio.app import STATIC_DIR, StudioApp, _handler_for
 
 
@@ -75,6 +81,59 @@ def test_live_candidate_uses_overview_and_keeps_live_unchanged(studio, monkeypat
     assert result["live_context"]["sources"]["tempo"] == "live"
     assert received == ["124 BPM。D minor、8小節のテクノ"]
     assert live.tracks == []
+
+
+@pytest.fixture()
+def studio_production(tmp_path: Path):
+    """Studio wired the way production wires it: no inspector is injected,
+    so the runtime builds its specialized inspectors (planning, arrangement,
+    verify, coverage). The endpoint tests above inject a plain
+    LiveStateInspector, which masked a call-shape bug on these routes:
+    the handlers asked the planning inspector for an arrangement snapshot
+    it does not provide."""
+    live = FakeLiveSet(live_version="12.4.3", tempo=120)
+    live.arrangement_clips.append(FakeArrangementClip(0, "Intro Take", 0.0, 32.0, 24))
+    transport = FakeLiveTransport(live)
+    runtime = StudioRuntime(
+        transport=transport,
+        export_dir=tmp_path / "exports",
+        candidate_dir=tmp_path / "candidates",
+    )
+    runtime.update_settings({"ai_provider": "deterministic"}, persist=False)
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=SampleCatalog(tmp_path / "samples.sqlite3"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server.server_address[1], runtime, live
+    server.shutdown()
+    server.server_close()
+
+
+def test_live_overview_with_production_inspectors(studio_production) -> None:
+    port, _runtime, _live = studio_production
+    status, overview = _call(port, "GET", "/api/live/overview")
+    assert status == 200
+    assert overview["ok"] is True
+    assert [clip["name"] for clip in overview["arrangement_clips"]] == ["Intro Take"]
+    assert overview["note_counts_included"] is False
+
+
+def test_live_candidate_with_production_inspectors(studio_production, monkeypatch) -> None:
+    port, runtime, _live = studio_production
+    received = []
+    monkeypatch.setattr(
+        runtime,
+        "queue_generate",
+        lambda brief: received.append(brief) or {"ok": True, "started": True},
+    )
+    status, result = _call(port, "POST", "/api/live/candidate", {"brief": "D minor、8小節のテクノ"})
+    assert status == 200
+    assert result["ok"] is True
+    assert received == ["120 BPM。D minor、8小節のテクノ"]
 
 
 def test_openai_connection_route_checks_saved_provider(studio, monkeypatch) -> None:

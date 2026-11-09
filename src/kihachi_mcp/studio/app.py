@@ -385,11 +385,7 @@ def _handler_for(app: StudioApp):
                     self._send_json({"ok": False, "error": "Liveブリッジが起動していません"}, 503)
                     return
                 try:
-                    snapshot = runtime._inspector.snapshot(
-                        include_arrangement=True,
-                        count_session_notes=False,
-                        include_session_clips=True,
-                    )
+                    snapshot = runtime._arrangement_inspector.snapshot()
                 except Exception as exc:  # noqa: BLE001 - report read failures without a retry
                     self._send_json({"ok": False, "error": f"Liveを読み取れませんでした: {exc}"}, 503)
                     return
@@ -878,11 +874,7 @@ def _handler_for(app: StudioApp):
                     self._send_json({"ok": False, "error": "Liveからの候補生成はローカルAI設定で実行してください"}, 400)
                     return
                 try:
-                    snapshot = runtime._inspector.snapshot(
-                        include_arrangement=True,
-                        count_session_notes=False,
-                        include_session_clips=True,
-                    )
+                    snapshot = runtime._arrangement_inspector.snapshot()
                     context = brief_from_live(snapshot, str(body.get("brief") or ""))
                 except ValueError as exc:
                     self._send_json({"ok": False, "error": str(exc)}, 400)

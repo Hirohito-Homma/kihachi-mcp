@@ -1,6 +1,6 @@
 # AGENTS.md（kihachi-mcp 用ポインタ）
 
-正本は1つだけ：**`../AGENTS.md`**（`/Users/user/MusicAI/AGENTS.md`）。このファイルはポインタであり、正本と矛盾したら正本が優先する。
+正本は1つだけ：**`../AGENTS.md`**（`/Users/user/kihachi_music_ai_rescue/AGENTS.md`）。このファイルはポインタであり、正本と矛盾したら正本が優先する。
 
 作業を始める前に必ず：
 1. `../AGENTS.md` を読む（共通認識プロトコルと安全フロー）

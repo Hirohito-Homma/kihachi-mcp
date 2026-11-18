@@ -23,6 +23,11 @@ CONGA_LOW_NOTE = 64
 SHAKER_NOTE = 70
 RISER_NOTE = 48
 IMPACT_NOTE = 49
+TAMBOURINE_NOTE = 54
+COWBELL_NOTE = 56
+CONGA_MUTE_HIGH_NOTE = 62
+TIMBALE_LOW_NOTE = 66
+CLAVES_NOTE = 75
 #: The riser sweeps for this long, so the builder can end it on a downbeat.
 RISER_SECONDS = 4.0
 # Existing files are never rewritten: a Set that already loaded one keeps the
@@ -40,6 +45,11 @@ _SAMPLES = {
     "kihachi-shaker.wav": SHAKER_NOTE,
     "kihachi-riser.wav": RISER_NOTE,
     "kihachi-impact.wav": IMPACT_NOTE,
+    "kihachi-tambourine.wav": TAMBOURINE_NOTE,
+    "kihachi-cowbell.wav": COWBELL_NOTE,
+    "kihachi-conga-mute-high.wav": CONGA_MUTE_HIGH_NOTE,
+    "kihachi-timbale-low.wav": TIMBALE_LOW_NOTE,
+    "kihachi-claves.wav": CLAVES_NOTE,
 }
 _MUTATION_KICK = "kihachi-kick-deep.wav"
 FAT_TIGHT_KICK = "kihachi-kick-fat-tight.wav"
@@ -286,9 +296,89 @@ def _impact_frames() -> list[int]:
     return frames
 
 
+def _tambourine_frames() -> list[int]:
+    """Metallic jingles over hiss, trembling the way a shaken tambourine does."""
+    length = int(SAMPLE_RATE * 0.18)
+    noise = _noise(0x5454)
+    partials = (5230.0, 6710.0, 8390.0)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        jingle = sum(math.sin(2 * math.pi * f * t) for f in partials) / len(partials)
+        tremble = 0.75 + 0.25 * math.sin(2 * math.pi * 32 * t)
+        frames.append(_clamp((jingle * 0.3 + highpass * 0.25) * tremble * math.exp(-26 * t)))
+    return frames
+
+
+def _cowbell_frames() -> list[int]:
+    """Two detuned metallic tones with a fast decay, after the 808 recipe."""
+    length = int(SAMPLE_RATE * 0.28)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        tone = (
+            math.sin(2 * math.pi * 587 * t)
+            + math.sin(2 * math.pi * 845 * t) * 0.7
+            + math.sin(2 * math.pi * 1244 * t) * 0.25
+        )
+        frames.append(_clamp(tone * 0.45 * math.exp(-11 * t)))
+    return frames
+
+
+def _conga_mute_frames() -> list[int]:
+    """A high conga choked by the palm: same skin, a third of the ring."""
+    length = int(SAMPLE_RATE * 0.12)
+    noise = _noise(0x6262)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        phase = 2 * math.pi * (370.0 * t + 370.0 * 0.08 * 0.02 * math.exp(-t / 0.02))
+        tone = math.sin(phase) * math.exp(-32 * t) * 0.7
+        slap = next(noise) * math.exp(-180 * t) * 0.3
+        frames.append(_clamp(tone + slap))
+    return frames
+
+
+def _timbale_low_frames() -> list[int]:
+    """A low metal shell with a skin centre: stick click, ring, and body."""
+    length = int(SAMPLE_RATE * 0.35)
+    noise = _noise(0x6666)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        body = math.sin(2 * math.pi * 178 * t) * math.exp(-10 * t) * 0.55
+        ring = (
+            math.sin(2 * math.pi * 178 * 2.76 * t) * 0.2
+            + math.sin(2 * math.pi * 178 * 5.4 * t) * 0.08
+        ) * math.exp(-16 * t)
+        click = next(noise) * math.exp(-220 * t) * 0.3
+        frames.append(_clamp(body + ring + click))
+    return frames
+
+
+def _claves_frames() -> list[int]:
+    """One resonant wood tick: a high sine that is gone almost at once."""
+    length = int(SAMPLE_RATE * 0.09)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        tick = math.sin(2 * math.pi * 2500 * t) * math.exp(-85 * t)
+        frames.append(_clamp(tick * 0.8))
+    return frames
+
+
 _FRAMES = {
     CONGA_HIGH_NOTE: lambda: _conga_frames(330.0),
     CONGA_LOW_NOTE: lambda: _conga_frames(220.0),
+    TAMBOURINE_NOTE: _tambourine_frames,
+    COWBELL_NOTE: _cowbell_frames,
+    CONGA_MUTE_HIGH_NOTE: _conga_mute_frames,
+    TIMBALE_LOW_NOTE: _timbale_low_frames,
+    CLAVES_NOTE: _claves_frames,
     SHAKER_NOTE: _shaker_frames,
     RISER_NOTE: _riser_frames,
     IMPACT_NOTE: _impact_frames,

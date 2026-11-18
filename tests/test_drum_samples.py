@@ -5,8 +5,11 @@ from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.candidate_live_planner import CandidateLivePlanner
 from kihachi_mcp.services.drum_samples import (
     CLAP_NOTE,
+    CLAVES_NOTE,
     CONGA_HIGH_NOTE,
     CONGA_LOW_NOTE,
+    CONGA_MUTE_HIGH_NOTE,
+    COWBELL_NOTE,
     FAT_TIGHT_KICK,
     HAT_NOTE,
     IMPACT_NOTE,
@@ -14,9 +17,12 @@ from kihachi_mcp.services.drum_samples import (
     OPEN_HAT_NOTE,
     RISER_NOTE,
     SHAKER_NOTE,
+    TAMBOURINE_NOTE,
+    TIMBALE_LOW_NOTE,
     ensure_drum_samples,
     is_bundled_sample,
     sample_dir,
+    sample_path_for_note,
 )
 from kihachi_mcp.services.live_transport_fake import FakeLiveSet, FakeLiveTransport
 from kihachi_mcp.services.midi_candidate_builder import build_candidate
@@ -65,3 +71,25 @@ def test_apply_plan_loads_kick_and_hat_samples() -> None:
     extras = {SHAKER_NOTE, CONGA_HIGH_NOTE, CONGA_LOW_NOTE, RISER_NOTE, IMPACT_NOTE}
     assert drums <= notes <= drums | extras
     assert all(is_bundled_sample(operation.arguments["sample_path"]) for operation in sample_ops)
+
+
+def test_gm_percussion_notes_have_audible_bundled_samples() -> None:
+    import wave
+
+    for note in (
+        TAMBOURINE_NOTE,
+        COWBELL_NOTE,
+        CONGA_MUTE_HIGH_NOTE,
+        TIMBALE_LOW_NOTE,
+        CLAVES_NOTE,
+    ):
+        path = sample_path_for_note(note)
+        assert path.is_file()
+        assert is_bundled_sample(path)
+        with wave.open(str(path), "r") as handle:
+            frames = handle.readframes(handle.getnframes())
+        samples = [
+            int.from_bytes(frames[i : i + 2], "little", signed=True)
+            for i in range(0, len(frames), 2)
+        ]
+        assert samples and max(abs(sample) for sample in samples) > 5000

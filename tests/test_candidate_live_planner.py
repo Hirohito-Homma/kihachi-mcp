@@ -211,7 +211,7 @@ def test_unbundled_drum_note_warns_instead_of_raising() -> None:
     for clip in source.clips:
         if clip.part == "Perc":
             notes = tuple(
-                replace(note, pitch=54) if index == 0 else note
+                replace(note, pitch=90) if index == 0 else note
                 for index, note in enumerate(clip.notes)
             )
             clips.append(replace(clip, notes=notes))
@@ -220,10 +220,10 @@ def test_unbundled_drum_note_warns_instead_of_raising() -> None:
     candidate = replace(source, clips=tuple(clips))
     transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.3", tempo=125))
     plan = CandidateLivePlanner().create_plan(candidate, snapshot_of(transport))
-    assert any("54" in warning for warning in plan.warnings)
+    assert any("90" in warning for warning in plan.warnings)
     assert not any(
         operation.op == OP_LOAD_DRUM_PAD_SAMPLE
-        and operation.arguments.get("note") == 54
+        and operation.arguments.get("note") == 90
         for operation in plan.operations
     )
     assert any(

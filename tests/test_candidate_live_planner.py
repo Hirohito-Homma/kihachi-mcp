@@ -4,6 +4,7 @@ from live_fixtures import executor, fixed_clock, gate, snapshot_of
 
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_SCENE,
+    OP_LOAD_DRUM_PAD_SAMPLE,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
 )
@@ -201,4 +202,31 @@ def test_arrangement_plan_ignores_unreported_session_length() -> None:
     assert not any(
         conflict.kind == "session_clip_length_mismatch"
         for conflict in plan.conflicts
+    )
+
+
+def test_unbundled_drum_note_warns_instead_of_raising() -> None:
+    source = _candidate()
+    clips = []
+    for clip in source.clips:
+        if clip.part == "Perc":
+            notes = tuple(
+                replace(note, pitch=54) if index == 0 else note
+                for index, note in enumerate(clip.notes)
+            )
+            clips.append(replace(clip, notes=notes))
+        else:
+            clips.append(clip)
+    candidate = replace(source, clips=tuple(clips))
+    transport = FakeLiveTransport(FakeLiveSet(live_version="12.4.3", tempo=125))
+    plan = CandidateLivePlanner().create_plan(candidate, snapshot_of(transport))
+    assert any("54" in warning for warning in plan.warnings)
+    assert not any(
+        operation.op == OP_LOAD_DRUM_PAD_SAMPLE
+        and operation.arguments.get("note") == 54
+        for operation in plan.operations
+    )
+    assert any(
+        operation.op == OP_LOAD_DRUM_PAD_SAMPLE
+        for operation in plan.operations
     )

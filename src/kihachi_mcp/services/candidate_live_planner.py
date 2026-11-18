@@ -1140,7 +1140,14 @@ class _Builder:
             for note in self._candidate.used_pitches(track["part"]):
                 brief = getattr(self._candidate, "brief", None)
                 genre = str(brief.genre.value) if brief is not None else ""
-                path = sample_path_for_note(note, genre=genre)
+                try:
+                    path = sample_path_for_note(note, genre=genre)
+                except ValueError:
+                    self._warnings.append(
+                        f"ドラムノート {note} に対応する同梱サンプルがないため、"
+                        "そのパッドは空のままになります"
+                    )
+                    continue
                 self._operations.append(
                     LiveMutationOperation(
                         operation_id=self._next_id(OP_LOAD_DRUM_PAD_SAMPLE),

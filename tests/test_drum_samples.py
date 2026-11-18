@@ -5,11 +5,8 @@ from kihachi_mcp.services.brief_parser import extract_explicit
 from kihachi_mcp.services.candidate_live_planner import CandidateLivePlanner
 from kihachi_mcp.services.drum_samples import (
     CLAP_NOTE,
-    CLAVES_NOTE,
     CONGA_HIGH_NOTE,
     CONGA_LOW_NOTE,
-    CONGA_MUTE_HIGH_NOTE,
-    COWBELL_NOTE,
     FAT_TIGHT_KICK,
     HAT_NOTE,
     IMPACT_NOTE,
@@ -17,8 +14,6 @@ from kihachi_mcp.services.drum_samples import (
     OPEN_HAT_NOTE,
     RISER_NOTE,
     SHAKER_NOTE,
-    TAMBOURINE_NOTE,
-    TIMBALE_LOW_NOTE,
     ensure_drum_samples,
     is_bundled_sample,
     sample_dir,
@@ -76,13 +71,9 @@ def test_apply_plan_loads_kick_and_hat_samples() -> None:
 def test_gm_percussion_notes_have_audible_bundled_samples() -> None:
     import wave
 
-    for note in (
-        TAMBOURINE_NOTE,
-        COWBELL_NOTE,
-        CONGA_MUTE_HIGH_NOTE,
-        TIMBALE_LOW_NOTE,
-        CLAVES_NOTE,
-    ):
+    # The whole GM percussion range, 54-81: any pitch a composer model
+    # reaches for in that map must land on a real bundled sound.
+    for note in range(54, 82):
         path = sample_path_for_note(note)
         assert path.is_file()
         assert is_bundled_sample(path)

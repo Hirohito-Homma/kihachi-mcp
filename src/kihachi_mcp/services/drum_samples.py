@@ -24,10 +24,30 @@ SHAKER_NOTE = 70
 RISER_NOTE = 48
 IMPACT_NOTE = 49
 TAMBOURINE_NOTE = 54
+SPLASH_NOTE = 55
 COWBELL_NOTE = 56
+CRASH_NOTE = 57
+VIBRASLAP_NOTE = 58
+RIDE_BELL_NOTE = 59
+BONGO_HIGH_NOTE = 60
+BONGO_LOW_NOTE = 61
 CONGA_MUTE_HIGH_NOTE = 62
+TIMBALE_HIGH_NOTE = 65
 TIMBALE_LOW_NOTE = 66
+AGOGO_HIGH_NOTE = 67
+AGOGO_LOW_NOTE = 68
+CABASA_NOTE = 69
+WHISTLE_SHORT_NOTE = 71
+WHISTLE_LONG_NOTE = 72
+GUIRO_SHORT_NOTE = 73
+GUIRO_LONG_NOTE = 74
 CLAVES_NOTE = 75
+WOOD_HIGH_NOTE = 76
+WOOD_LOW_NOTE = 77
+CUICA_MUTE_NOTE = 78
+CUICA_OPEN_NOTE = 79
+TRIANGLE_MUTE_NOTE = 80
+TRIANGLE_OPEN_NOTE = 81
 #: The riser sweeps for this long, so the builder can end it on a downbeat.
 RISER_SECONDS = 4.0
 # Existing files are never rewritten: a Set that already loaded one keeps the
@@ -46,10 +66,30 @@ _SAMPLES = {
     "kihachi-riser.wav": RISER_NOTE,
     "kihachi-impact.wav": IMPACT_NOTE,
     "kihachi-tambourine.wav": TAMBOURINE_NOTE,
+    "kihachi-splash.wav": SPLASH_NOTE,
     "kihachi-cowbell.wav": COWBELL_NOTE,
+    "kihachi-crash.wav": CRASH_NOTE,
+    "kihachi-vibraslap.wav": VIBRASLAP_NOTE,
+    "kihachi-ride-bell.wav": RIDE_BELL_NOTE,
+    "kihachi-bongo-high.wav": BONGO_HIGH_NOTE,
+    "kihachi-bongo-low.wav": BONGO_LOW_NOTE,
     "kihachi-conga-mute-high.wav": CONGA_MUTE_HIGH_NOTE,
+    "kihachi-timbale-high.wav": TIMBALE_HIGH_NOTE,
     "kihachi-timbale-low.wav": TIMBALE_LOW_NOTE,
+    "kihachi-agogo-high.wav": AGOGO_HIGH_NOTE,
+    "kihachi-agogo-low.wav": AGOGO_LOW_NOTE,
+    "kihachi-cabasa.wav": CABASA_NOTE,
+    "kihachi-whistle-short.wav": WHISTLE_SHORT_NOTE,
+    "kihachi-whistle-long.wav": WHISTLE_LONG_NOTE,
+    "kihachi-guiro-short.wav": GUIRO_SHORT_NOTE,
+    "kihachi-guiro-long.wav": GUIRO_LONG_NOTE,
     "kihachi-claves.wav": CLAVES_NOTE,
+    "kihachi-wood-high.wav": WOOD_HIGH_NOTE,
+    "kihachi-wood-low.wav": WOOD_LOW_NOTE,
+    "kihachi-cuica-mute.wav": CUICA_MUTE_NOTE,
+    "kihachi-cuica-open.wav": CUICA_OPEN_NOTE,
+    "kihachi-triangle-mute.wav": TRIANGLE_MUTE_NOTE,
+    "kihachi-triangle-open.wav": TRIANGLE_OPEN_NOTE,
 }
 _MUTATION_KICK = "kihachi-kick-deep.wav"
 FAT_TIGHT_KICK = "kihachi-kick-fat-tight.wav"
@@ -371,14 +411,178 @@ def _claves_frames() -> list[int]:
     return frames
 
 
+def _skin_frames(pitch_hz: float, decay: float, seconds: float, seed: int) -> list[int]:
+    """A conga-family skin tone with a faster choke, for the smaller drums."""
+    length = int(SAMPLE_RATE * seconds)
+    noise = _noise(seed)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        phase = 2 * math.pi * (pitch_hz * t + pitch_hz * 0.08 * 0.02 * math.exp(-t / 0.02))
+        tone = math.sin(phase) * math.exp(-decay * t) * 0.7
+        slap = next(noise) * math.exp(-180 * t) * 0.25
+        frames.append(_clamp(tone + slap))
+    return frames
+
+
+def _metal_frames(
+    partials: tuple[float, ...],
+    decay: float,
+    seconds: float,
+    seed: int,
+    noise_gain: float = 0.15,
+    tone_gain: float = 0.35,
+) -> list[int]:
+    """Inharmonic partials over high-passed hiss: the cymbal and bell family."""
+    length = int(SAMPLE_RATE * seconds)
+    noise = _noise(seed)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        bell = sum(math.sin(2 * math.pi * f * t) for f in partials) / len(partials)
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        frames.append(_clamp((bell * tone_gain + highpass * noise_gain) * math.exp(-decay * t)))
+    return frames
+
+
+def _tick_frames(freq: float, decay: float, seconds: float, gain: float = 0.8) -> list[int]:
+    """One resonant ping: claves, wood blocks and triangles live here."""
+    length = int(SAMPLE_RATE * seconds)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        frames.append(_clamp(math.sin(2 * math.pi * freq * t) * math.exp(-decay * t) * gain))
+    return frames
+
+
+def _timbale_high_frames() -> list[int]:
+    """The low timbale recipe on a higher shell: click, ring, and body."""
+    length = int(SAMPLE_RATE * 0.3)
+    noise = _noise(0x6565)
+    frames: list[int] = []
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        body = math.sin(2 * math.pi * 262 * t) * math.exp(-12 * t) * 0.55
+        ring = (
+            math.sin(2 * math.pi * 262 * 2.76 * t) * 0.2
+            + math.sin(2 * math.pi * 262 * 5.4 * t) * 0.08
+        ) * math.exp(-18 * t)
+        click = next(noise) * math.exp(-220 * t) * 0.3
+        frames.append(_clamp(body + ring + click))
+    return frames
+
+
+def _vibraslap_frames() -> list[int]:
+    """A metal rattle that shudders at a fixed rate while it dies away."""
+    length = int(SAMPLE_RATE * 0.55)
+    noise = _noise(0x5858)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        rattle = 0.55 + 0.45 * math.sin(2 * math.pi * 26 * t)
+        frames.append(_clamp(highpass * rattle * math.exp(-5.5 * t) * 0.6))
+    return frames
+
+
+def _cabasa_frames() -> list[int]:
+    """Beads dragging around a ribbed shell: gated hiss with a fast ripple."""
+    length = int(SAMPLE_RATE * 0.22)
+    noise = _noise(0x6969)
+    frames: list[int] = []
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        hiss = next(noise)
+        highpass = hiss - previous
+        previous = hiss
+        ripple = 0.65 + 0.35 * math.sin(2 * math.pi * 42 * t)
+        frames.append(_clamp(highpass * ripple * math.exp(-13 * t) * 0.55))
+    return frames
+
+
+def _whistle_frames(seconds: float, decay: float) -> list[int]:
+    """A blown tone near 2.3 kHz with a breath wobble once it settles."""
+    length = int(SAMPLE_RATE * seconds)
+    noise = _noise(0x7172)
+    frames: list[int] = []
+    phase = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        freq = 2300.0 + 45.0 * math.sin(2 * math.pi * 5.5 * t) * min(1.0, t / 0.05)
+        phase += 2 * math.pi * freq / SAMPLE_RATE
+        attack = min(1.0, t / 0.015)
+        breath = next(noise) * 0.05
+        frames.append(_clamp((math.sin(phase) * 0.55 + breath) * attack * math.exp(-decay * t)))
+    return frames
+
+
+def _guiro_frames(seconds: float, rate_hz: float, seed: int) -> list[int]:
+    """A stick dragged over ridges: banded noise chopped at the ridge rate."""
+    length = int(SAMPLE_RATE * seconds)
+    noise = _noise(seed)
+    frames: list[int] = []
+    band = 0.0
+    previous = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        raw = next(noise)
+        band += 0.4 * ((raw - previous) - band)
+        previous = raw
+        gate = (0.5 + 0.5 * math.sin(2 * math.pi * rate_hz * t)) ** 2
+        envelope = min(1.0, t / 0.01) * min(1.0, (seconds - t) / 0.03)
+        frames.append(_clamp(band * 2.0 * gate * envelope * 0.7))
+    return frames
+
+
+def _cuica_frames(start_hz: float, end_hz: float, seconds: float, decay: float) -> list[int]:
+    """A rubbed stick bending the skin: a gliding tone with a fast rub."""
+    length = int(SAMPLE_RATE * seconds)
+    frames: list[int] = []
+    phase = 0.0
+    for index in range(length):
+        t = index / SAMPLE_RATE
+        freq = end_hz + (start_hz - end_hz) * math.exp(-t / 0.09)
+        phase += 2 * math.pi * freq / SAMPLE_RATE
+        rub = 0.75 + 0.25 * math.sin(2 * math.pi * 38 * t)
+        frames.append(_clamp(math.sin(phase) * rub * math.exp(-decay * t) * 0.6))
+    return frames
+
+
 _FRAMES = {
     CONGA_HIGH_NOTE: lambda: _conga_frames(330.0),
     CONGA_LOW_NOTE: lambda: _conga_frames(220.0),
     TAMBOURINE_NOTE: _tambourine_frames,
+    SPLASH_NOTE: lambda: _metal_frames((4200.0, 5600.0, 7300.0, 9100.0), 20.0, 0.3, 0x5555, 0.3, 0.3),
     COWBELL_NOTE: _cowbell_frames,
+    CRASH_NOTE: lambda: _metal_frames((3100.0, 4300.0, 5900.0, 7600.0, 9800.0), 4.2, 1.2, 0x5757, 0.35, 0.3),
+    VIBRASLAP_NOTE: _vibraslap_frames,
+    RIDE_BELL_NOTE: lambda: _metal_frames((3400.0, 4700.0, 6300.0, 8100.0), 3.8, 1.0, 0x5959, 0.12, 0.4),
+    BONGO_HIGH_NOTE: lambda: _skin_frames(440.0, 17.0, 0.22, 0x6060),
+    BONGO_LOW_NOTE: lambda: _skin_frames(330.0, 15.0, 0.25, 0x6161),
     CONGA_MUTE_HIGH_NOTE: _conga_mute_frames,
+    TIMBALE_HIGH_NOTE: _timbale_high_frames,
     TIMBALE_LOW_NOTE: _timbale_low_frames,
+    AGOGO_HIGH_NOTE: lambda: _metal_frames((880.0, 1175.0, 1560.0), 26.0, 0.16, 0x6767, 0.05, 0.4),
+    AGOGO_LOW_NOTE: lambda: _metal_frames((659.0, 880.0, 1175.0), 24.0, 0.18, 0x6868, 0.05, 0.4),
+    CABASA_NOTE: _cabasa_frames,
+    WHISTLE_SHORT_NOTE: lambda: _whistle_frames(0.18, 13.0),
+    WHISTLE_LONG_NOTE: lambda: _whistle_frames(0.6, 2.8),
+    GUIRO_SHORT_NOTE: lambda: _guiro_frames(0.18, 55.0, 0x7373),
+    GUIRO_LONG_NOTE: lambda: _guiro_frames(0.45, 42.0, 0x7474),
     CLAVES_NOTE: _claves_frames,
+    WOOD_HIGH_NOTE: lambda: _tick_frames(1560.0, 105.0, 0.08, 0.85),
+    WOOD_LOW_NOTE: lambda: _tick_frames(1040.0, 95.0, 0.09, 0.85),
+    CUICA_MUTE_NOTE: lambda: _cuica_frames(700.0, 450.0, 0.18, 17.0),
+    CUICA_OPEN_NOTE: lambda: _cuica_frames(820.0, 500.0, 0.4, 7.5),
+    TRIANGLE_MUTE_NOTE: lambda: _tick_frames(7900.0, 130.0, 0.09, 0.7),
+    TRIANGLE_OPEN_NOTE: lambda: _tick_frames(7400.0, 6.5, 0.8, 0.6),
     SHAKER_NOTE: _shaker_frames,
     RISER_NOTE: _riser_frames,
     IMPACT_NOTE: _impact_frames,

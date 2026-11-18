@@ -30,6 +30,7 @@ from kihachi_mcp.models.midi_composer import (
     ComposedMidiNote,
     ContextLongNote,
     ContextPart,
+    FewShotExample,
     MidiCompositionRequest,
     MusicalConstraints,
 )
@@ -82,7 +83,7 @@ from kihachi_mcp.services.production_review import review_candidate
 from kihachi_mcp.services.production_revision import revise_candidate
 from kihachi_mcp.services.production_workspace import local_ableton_plan, project_view
 from kihachi_mcp.services.sample_replacement import create_sample_replacement_plan
-from kihachi_mcp.services.session_pattern_builder import MidiNote
+from kihachi_mcp.services.session_pattern_builder import MidiNote, root_pitch
 from kihachi_mcp.services.sound_coverage import coverage_from_snapshot
 from kihachi_mcp.services.studio_interpreter import (
     DEFAULT_MODEL,
@@ -370,13 +371,17 @@ class StudioRuntime:
         songspec: dict[str, Any] | None = None,
         start_bar: int = 1,
         context_candidate_id: str | None = None,
+        few_shot_candidate_id: str | None = None,
     ) -> dict[str, Any]:
         """Validate one part request and estimate cost without running a model."""
         try:
             constraints = _apply_songspec_context(constraints, songspec, start_bar)
             context_parts = self._context_parts(constraints, context_candidate_id)
+            few_shot_examples = self._few_shot_examples(
+                constraints, few_shot_candidate_id
+            )
             request = _midi_composition_request(
-                constraints, operation, source_notes, context_parts
+                constraints, operation, source_notes, context_parts, few_shot_examples
             )
             provider = provider_from_settings(self._settings)
         except (TypeError, ValueError) as exc:
@@ -406,20 +411,28 @@ class StudioRuntime:
         songspec: dict[str, Any] | None = None,
         start_bar: int = 1,
         context_candidate_id: str | None = None,
+        few_shot_candidate_id: str | None = None,
     ) -> dict[str, Any]:
         """Compose a reviewable part. Paid providers require this request's confirmation."""
         try:
             constraints = _apply_songspec_context(constraints, songspec, start_bar)
             context_parts = self._context_parts(constraints, context_candidate_id)
+            few_shot_examples = self._few_shot_examples(
+                constraints, few_shot_candidate_id
+            )
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
         preview = self.midi_composer_preview(
-            constraints, operation, source_notes, context_candidate_id=context_candidate_id
+            constraints,
+            operation,
+            source_notes,
+            context_candidate_id=context_candidate_id,
+            few_shot_candidate_id=few_shot_candidate_id,
         )
         if not preview.get("ok"):
             return preview
         request = _midi_composition_request(
-            constraints, operation, source_notes, context_parts
+            constraints, operation, source_notes, context_parts, few_shot_examples
         )
         provider = provider_from_settings(self._settings)
         paid = bool(provider.capabilities().get("paid_api"))
@@ -463,6 +476,16 @@ class StudioRuntime:
             result["context_collision_ratio"] = context_collision_ratio(
                 notes, request.constraints, context_parts
             )
+        if few_shot_candidate_id is not None:
+            result["few_shot"] = [
+                {
+                    "part": example.part,
+                    "section_name": example.section_name,
+                    "source_key": example.source_key,
+                    "note_count": len(example.notes),
+                }
+                for example in few_shot_examples
+            ]
         return result
 
     def _context_parts(
@@ -485,6 +508,32 @@ class StudioRuntime:
         exclude = _COMPOSER_ROLE_PARTS.get(str(constraints.get("role") or ""))
         allowed = _scale_pitch_classes(str(constraints.get("key") or "Cm"))
         return _section_context_parts(candidate, section, exclude, allowed)
+
+    def _few_shot_examples(
+        self, constraints: dict[str, Any], few_shot_candidate_id: str | None
+    ) -> tuple[FewShotExample, ...]:
+        """Few-shot example (2026-11-19) for one compose/preview request.
+
+        Takes the clip of the same section and part from an accepted
+        candidate of another song and transposes it into the request
+        key. Roles without a single mapped part get no example, and a
+        candidate without a matching clip yields none either — in both
+        cases generation behaves exactly as before this feature existed.
+        """
+        if few_shot_candidate_id is None:
+            return ()
+        candidate = self._lookup(few_shot_candidate_id)
+        if candidate is None:
+            raise ValueError("実例に使う候補が見つかりません")
+        section = str(constraints.get("section_name") or "")
+        if not section:
+            raise ValueError("few-shot実例を使うにはセクション名が必要です")
+        part = _COMPOSER_ROLE_PARTS.get(str(constraints.get("role") or ""))
+        if part is None:
+            return ()
+        return _candidate_few_shot(
+            candidate, section, part, str(constraints.get("key") or "Cm")
+        )
 
     def propose_composer_adoption(
         self,
@@ -3048,6 +3097,50 @@ _PITCHED_ENGINES = frozenset({"bass", "chords", "melody", "arp"})
 _LONG_NOTE_MIN_BEATS = 1.5
 
 
+def _candidate_few_shot(
+    candidate: MidiCandidate,
+    section_name: str,
+    part: str,
+    target_key: str,
+) -> tuple[FewShotExample, ...]:
+    """Extract one accepted clip as a few-shot example, key-transposed.
+
+    Pitched parts are shifted by the tonic distance between the
+    candidate's key and the target key, folded into -6..+5 semitones so
+    the register stays close to the original. Drum and percussion
+    pitches are GM-style fixed assignments and are never transposed.
+    Notes that would leave the MIDI range are dropped.
+    """
+    source_key = str(candidate.brief.key.value)
+    for clip in candidate.clips:
+        if clip.section_name != section_name or clip.part != part:
+            continue
+        pitched = COMPOSITION_ENGINE.get(clip.part) in _PITCHED_ENGINES
+        shift = 0
+        if pitched:
+            diff = (root_pitch(target_key) - root_pitch(source_key)) % 12
+            shift = (diff + 6) % 12 - 6
+        notes = tuple(
+            ComposedMidiNote(
+                pitch=note.pitch + shift,
+                start=note.start_beats,
+                duration=note.duration_beats,
+                velocity=note.velocity,
+            )
+            for note in clip.notes
+            if 0 <= note.pitch + shift <= 127
+        )
+        return (
+            FewShotExample(
+                part=part,
+                section_name=section_name,
+                source_key=source_key,
+                notes=notes,
+            ),
+        )
+    return ()
+
+
 def _section_context_parts(
     candidate: MidiCandidate,
     section_name: str,
@@ -3168,6 +3261,7 @@ def _midi_composition_request(
     operation: str,
     source_notes: list[dict[str, Any]] | None,
     context_parts: tuple[ContextPart, ...] = (),
+    few_shot_examples: tuple[FewShotExample, ...] = (),
 ) -> MidiCompositionRequest:
     if not isinstance(constraints, dict):
         raise TypeError("musical constraintsが必要です")
@@ -3182,6 +3276,7 @@ def _midi_composition_request(
             if isinstance(note, dict)
         ),
         context_parts=tuple(context_parts),
+        few_shot_examples=tuple(few_shot_examples),
     )
 
 

@@ -1111,6 +1111,11 @@ def _workflow_post(
                     if body.get("context_candidate_id")
                     else None
                 ),
+                few_shot_candidate_id=(
+                    str(body["few_shot_candidate_id"])
+                    if body.get("few_shot_candidate_id")
+                    else None
+                ),
             )
         )
     elif path == "/api/midi/compose":
@@ -1126,6 +1131,11 @@ def _workflow_post(
                 context_candidate_id=(
                     str(body["context_candidate_id"])
                     if body.get("context_candidate_id")
+                    else None
+                ),
+                few_shot_candidate_id=(
+                    str(body["few_shot_candidate_id"])
+                    if body.get("few_shot_candidate_id")
                     else None
                 ),
             )

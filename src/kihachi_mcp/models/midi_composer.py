@@ -260,6 +260,43 @@ class ContextPart:
 
 
 @dataclass(frozen=True)
+class FewShotExample:
+    """One accepted part from another song, offered as a style example.
+
+    Few-shot examples (2026-11-19): the notes are stored already
+    transposed into the request key, so the provider can imitate the
+    rhythm, density and register without importing foreign pitch
+    classes. ``source_key`` records where the example came from.
+    """
+
+    part: str
+    section_name: str
+    source_key: str
+    notes: tuple[ComposedMidiNote, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "part": self.part,
+            "section_name": self.section_name,
+            "source_key": self.source_key,
+            "notes": [note.to_dict() for note in self.notes],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            part=str(data.get("part") or ""),
+            section_name=str(data.get("section_name") or ""),
+            source_key=str(data.get("source_key") or ""),
+            notes=tuple(
+                ComposedMidiNote.from_dict(item)
+                for item in data.get("notes") or ()
+                if isinstance(item, dict)
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class MidiCompositionRequest:
     constraints: MusicalConstraints
     operation: str = "generate"
@@ -268,6 +305,10 @@ class MidiCompositionRequest:
     #: can supply them. Empty means no cross-part context, in which case
     #: generation behaves exactly as before this field existed.
     context_parts: tuple[ContextPart, ...] = ()
+    #: Accepted parts from another song shown to the provider as style
+    #: examples. Empty means no few-shot guidance, in which case
+    #: generation behaves exactly as before this field existed.
+    few_shot_examples: tuple[FewShotExample, ...] = ()
 
     def __post_init__(self) -> None:
         if self.operation not in COMPOSITION_OPERATIONS:
@@ -283,4 +324,8 @@ class MidiCompositionRequest:
         }
         if self.context_parts:
             data["context_parts"] = [part.to_dict() for part in self.context_parts]
+        if self.few_shot_examples:
+            data["few_shot_examples"] = [
+                example.to_dict() for example in self.few_shot_examples
+            ]
         return data

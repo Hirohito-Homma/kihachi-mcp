@@ -13,6 +13,7 @@ from kihachi_mcp.models.midi_composer import (
     ROLE_ALL,
     ComposedMidiNote,
     ContextPart,
+    FewShotExample,
     MidiCompositionRequest,
     MusicalConstraints,
 )
@@ -150,6 +151,8 @@ class ProviderMIDIComposer:
                 )
         if request.context_parts:
             prompt += " " + _context_prompt_text(request.context_parts)
+        if request.few_shot_examples:
+            prompt += " " + _few_shot_prompt_text(request.few_shot_examples)
         if c.role != ROLE_ALL and engine in _SCALE_CHECKED_ENGINES:
             # An explicit pitch whitelist, placed last so it survives long
             # prompts: models kept slipping in chromatic approach notes
@@ -512,6 +515,33 @@ def _context_prompt_text(context_parts: tuple[ContextPart, ...]) -> str:
         "Write a part that fits with them as one song: do not double another "
         "part's long note at the same pitch and time, rest where they are "
         "dense, and fill the spaces they leave."
+    )
+    return "\n".join(lines)
+
+
+def _few_shot_prompt_text(examples: tuple[FewShotExample, ...]) -> str:
+    """Accepted-part examples for provider prompts (few-shot, 2026-11-19).
+
+    The example notes arrive already transposed into the requested key,
+    so what transfers is rhythm, density, register and phrasing — never
+    foreign pitch classes. The instruction explicitly forbids copying:
+    the example sets the quality bar, the requested chords decide the
+    actual notes.
+    """
+    lines = []
+    for example in examples:
+        notes = json.dumps(
+            [note.to_dict() for note in example.notes], ensure_ascii=False
+        )
+        lines.append(
+            f"Example of an accepted '{example.part}' part from the "
+            f"'{example.section_name}' section of another song, already "
+            f"transposed into the requested key: {notes}"
+        )
+    lines.append(
+        "Match the example's rhythmic feel, note density, register and "
+        "phrasing quality, but compose new notes that fit the requested "
+        "chords and section. Do not copy the example note for note."
     )
     return "\n".join(lines)
 

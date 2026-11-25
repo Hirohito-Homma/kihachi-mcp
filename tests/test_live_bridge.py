@@ -436,3 +436,78 @@ def test_snapshot_falls_back_to_chunked_reads_when_reply_exceeds_max_bytes() -> 
     assert "get_session_track_clips" in wrapped.methods
     assert "get_arrangement_track_summary" in wrapped.methods
     assert "get_locator_summary" in wrapped.methods
+
+
+def test_resolve_bridge_timeout_seconds_reads_env_and_clamps() -> None:
+    """環境変数によるタイムアウト指定・不正値フォールバック・上下限クランプを検証する。"""
+    from kihachi_mcp.services.live_bridge import (
+        BRIDGE_TIMEOUT_ENV,
+        MAX_BRIDGE_TIMEOUT_SECONDS,
+        MIN_BRIDGE_TIMEOUT_SECONDS,
+        STUDIO_BRIDGE_TIMEOUT_SECONDS,
+        resolve_bridge_timeout_seconds,
+    )
+
+    assert resolve_bridge_timeout_seconds(environ={}) == STUDIO_BRIDGE_TIMEOUT_SECONDS
+    assert resolve_bridge_timeout_seconds(environ={BRIDGE_TIMEOUT_ENV: "75.5"}) == 75.5
+    assert (
+        resolve_bridge_timeout_seconds(environ={BRIDGE_TIMEOUT_ENV: "invalid"})
+        == STUDIO_BRIDGE_TIMEOUT_SECONDS
+    )
+    assert (
+        resolve_bridge_timeout_seconds(environ={BRIDGE_TIMEOUT_ENV: "nan"})
+        == STUDIO_BRIDGE_TIMEOUT_SECONDS
+    )
+    assert (
+        resolve_bridge_timeout_seconds(environ={BRIDGE_TIMEOUT_ENV: "0.1"})
+        == MIN_BRIDGE_TIMEOUT_SECONDS
+    )
+    assert (
+        resolve_bridge_timeout_seconds(environ={BRIDGE_TIMEOUT_ENV: "9999"})
+        == MAX_BRIDGE_TIMEOUT_SECONDS
+    )
+
+
+def test_bridge_logs_elapsed_ms_on_response_and_timeout_without_retry(
+    tmp_path, caplog
+) -> None:
+    """正常応答とタイムアウト時に elapsed_ms が記録され、タイムアウト時に再送しないこと。"""
+    ok_channel = _RecordingChannel(
+        {
+            "protocol": PROTOCOL_NAME,
+            "version": PROTOCOL_VERSION,
+            "request_id": "req-ok",
+            "ok": True,
+            "result": {},
+        }
+    )
+    transport = LocalhostBridgeTransport(session=_session(tmp_path), channel=ok_channel)
+    with caplog.at_level(logging.INFO, logger="kihachi.live.bridge"):
+        transport.request(build_message("ping", "req-ok"))
+
+    response_records = [r for r in caplog.records if r.message == "live.bridge.response"]
+    assert len(response_records) == 1
+    assert response_records[0].method == "ping"
+    assert isinstance(response_records[0].elapsed_ms, float)
+    assert response_records[0].elapsed_ms >= 0.0
+
+    caplog.clear()
+    timeout_channel = _RecordingChannel(
+        raise_on_receive=LiveTransportError(ERROR_TIMEOUT, "no reply in 5s")
+    )
+    timeout_transport = LocalhostBridgeTransport(
+        session=_session(tmp_path), channel=timeout_channel, timeout_seconds=5.0
+    )
+    with (
+        caplog.at_level(logging.WARNING, logger="kihachi.live.bridge"),
+        pytest.raises(LiveTransportError) as error,
+    ):
+        timeout_transport.request(build_message("apply_operation", "req-to"))
+
+    assert error.value.code == ERROR_TIMEOUT
+    assert len(timeout_channel.sent) == 1
+    timeout_records = [r for r in caplog.records if r.message == "live.bridge.timeout"]
+    assert len(timeout_records) == 1
+    assert timeout_records[0].method == "apply_operation"
+    assert timeout_records[0].timeout_seconds == 5.0
+    assert isinstance(timeout_records[0].elapsed_ms, float)

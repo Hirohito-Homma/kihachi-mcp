@@ -18,9 +18,11 @@ The order of checks matters and is intentional:
    ``verification_failed``.
 """
 
+import math
+import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
@@ -64,6 +66,28 @@ _FLOAT_TOLERANCE = 1e-6
 _PLUGIN_FLOAT_TOLERANCE = 1e-3
 _DEFAULT_PLUGIN_TIMEOUT_SECONDS = 30.0
 _DEFAULT_PLUGIN_POLL_INTERVAL = 0.5
+STUDIO_STRUCTURAL_PACING_SECONDS = 0.1
+MAX_STRUCTURAL_PACING_SECONDS = 5.0
+STRUCTURAL_PACING_ENV = "KIHACHI_LIVE_STRUCTURAL_PACING_SECONDS"
+
+
+def resolve_structural_pacing_seconds(
+    default: float = STUDIO_STRUCTURAL_PACING_SECONDS,
+    environ: Mapping[str, str] | None = None,
+) -> float:
+    """環境変数から構造変更操作後のペーシング秒数を解決する。"""
+    env = environ if environ is not None else os.environ
+    raw = str(env.get(STRUCTURAL_PACING_ENV) or "").strip()
+    if not raw:
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    return min(MAX_STRUCTURAL_PACING_SECONDS, max(0.0, value))
 
 
 class LiveExecutionService:
@@ -78,6 +102,7 @@ class LiveExecutionService:
         plugin_remote: Callable[..., Any] | None = None,
         plugin_timeout_seconds: float = _DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         plugin_poll_interval: float = _DEFAULT_PLUGIN_POLL_INTERVAL,
+        structural_pacing_seconds: float = 0.0,
         clock: Callable[[], float] | None = None,
         sleeper: Callable[[float], None] | None = None,
     ) -> None:
@@ -89,6 +114,7 @@ class LiveExecutionService:
         self._plugin_remote = plugin_remote
         self._plugin_timeout_seconds = float(plugin_timeout_seconds)
         self._plugin_poll_interval = float(plugin_poll_interval)
+        self._structural_pacing_seconds = max(0.0, float(structural_pacing_seconds))
         self._clock = clock or time.monotonic
         self._sleeper = sleeper or time.sleep
         self._plugin_cache: dict[int, dict[str, Any]] = {}
@@ -229,7 +255,8 @@ class LiveExecutionService:
         failed_operation = ""
         error = ""
 
-        for operation in plan.operations:
+        total_operations = len(plan.operations)
+        for index, operation in enumerate(plan.operations):
             attempted.append(operation.operation_id)
             try:
                 observed = self._apply_one(operation)
@@ -248,6 +275,13 @@ class LiveExecutionService:
             )
             completed.append(operation.operation_id)
             mismatches.extend(operation_mismatches)
+            # 構造変更の連続発射による Live / Max キュー詰まりを防ぐための短い間合い
+            if (
+                self._structural_pacing_seconds > 0.0
+                and operation.op in STRUCTURAL_OPS
+                and index + 1 < total_operations
+            ):
+                self._sleeper(self._structural_pacing_seconds)
 
         after_fingerprint = self._safe_fingerprint()
         if failed_operation:

@@ -61,10 +61,17 @@ from kihachi_mcp.services.diagnostics import (
     remote_script_state,
 )
 from kihachi_mcp.services.live_approval_gate import ApprovalError, ApprovalGate
-from kihachi_mcp.services.live_bridge import LiveBridgeSession, LocalhostBridgeTransport
+from kihachi_mcp.services.live_bridge import (
+    LiveBridgeSession,
+    LocalhostBridgeTransport,
+    resolve_bridge_timeout_seconds,
+)
 from kihachi_mcp.services.live_capabilities import discover_capabilities
 from kihachi_mcp.services.live_device_catalog import STOCK_DEVICE_NAMES
-from kihachi_mcp.services.live_execution_service import LiveExecutionService
+from kihachi_mcp.services.live_execution_service import (
+    LiveExecutionService,
+    resolve_structural_pacing_seconds,
+)
 from kihachi_mcp.services.live_state_inspector import (
     LiveStateInspector,
     LiveVersionUnsupportedError,
@@ -166,13 +173,15 @@ class StudioRuntime:
         self._gate = gate or ApprovalGate()
         self._bridge_session: LiveBridgeSession | None = None
         self._transport = transport
+        structural_pacing = 0.0
         if start_bridge and transport is None:
             self._bridge_session = LiveBridgeSession()
             self._bridge_session.write_handshake()
             self._transport = LocalhostBridgeTransport(
                 session=self._bridge_session,
-                timeout_seconds=40.0,
+                timeout_seconds=resolve_bridge_timeout_seconds(),
             )
+            structural_pacing = resolve_structural_pacing_seconds()
         self._inspector = inspector or _PlanningInspector(
             self._transport, request_id_factory=_unique_request_ids()
         )
@@ -189,6 +198,7 @@ class StudioRuntime:
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
             plugin_remote=self._plugin_remote_call,
+            structural_pacing_seconds=structural_pacing,
         )
         # A pad replacement needs track/device identity, not every Session clip.
         # Plan and execute against the same compact snapshot so the fingerprint
@@ -198,6 +208,7 @@ class StudioRuntime:
             inspector=self._coverage_inspector,
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
+            structural_pacing_seconds=structural_pacing,
         )
         # Arrangement expansion reads Arrangement clips, and the Set fingerprint
         # covers them, so planning and execution must read the Set the same way.
@@ -213,6 +224,7 @@ class StudioRuntime:
             inspector=self._arrangement_inspector,
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
+            structural_pacing_seconds=structural_pacing,
         )
         self._arranged_ids: set[str] = set()
         # Core Library kits need Live's browser, which only a Remote Script can

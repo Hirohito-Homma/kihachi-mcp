@@ -403,3 +403,106 @@ def test_plan_over_2048_operations_is_blocked() -> None:
         == f"the plan has {MAX_PLAN_OPERATIONS + 1} operations, over the {MAX_PLAN_OPERATIONS} operation safety limit"
     )
     assert transport.applied_operation_ids == []
+
+
+def test_resolve_structural_pacing_seconds_reads_env_and_clamps() -> None:
+    """構造変更操作ペーシング秒数の環境変数解決・フォールバック・クランプを検証する。"""
+    from kihachi_mcp.services.live_execution_service import (
+        MAX_STRUCTURAL_PACING_SECONDS,
+        STRUCTURAL_PACING_ENV,
+        STUDIO_STRUCTURAL_PACING_SECONDS,
+        resolve_structural_pacing_seconds,
+    )
+
+    assert (
+        resolve_structural_pacing_seconds(environ={})
+        == STUDIO_STRUCTURAL_PACING_SECONDS
+    )
+    assert (
+        resolve_structural_pacing_seconds(environ={STRUCTURAL_PACING_ENV: "0.25"})
+        == 0.25
+    )
+    assert (
+        resolve_structural_pacing_seconds(environ={STRUCTURAL_PACING_ENV: "0"}) == 0.0
+    )
+    assert (
+        resolve_structural_pacing_seconds(environ={STRUCTURAL_PACING_ENV: "bad"})
+        == STUDIO_STRUCTURAL_PACING_SECONDS
+    )
+    assert (
+        resolve_structural_pacing_seconds(environ={STRUCTURAL_PACING_ENV: "-1.0"}) == 0.0
+    )
+    assert (
+        resolve_structural_pacing_seconds(environ={STRUCTURAL_PACING_ENV: "99.0"})
+        == MAX_STRUCTURAL_PACING_SECONDS
+    )
+
+
+def test_structural_pacing_sleeps_only_after_non_final_structural_ops() -> None:
+    """構造変更操作の直後（末尾除く）にのみペーシング待機が入り、非構造操作では待機しないこと。"""
+    from kihachi_mcp.models.live_contract import STRUCTURAL_OPS
+
+    transport = FakeLiveTransport(empty_live_set(tempo=120.0))
+    subject_gate = gate()
+    plan = planner().create_session_plan(project_plan(), snapshot_of(transport))
+    token = subject_gate.approve(plan)
+
+    sleeps: list[float] = []
+    service = LiveExecutionService(
+        transport=transport,
+        approval_gate=subject_gate,
+        structural_pacing_seconds=0.1,
+        sleeper=sleeps.append,
+    )
+    receipt = service.execute(plan, approved=True, approval_token=token)
+
+    assert receipt.status == STATUS_VERIFIED
+    expected_sleeps = sum(
+        1
+        for op in plan.operations[:-1]
+        if op.op in STRUCTURAL_OPS
+    )
+    assert expected_sleeps > 0
+    assert sleeps == [0.1] * expected_sleeps
+
+
+def test_structural_pacing_stops_immediately_on_timeout_without_retry() -> None:
+    """途中でタイムアウトしたら残操作を中断し自動リトライせず余分な待機もしないこと。"""
+    from kihachi_mcp.services.live_transport import ERROR_TIMEOUT
+
+    inner = FakeLiveTransport(empty_live_set(tempo=120.0))
+    subject_gate = gate()
+    plan = planner().create_session_plan(project_plan(), snapshot_of(inner))
+    token = subject_gate.approve(plan)
+
+    class TimeoutOnSecondApply:
+        def __init__(self) -> None:
+            self.apply_calls = 0
+
+        def request(self, message: dict) -> dict:
+            if message.get("method") == "apply_operation":
+                self.apply_calls += 1
+                if self.apply_calls == 2:
+                    raise LiveTransportError(
+                        ERROR_TIMEOUT,
+                        "the Max for Live device did not reply within 60s",
+                    )
+            return inner.request(message)
+
+    wrapped = TimeoutOnSecondApply()
+    sleeps: list[float] = []
+    service = LiveExecutionService(
+        transport=wrapped,
+        approval_gate=subject_gate,
+        structural_pacing_seconds=0.1,
+        sleeper=sleeps.append,
+    )
+    receipt = service.execute(plan, approved=True, approval_token=token)
+
+    assert receipt.status == STATUS_PARTIALLY_APPLIED
+    assert len(receipt.completed_operations) == 1
+    assert receipt.failed_operation == plan.operations[1].operation_id
+    assert "timeout:" in receipt.error
+    assert wrapped.apply_calls == 2
+    # 1件目が非構造（set_tempo）なら 0回、構造なら 1回のみ（失敗後の余分な待機なし）
+    assert len(sleeps) <= 1

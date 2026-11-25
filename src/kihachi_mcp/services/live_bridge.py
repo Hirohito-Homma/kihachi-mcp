@@ -16,6 +16,7 @@ the token lifecycle so the secret never has to be typed into Max.
 
 import json
 import logging
+import math
 import os
 import secrets
 import socket
@@ -45,9 +46,32 @@ MAX_REQUEST_BYTES = 60_000
 # A UDP datagram cannot exceed 65,507 bytes.
 MAX_RESPONSE_BYTES = 60_000
 DEFAULT_TIMEOUT_SECONDS = 5.0
+STUDIO_BRIDGE_TIMEOUT_SECONDS = 60.0
+MIN_BRIDGE_TIMEOUT_SECONDS = 1.0
+MAX_BRIDGE_TIMEOUT_SECONDS = 300.0
+BRIDGE_TIMEOUT_ENV = "KIHACHI_LIVE_BRIDGE_TIMEOUT_SECONDS"
 MAX_PLAN_OPERATIONS = 2048
 
 _logger = logging.getLogger("kihachi.live.bridge")
+
+
+def resolve_bridge_timeout_seconds(
+    default: float = STUDIO_BRIDGE_TIMEOUT_SECONDS,
+    environ: Mapping[str, str] | None = None,
+) -> float:
+    """環境変数から M4L ブリッジのタイムアウト秒数を解決する。"""
+    env = environ if environ is not None else os.environ
+    raw = str(env.get(BRIDGE_TIMEOUT_ENV) or "").strip()
+    if not raw:
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    return min(MAX_BRIDGE_TIMEOUT_SECONDS, max(MIN_BRIDGE_TIMEOUT_SECONDS, value))
 
 
 class DatagramChannel(Protocol):
@@ -253,24 +277,50 @@ class LocalhostBridgeTransport:
         message: dict[str, Any],
     ) -> dict[str, Any]:
         self._seen_request_ids.add(request_id)
+        method = str(message.get("method") or "")
         _logger.info(
             "live.bridge.request",
             extra={
                 "request_id": request_id,
-                "method": str(message.get("method") or ""),
+                "method": method,
                 "request_bytes": len(payload),
             },
         )
+        started_at = time.monotonic()
         channel.send(payload)
-        deadline = time.monotonic() + self._timeout
+        deadline = started_at + self._timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 1)
+                _logger.warning(
+                    "live.bridge.timeout",
+                    extra={
+                        "request_id": request_id,
+                        "method": method,
+                        "elapsed_ms": elapsed_ms,
+                        "timeout_seconds": self._timeout,
+                    },
+                )
                 raise LiveTransportError(
                     ERROR_TIMEOUT,
                     f"the Max for Live device did not reply within {self._timeout:g}s",
                 )
-            raw = channel.receive(remaining)
+            try:
+                raw = channel.receive(remaining)
+            except LiveTransportError as exc:
+                if exc.code == ERROR_TIMEOUT:
+                    elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 1)
+                    _logger.warning(
+                        "live.bridge.timeout",
+                        extra={
+                            "request_id": request_id,
+                            "method": method,
+                            "elapsed_ms": elapsed_ms,
+                            "timeout_seconds": self._timeout,
+                        },
+                    )
+                raise
             try:
                 decoded = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -284,11 +334,14 @@ class LocalhostBridgeTransport:
             if str(decoded.get("request_id") or "") != request_id:
                 _logger.info("live.bridge.stale_response")
                 continue
+            elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 1)
             _logger.info(
                 "live.bridge.response",
                 extra={
                     "request_id": request_id,
+                    "method": method,
                     "ok": bool(decoded.get("ok")),
+                    "elapsed_ms": elapsed_ms,
                 },
             )
             return decoded

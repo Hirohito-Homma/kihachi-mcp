@@ -9,12 +9,28 @@ from kihachi_mcp.models.production_brief import PART_ORDER
 from kihachi_mcp.services.session_pattern_builder import MidiNote
 
 ROLE_ALL = "全パート"
-MIDI_ROLES = frozenset({"drums", "bass", "chords", "melody", "arp", "percussion", *PART_ORDER, ROLE_ALL})
+MIDI_ROLES = frozenset(
+    {
+        "drums",
+        "bass",
+        "chords",
+        "melody",
+        "arp",
+        "percussion",
+        "guitar",
+        "horn",
+        "vocal",
+        "hats",
+        *PART_ORDER,
+        ROLE_ALL,
+    }
+)
 #: Studio part names use the same note engines as the six composer roles.
 COMPOSITION_ENGINE = {
     "Kick": "drums",
     "Snare": "drums",
     "Hats": "drums",
+    "hats": "drums",
     "OpenHat": "drums",
     "Perc": "percussion",
     "FX": "percussion",
@@ -23,10 +39,13 @@ COMPOSITION_ENGINE = {
     "Stab": "chords",
     "Pad": "chords",
     "Guitar": "chords",
+    "guitar": "chords",
     "Horn": "melody",
+    "horn": "melody",
     "Arp": "arp",
     "Lead": "melody",
     "Vocal": "melody",
+    "vocal": "melody",
 }
 PART_PITCH = {"Kick": 36, "Snare": 38, "Hats": 42, "OpenHat": 46}
 COMPOSITION_OPERATIONS = frozenset({"generate", "variation", "revision"})
@@ -70,6 +89,12 @@ class MusicalConstraints:
     #: (the player's own recorded range) via the studio context; None keeps
     #: the previous behaviour exactly.
     pitch_range: tuple[int, int] | None = None
+    #: 対象ロールの奏法・音色・役割仕様（SongSpec.elements から補完、空なら従来と同一）
+    element_spec: dict[str, Any] = field(default_factory=dict)
+    #: 1小節あたり最大音数（SongSpec.arrangement.density から補完、None なら従来と同一）
+    max_notes_per_bar: int | None = None
+    #: コール＆レスポンス役割（"call" / "response"、空なら従来と同一）
+    call_response_role: str = ""
 
     def __post_init__(self) -> None:
         if self.role not in MIDI_ROLES:
@@ -104,6 +129,22 @@ class MusicalConstraints:
             low, high = self.pitch_range
             if not 0 <= low <= high <= 127:
                 raise ValueError("pitch_range must satisfy 0 <= low <= high <= 127")
+        if self.element_spec is None:
+            object.__setattr__(self, "element_spec", {})
+        elif not isinstance(self.element_spec, dict):
+            raise TypeError("element_spec must be a mapping")
+        else:
+            object.__setattr__(
+                self,
+                "element_spec",
+                {str(k).strip(): v for k, v in self.element_spec.items() if str(k).strip()},
+            )
+        if self.max_notes_per_bar is not None and self.max_notes_per_bar < 1:
+            raise ValueError("max_notes_per_bar must be at least 1")
+        cr_role = str(self.call_response_role or "").strip().lower()
+        if cr_role and cr_role not in {"call", "response"}:
+            raise ValueError("call_response_role must be 'call' or 'response'")
+        object.__setattr__(self, "call_response_role", cr_role)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -118,6 +159,12 @@ class MusicalConstraints:
             data.pop("section_energy", None)
         if data.get("pitch_range") is None:
             data.pop("pitch_range", None)
+        if not data.get("element_spec"):
+            data.pop("element_spec", None)
+        if data.get("max_notes_per_bar") is None:
+            data.pop("max_notes_per_bar", None)
+        if not data.get("call_response_role"):
+            data.pop("call_response_role", None)
         return data
 
     @classmethod
@@ -156,6 +203,17 @@ class MusicalConstraints:
                 if data.get("pitch_range")
                 else None
             ),
+            element_spec=(
+                dict(data["element_spec"])
+                if isinstance(data.get("element_spec"), dict)
+                else {}
+            ),
+            max_notes_per_bar=(
+                int(data["max_notes_per_bar"])
+                if data.get("max_notes_per_bar") is not None
+                else None
+            ),
+            call_response_role=str(data.get("call_response_role") or ""),
         )
 
 

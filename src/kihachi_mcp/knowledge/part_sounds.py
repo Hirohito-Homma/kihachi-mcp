@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import math
 import re
+from typing import Any
 
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, Setting
 from kihachi_mcp.services.device_probe import load_parameters
+from kihachi_mcp.services.live_device_catalog import (
+    PluginDeviceSpec,
+    resolve_plugin_spec,
+)
 
 _TABLE = load_parameters().get("devices") or {}
 _NUMBER = re.compile(r"-?inf|-?\d+(?:\.\d+)?")
@@ -198,7 +203,24 @@ PART_EFFECTS: dict[str, tuple[DeviceRecipe, ...]] = {
     "Perc": (_eq(250), _reverb(15, 1380, 40)),
     "Sub": (_eq(25, low_pass_hz=120),),
     # The sub carries everything below 90 Hz; the bass keeps the bite above it.
-    "Bass": (_eq(90), _compressor(-20, 4, 10, 50), _saturator(6, "Analog Clip", 60)),
+    "Bass": (_eq(32), _compressor(-20, 4, 10, 50), _saturator(6, "Analog Clip", 60)),
+    # フィルターと歪みで変容したベース（セクション別 sound_variants 用）。
+    "BassMut": (
+        _eq(32),
+        DeviceRecipe(
+            "Auto Filter",
+            (
+                item("Auto Filter", "Filter Type", "Low-pass"),
+                at("Auto Filter", "Frequency", 159),
+                at("Auto Filter", "Resonance", 40),
+                at("Auto Filter", "Env Amount", 60),
+                at("Auto Filter", "Env Attack", 1.81),
+                at("Auto Filter", "Env Release", 142),
+            ),
+        ),
+        _saturator(14, "Analog Clip", 80),
+        _compressor(-18, 4, 10, 50),
+    ),
     "Stab": (_eq(200), _reverb(20, 2320)),
     "Pad": (_eq(250, low_pass_hz=8000), _reverb(35, 3500, 70)),
     "Arp": (_eq(300), _echo(22, 30)),
@@ -233,7 +255,7 @@ PART_MIX: dict[str, tuple[float, float]] = {
     "OpenHat": (-18.0, -0.15),
     "Perc": (-18.0, -0.3),
     "Stab": (-14.0, 0.0),
-    "Pad": (-18.0, 0.0),
+    "Pad": (-21.0, 0.0),
     "Arp": (-18.0, 0.3),
     "Guitar": (-16.0, -0.35),
     "Horn": (-14.0, 0.25),
@@ -300,7 +322,7 @@ MASTER_CHAIN: tuple[DeviceRecipe, ...] = (
             item("Limiter", "Mode", "True Peak"),
             # The export overshot a -1.0 ceiling by 0.01 dB true peak.
             at("Limiter", "Ceiling", -1.2),
-            at("Limiter", "Input Gain", 15.6),
+            at("Limiter", "Input Gain", 4.0),
         ),
     ),
 )
@@ -358,3 +380,103 @@ PART_INSTRUMENTS: dict[str, DeviceRecipe] = {
         ),
     ),
 }
+
+# SongSpec.elements に応じたパート別デバイス／パラメータプロファイル対応表
+ELEMENT_INSTRUMENTS: dict[tuple[str, str, str], DeviceRecipe] = {
+    ("Guitar", "technique", "cutting_16th"): DeviceRecipe(
+        "Operator",
+        (
+            item("Operator", "Algorithm", "Alg. 1"),
+            item("Operator", "Osc-A On", "On"),
+            item("Operator", "Osc-A Wave", "Saw 8"),
+            value("Operator", "Osc-A Level", 0.8),
+            value("Operator", "Ae Attack", 0.0),
+            value("Operator", "Ae Decay", 0.55),
+            value("Operator", "Ae Sustain", 0.15),
+            value("Operator", "Ae Release", 0.14),
+            item("Operator", "Osc-B On", "On"),
+            step("Operator", "B Coarse", 2),
+            item("Operator", "Osc-B Wave", "Sine"),
+            value("Operator", "Osc-B Level", 0.55),
+            value("Operator", "Be Attack", 0.0),
+            value("Operator", "Be Decay", 0.14),
+            value("Operator", "Be Sustain", 0.0),
+            item("Operator", "Filter On", "On"),
+            item("Operator", "Filter Type", "Lowpass"),
+            value("Operator", "Filter Freq", 0.68),
+            value("Operator", "Filter Res", 0.24),
+        ),
+    ),
+    ("Bass", "technique", "slap"): DeviceRecipe(
+        "Operator",
+        (
+            item("Operator", "Algorithm", "Alg. 1"),
+            item("Operator", "Osc-A On", "On"),
+            item("Operator", "Osc-A Wave", "Sine"),
+            value("Operator", "Osc-A Level", 0.9),
+            value("Operator", "Ae Attack", 0.0),
+            value("Operator", "Ae Decay", 0.34),
+            value("Operator", "Ae Sustain", 0.15),
+            value("Operator", "Ae Release", 0.18),
+            item("Operator", "Osc-B On", "On"),
+            step("Operator", "B Coarse", 2),
+            item("Operator", "Osc-B Wave", "Saw 8"),
+            value("Operator", "Osc-B Level", 0.65),
+            value("Operator", "Be Attack", 0.0),
+            value("Operator", "Be Decay", 0.18),
+            value("Operator", "Be Sustain", 0.0),
+            item("Operator", "Filter On", "On"),
+            item("Operator", "Filter Type", "Lowpass"),
+            value("Operator", "Filter Freq", 0.74),
+            value("Operator", "Filter Res", 0.30),
+        ),
+    ),
+}
+
+
+_PART_ELEMENT_ALIASES: dict[str, str] = {
+    "stab": "chords",
+    "lead": "melody",
+    "perc": "percussion",
+}
+
+
+def _find_part_element(
+    part: str, elements: dict[str, dict[str, Any]] | None
+) -> dict[str, Any] | None:
+    if not elements:
+        return None
+    part_key = part.strip().lower()
+    spec = elements.get(part_key)
+    if not isinstance(spec, dict):
+        alias = _PART_ELEMENT_ALIASES.get(part_key)
+        spec = elements.get(alias) if alias else None
+    return spec if isinstance(spec, dict) else None
+
+
+def element_plugin_spec(
+    part: str, elements: dict[str, dict[str, Any]] | None
+) -> PluginDeviceSpec | None:
+    """elements にプラグイン指定があれば検証済み PluginDeviceSpec を返す。"""
+    spec = _find_part_element(part, elements)
+    if spec is None:
+        return None
+    if str(spec.get("instrument") or "").strip().lower() != "plugin":
+        return None
+    return resolve_plugin_spec(spec)
+
+
+def element_instrument_recipe(
+    part: str, elements: dict[str, dict[str, Any]] | None
+) -> tuple[str, DeviceRecipe] | None:
+    """elements に一致するパート用デバイスレシピがあれば (プロファイル名, DeviceRecipe) を返す。"""
+    spec = _find_part_element(part, elements)
+    if spec is None:
+        return None
+    if str(spec.get("instrument") or "").strip().lower() == "plugin":
+        return None
+    part_key = part.strip().lower()
+    for (target_part, attr_key, attr_val), recipe in ELEMENT_INSTRUMENTS.items():
+        if target_part == part and str(spec.get(attr_key) or "") == attr_val:
+            return f"{part_key}.{attr_val}", recipe
+    return None

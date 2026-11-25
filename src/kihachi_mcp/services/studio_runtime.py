@@ -24,7 +24,7 @@ from kihachi_mcp.models.live_contract import (
     managed_track_name,
 )
 from kihachi_mcp.models.live_state import LiveStateSnapshot
-from kihachi_mcp.models.midi_candidate import CandidateClip, MidiCandidate
+from kihachi_mcp.models.midi_candidate import PART_ORDER, CandidateClip, MidiCandidate
 from kihachi_mcp.models.midi_composer import (
     COMPOSITION_ENGINE,
     ComposedMidiNote,
@@ -103,6 +103,13 @@ from kihachi_mcp.services.studio_workflow import (
     system_statuses,
     validate_settings,
 )
+from kihachi_mcp.services.vital_parameters import (
+    VITAL_CONFIGURE_GUIDANCE,
+    create_vital_parameter_plan,
+    is_vital_device,
+    parameter_signature,
+    parameter_view,
+)
 
 JOB_IDLE = "idle"
 JOB_RUNNING = "running"
@@ -179,6 +186,7 @@ class StudioRuntime:
             inspector=self._inspector,
             approval_gate=self._gate,
             request_id_factory=_unique_request_ids(),
+            plugin_remote=self._plugin_remote_call,
         )
         # A pad replacement needs track/device identity, not every Session clip.
         # Plan and execute against the same compact snapshot so the fingerprint
@@ -231,6 +239,7 @@ class StudioRuntime:
         self._pending_revisions: dict[str, dict[str, Any]] = {}
         self._pending_children: dict[str, MidiCandidate] = {}
         self._pending_sample_replacements: dict[str, Any] = {}
+        self._pending_vital_parameter_plans: dict[str, dict[str, Any]] = {}
         self._revision_history: list[dict[str, Any]] = []
         self._expected: dict[str, dict[str, Any]] = {}
         self._verifications: dict[str, dict[str, Any]] = {}
@@ -542,6 +551,11 @@ class StudioRuntime:
         pattern_bars: int,
         notes: list[dict[str, Any]],
         section_name: str | None = None,
+        elements: dict[str, dict[str, Any]] | None = None,
+        arrangement: dict[str, Any] | None = None,
+        sections: list[dict[str, Any]] | None = None,
+        section_elements: dict[str, dict[str, dict[str, Any]]] | None = None,
+        tempo: int | None = None,
     ) -> dict[str, Any]:
         """Propose replacing only one candidate part with reviewed Composer notes."""
         candidate = self._lookup(candidate_id)
@@ -551,19 +565,60 @@ class StudioRuntime:
             return {"ok": False, "error": "全パートは一度に採用できません。パートを選んでください。"}
         part = _COMPOSER_ROLE_PARTS.get(str(role))
         if part is None:
+            role_low = str(role).strip().lower()
+            part = next(
+                (clip.part for clip in candidate.clips if clip.part.lower() == role_low),
+                None,
+            )
+        if part is None:
             return {
                 "ok": False,
                 "error": "DrumsはKick/Hats/Snareに分かれるため、現在は一括採用できません",
             }
-        targets = candidate.clips_for_part(part)
+        layout_sections = None
+        layout_by_name: dict[str, Any] = {}
+        if sections is not None:
+            from kihachi_mcp.models.production_brief import SectionIntent
+
+            if not isinstance(sections, list) or not sections:
+                return {"ok": False, "error": "sections配置が空または不正です"}
+            if not all(isinstance(item, dict) for item in sections):
+                return {"ok": False, "error": "sections配置の要素が不正です"}
+            try:
+                layout_sections = tuple(SectionIntent.from_dict(item) for item in sections)
+            except (TypeError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+            layout_by_name = {sec.name: sec for sec in layout_sections}
+
+        resolved_variant_parents = _merge_variant_parents(
+            arrangement, getattr(candidate, "variant_parents", None)
+        )
+        canonical_part = resolved_variant_parents.get(part, part)
+        family_parts = {canonical_part} | {
+            vp for vp, parent in resolved_variant_parents.items() if parent == canonical_part
+        }
+
+        targets = [clip for clip in candidate.clips if clip.part in family_parts]
+        creating_clip: CandidateClip | None = None
         if section_name is not None:
             targets = [clip for clip in targets if clip.section_name == section_name]
             if not targets:
-                return {
-                    "ok": False,
-                    "error": f"この候補に{part}の{section_name}クリップがありません",
-                }
-        if not targets:
+                layout_sec = layout_by_name.get(section_name)
+                if layout_sec is None:
+                    return {
+                        "ok": False,
+                        "error": f"この候補に{part}の{section_name}クリップがありません",
+                    }
+                creating_clip = CandidateClip(
+                    part=_sound_variant_target_part(
+                        arrangement, canonical_part, layout_sec.name
+                    ),
+                    section_name=layout_sec.name,
+                    start_bar=layout_sec.start_bar,
+                    length_bars=layout_sec.length_bars,
+                    notes=(),
+                )
+        if not targets and creating_clip is None:
             return {"ok": False, "error": f"この候補に{part}クリップがありません"}
         if candidate.brief.beats_per_bar != 4:
             return {"ok": False, "error": "Composer候補の採用は現在4/4だけに対応しています"}
@@ -573,23 +628,24 @@ class StudioRuntime:
             return {"ok": False, "error": str(exc)}
         if not parsed or len(parsed) > 4096:
             return {"ok": False, "error": "採用するMIDIノートは1〜4096件にしてください"}
-        if pattern_bars < 1 or pattern_bars > int(candidate.brief.bars.value):
+        layout_total_bars = (
+            sum(sec.length_bars for sec in layout_sections)
+            if layout_sections is not None
+            else int(candidate.brief.bars.value)
+        )
+        max_bars = max(int(candidate.brief.bars.value), layout_total_bars)
+        if pattern_bars < 1 or pattern_bars > max_bars:
             return {"ok": False, "error": "Composerの小節数が候補の範囲外です"}
         pattern_beats = pattern_bars * candidate.brief.beats_per_bar
         if any(note.start + note.duration > pattern_beats + 1e-6 for note in parsed):
             return {"ok": False, "error": "Composerノートが指定パターン小節を超えています"}
         def _in_scope(clip: CandidateClip) -> bool:
-            return clip.part == part and (
+            return clip.part in family_parts and (
                 section_name is None or clip.section_name == section_name
             )
 
-        replaced: list[CandidateClip] = []
-        changed_clips = 0
-        for clip in candidate.clips:
-            if not _in_scope(clip):
-                replaced.append(clip)
-                continue
-            clip_beats = clip.length_bars * candidate.brief.beats_per_bar
+        def _tile_notes(length_bars: int) -> tuple[MidiNote, ...]:
+            clip_beats = length_bars * candidate.brief.beats_per_bar
             tiled = []
             for repeat in range(math.ceil(clip_beats / pattern_beats)):
                 offset = repeat * pattern_beats
@@ -599,23 +655,188 @@ class StudioRuntime:
                         continue
                     duration = round(min(note.duration, clip_beats - start), 6)
                     tiled.append(MidiNote(note.pitch, start, duration, note.velocity))
+            return tuple(sorted(tiled, key=lambda item: (item.start_beats, item.pitch)))
+
+        active_roles = _active_roles_for_section(arrangement, section_name)
+        sec_key = section_name.strip().lower() if section_name is not None else ""
+        resolved_elements = (
+            {str(k).strip().lower(): dict(v) for k, v in elements.items() if isinstance(v, dict)}
+            if isinstance(elements, dict)
+            else dict(candidate.elements)
+        )
+        effective_section_elements = (
+            section_elements if isinstance(section_elements, dict) else {}
+        )
+
+        def _postprocess_adopted_notes(
+            clip_section: str, clip_notes: tuple[MidiNote, ...]
+        ) -> tuple[MidiNote, ...]:
+            if canonical_part != "Bass":
+                return clip_notes
+            bass_elem = _resolve_effective_element_spec(
+                resolved_elements, effective_section_elements, "bass", clip_section
+            )
+            if not bass_elem:
+                return clip_notes
+            notes_out = clip_notes
+            if str(bass_elem.get("instrument") or "").strip().lower() == "plugin":
+                notes_out = _avoid_ezbass_keyswitch_collision(notes_out)
+            if bass_elem.get("slide_down") is True:
+                notes_out = _inject_slide_down_keyswitches(
+                    notes_out, beats_per_bar=candidate.brief.beats_per_bar
+                )
+            return notes_out
+
+        replaced: list[CandidateClip] = []
+        changed_clips = 0
+        cleared_parts: list[str] = []
+        seen_scope_slots: set[tuple[str, int]] = set()
+        for clip in candidate.clips:
+            layout_sec = layout_by_name.get(clip.section_name)
+            target_start = layout_sec.start_bar if layout_sec is not None else clip.start_bar
+            target_length = (
+                layout_sec.length_bars if layout_sec is not None else clip.length_bars
+            )
+            if not _in_scope(clip):
+                clip_canonical = resolved_variant_parents.get(clip.part, clip.part)
+                if (
+                    active_roles is not None
+                    and sec_key
+                    and clip.section_name.strip().lower() == sec_key
+                    and _PART_TO_COMPOSER_ROLE.get(clip_canonical) is not None
+                    and _PART_TO_COMPOSER_ROLE[clip_canonical] not in active_roles
+                    and clip.notes
+                ):
+                    # arrangement.activity で無効化された compose role はスロットを維持して 0 音化する
+                    cleared = CandidateClip(
+                        part=clip.part,
+                        section_name=clip.section_name,
+                        start_bar=target_start,
+                        length_bars=target_length,
+                        notes=(),
+                    )
+                    replaced.append(cleared)
+                    changed_clips += 1
+                    cleared_parts.append(clip.part)
+                elif target_start != clip.start_bar or target_length != clip.length_bars:
+                    replaced.append(
+                        CandidateClip(
+                            part=clip.part,
+                            section_name=clip.section_name,
+                            start_bar=target_start,
+                            length_bars=target_length,
+                            notes=clip.notes,
+                        )
+                    )
+                else:
+                    replaced.append(clip)
+                continue
+            slot_key = (clip.section_name, target_start)
+            if slot_key in seen_scope_slots:
+                changed_clips += 1
+                continue
+            seen_scope_slots.add(slot_key)
+            target_part = _sound_variant_target_part(
+                arrangement, canonical_part, clip.section_name
+            )
             new_clip = CandidateClip(
-                part=clip.part,
+                part=target_part,
                 section_name=clip.section_name,
-                start_bar=clip.start_bar,
-                length_bars=clip.length_bars,
-                notes=tuple(sorted(tiled, key=lambda item: (item.start_beats, item.pitch))),
+                start_bar=target_start,
+                length_bars=target_length,
+                notes=_postprocess_adopted_notes(
+                    clip.section_name, _tile_notes(target_length)
+                ),
             )
             replaced.append(new_clip)
-            changed_clips += int(new_clip.notes != clip.notes)
+            changed_clips += int(new_clip.part != clip.part or new_clip.notes != clip.notes)
+        if creating_clip is not None:
+            new_clip = CandidateClip(
+                part=creating_clip.part,
+                section_name=creating_clip.section_name,
+                start_bar=creating_clip.start_bar,
+                length_bars=creating_clip.length_bars,
+                notes=_postprocess_adopted_notes(
+                    creating_clip.section_name, _tile_notes(creating_clip.length_bars)
+                ),
+            )
+            replaced.append(new_clip)
+            changed_clips += 1
         if not changed_clips:
             return {"ok": False, "error": "元の候補と同じノートのため採用案はありません"}
+        # 新規クリップ追加・再配置後も PART_ORDER × start_bar の正規順を維持する
+        part_rank = {p: idx for idx, p in enumerate(PART_ORDER)}
+        replaced.sort(
+            key=lambda c: (
+                part_rank.get(
+                    resolved_variant_parents.get(c.part, c.part), len(PART_ORDER)
+                ),
+                c.part != resolved_variant_parents.get(c.part, c.part),
+                c.start_bar,
+            )
+        )
+        raw_mix = arrangement.get("mix") if isinstance(arrangement, dict) else None
+        if raw_mix is not None:
+            from kihachi_mcp.models.songspec import normalize_arrangement_mix
+
+            try:
+                resolved_mix = normalize_arrangement_mix(raw_mix)
+            except (TypeError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+        else:
+            resolved_mix = dict(candidate.mix)
+        updated_brief = candidate.brief
+        brief_updates: dict[str, Any] = {}
+        if layout_sections is not None and (
+            layout_sections != candidate.brief.sections
+            or layout_total_bars != int(candidate.brief.bars.value)
+        ):
+            from kihachi_mcp.models.production_brief import SourcedValue
+
+            drop_bar = int(candidate.brief.drop_start_bar.value)
+            drop_sec = next(
+                (sec for sec in layout_sections if sec.name.strip().lower() == "drop"),
+                None,
+            )
+            if drop_sec is not None:
+                new_drop = SourcedValue(
+                    drop_sec.start_bar, candidate.brief.drop_start_bar.source
+                )
+            elif drop_bar > layout_total_bars:
+                new_drop = SourcedValue(0, candidate.brief.drop_start_bar.source)
+            else:
+                new_drop = candidate.brief.drop_start_bar
+            brief_updates["bars"] = SourcedValue(
+                layout_total_bars, candidate.brief.bars.source
+            )
+            brief_updates["sections"] = layout_sections
+            brief_updates["drop_start_bar"] = new_drop
+        if tempo is not None:
+            from kihachi_mcp.models.production_brief import SOURCE_USER, SourcedValue
+
+            if isinstance(tempo, bool):
+                return {"ok": False, "error": "invalid tempo"}
+            try:
+                parsed_tempo = int(tempo)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid tempo"}
+            brief_updates["tempo"] = SourcedValue(parsed_tempo, SOURCE_USER)
+        if brief_updates:
+            from dataclasses import replace as dc_replace
+
+            try:
+                updated_brief = dc_replace(candidate.brief, **brief_updates)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
         child = MidiCandidate(
             candidate_id=uuid.uuid4().hex,
             seed=candidate.seed,
-            brief=candidate.brief,
+            brief=updated_brief,
             clips=tuple(replaced),
             parent_candidate_id=candidate.candidate_id,
+            elements=resolved_elements,
+            mix=resolved_mix,
+            variant_parents=resolved_variant_parents,
         )
         result = {
             "parent_candidate_id": candidate.candidate_id,
@@ -633,12 +854,36 @@ class StudioRuntime:
                 ),
                 f"{changed_clips}クリップ / {child.note_count(part)}ノート",
                 f"全体fingerprint: {child.note_fingerprint[:12]}",
+                *(
+                    [f"activity外compose roleを0音化（{section_name}）: {', '.join(cleared_parts)}"]
+                    if cleared_parts
+                    else []
+                ),
             ],
             "review": review_candidate(child),
         }
         record = revision_record(result)
         self._pending_revisions[record["revision_id"]] = record
         self._pending_children[record["child_candidate_id"]] = child
+        def _expected_unchanged(old: CandidateClip) -> CandidateClip:
+            layout_sec = layout_by_name.get(old.section_name)
+            if layout_sec is None or (
+                layout_sec.start_bar == old.start_bar
+                and layout_sec.length_bars == old.length_bars
+            ):
+                return old
+            return CandidateClip(
+                part=old.part,
+                section_name=old.section_name,
+                start_bar=layout_sec.start_bar,
+                length_bars=layout_sec.length_bars,
+                notes=old.notes,
+            )
+
+        child_by_key = {
+            (clip.part, clip.section_name, clip.start_bar): clip
+            for clip in child.clips
+        }
         return {
             "ok": True,
             "revision": _public_revision(record),
@@ -647,9 +892,10 @@ class StudioRuntime:
             "target_part": part,
             "changed_clips": changed_clips,
             "other_parts_unchanged": all(
-                old == new
-                for old, new in zip(candidate.clips, child.clips, strict=True)
+                child_by_key.get((exp.part, exp.section_name, exp.start_bar)) == exp
+                for old in candidate.clips
                 if not _in_scope(old)
+                for exp in (_expected_unchanged(old),)
             ),
             "requires_approval": True,
             "applied_to_live": False,
@@ -921,20 +1167,40 @@ class StudioRuntime:
         planned_notes = _notes_from_plan(plan)
         preview_notes = _notes_from_candidate(candidate)
         notes_match = planned_notes == preview_notes and bool(preview_notes)
+        conflicts = [item.to_dict() for item in plan.conflicts]
+        warnings = list(plan.warnings) + kit_notes
+        status = plan.status
+        ok = status != "blocked"
+
+        has_plugin_ops = any(op.op == "load_plugin" for op in plan.operations)
+        if has_plugin_ops and not self._plugin_loader_available():
+            ok = False
+            status = "blocked"
+            conflicts.append(
+                {
+                    "kind": "plugin_loader_unavailable",
+                    "detail": (
+                        "AbletonGPT Remote Script (9877) に接続できないため、プラグインをロードできません"
+                        "（標準デバイスへの差し替えは行いません）"
+                    ),
+                    "target": {},
+                }
+            )
+
         return {
-            "ok": plan.status != "blocked",
+            "ok": ok,
             "candidate_id": candidate.candidate_id,
             "note_fingerprint": candidate.note_fingerprint,
             "notes_match_preview": notes_match,
-            "status": plan.status,
+            "status": status,
             "plan": plan.to_dict(),
             "summary": {
                 **_apply_summary(candidate, plan, snapshot, change_tempo),
                 "skip_instruments": skip_instruments,
                 "kits": sorted(kit_parts),
             },
-            "conflicts": [item.to_dict() for item in plan.conflicts],
-            "warnings": list(plan.warnings) + kit_notes,
+            "conflicts": conflicts,
+            "warnings": warnings,
         }
 
     def apply(
@@ -993,13 +1259,19 @@ class StudioRuntime:
                     candidate, plan, frozenset(preview["summary"].get("kits") or [])
                 )
             coverage = self._coverage_after(candidate, receipt)
+            plugin_devices, plugin_warnings = _plugin_receipt_details(receipt)
+            track_volumes, mix_warnings = _mix_receipt_details(receipt)
             result = {
                 "ok": receipt.status == "verified" and all(item["ok"] for item in kits),
                 "candidate_id": candidate.candidate_id,
                 "note_fingerprint": candidate.note_fingerprint,
                 "receipt": receipt.to_dict(),
                 "kits": kits,
+                "plugin_devices": plugin_devices,
+                "track_volumes": track_volumes,
+                "warnings": list(preview.get("warnings") or []) + plugin_warnings + mix_warnings,
                 "sound_coverage": coverage,
+                "planned_devices": preview["summary"].get("planned_devices") or {},
                 "partial": receipt.status == "partially_applied",
                 "musical_quality_claimed": False,
                 "verified_means": (
@@ -1011,6 +1283,19 @@ class StudioRuntime:
             return result
         finally:
             self._apply_lock.release()
+
+    def _plugin_remote_call(self, command: str, timeout: float | None = None, **params: Any) -> Any:
+        if self._kit_loader is None:
+            raise KitLoadError(
+                "AbletonGPT に接続できません。Live の Control Surface で AbletonGPT_MCP を選んでください"
+            )
+        return self._kit_loader._call(command, timeout=timeout, **params)
+
+    def _plugin_loader_available(self) -> bool:
+        injected = getattr(self._executor, "_plugin_remote", None)
+        if injected is not None and injected != self._plugin_remote_call:
+            return True
+        return self._kit_loader is not None and self._kit_loader.available()
 
     def _kit_parts(
         self, candidate: MidiCandidate, skip_instruments: bool
@@ -2464,6 +2749,265 @@ class StudioRuntime:
             return {"ok": False, "error": f"{exc.code}: {exc.message}"}
         return {"ok": True, "track": track.name, **reply}
 
+    def list_vital_parameters(self) -> dict[str, Any]:
+        """KIHACHI管理トラック上のVital公開パラメータを変更せずに列挙する。"""
+        try:
+            snapshot = self._coverage_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "error": f"{exc.code}: {exc.message}",
+                "error_code": exc.code,
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        devices: list[dict[str, Any]] = []
+        for track in snapshot.tracks:
+            if not track.is_managed:
+                continue
+            for device_index, device_name in enumerate(track.device_names):
+                if not is_vital_device(device_name):
+                    continue
+                try:
+                    reply = self._coverage_inspector.device_parameters(
+                        device_index, track.index
+                    )
+                    if (
+                        str(reply.get("device_name") or "") != device_name
+                        or not is_vital_device(str(reply.get("device_name") or ""))
+                    ):
+                        return {
+                            "ok": False,
+                            "error": "Vitalの位置が読み取り中に変わりました。もう一度取得してください",
+                        }
+                    parameters = [
+                        parameter_view(row)
+                        for row in reply.get("parameters") or []
+                        if isinstance(row, dict)
+                    ]
+                except (LiveTransportError, LiveVersionUnsupportedError, ValueError) as exc:
+                    return {
+                        "ok": False,
+                        "error": f"Vitalのパラメータを取得できません: {exc}",
+                    }
+                configured = any(
+                    str(row.get("name") or "").strip().casefold()
+                    != "device on".casefold()
+                    for row in parameters
+                )
+                devices.append(
+                    {
+                        "track_index": track.index,
+                        "track_name": track.name,
+                        "device_index": device_index,
+                        "device_name": device_name,
+                        "configured": configured,
+                        "frozen": track.is_frozen,
+                        "parameters": parameters,
+                        "guidance": None if configured else VITAL_CONFIGURE_GUIDANCE,
+                    }
+                )
+        return {
+            "ok": True,
+            "live_changed": False,
+            "observed_at": snapshot.observed_at,
+            "devices": devices,
+        }
+
+    def preview_vital_parameter(
+        self,
+        track_index: int,
+        device_index: int,
+        parameter_name: str,
+        *,
+        value: Any = None,
+        item: Any = None,
+    ) -> dict[str, Any]:
+        """Vitalパラメータ1件の変更を検証し、実行前の保留Planとして保存する。"""
+        try:
+            snapshot = self._coverage_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "error": f"{exc.code}: {exc.message}",
+                "error_code": exc.code,
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
+        track = next(
+            (row for row in snapshot.tracks if row.index == track_index), None
+        )
+        if track is None or not track.is_managed:
+            return {
+                "ok": False,
+                "error": "KIHACHIが作成したトラック上のVitalだけ操作できます",
+            }
+        if not 0 <= device_index < len(track.device_names):
+            return {"ok": False, "error": "指定したデバイスがありません"}
+        device_name = track.device_names[device_index]
+        if not is_vital_device(device_name):
+            return {"ok": False, "error": "指定位置のデバイスがVitalではありません"}
+        try:
+            reply = self._coverage_inspector.device_parameters(
+                device_index, track.index
+            )
+        except (LiveTransportError, LiveVersionUnsupportedError) as exc:
+            return {"ok": False, "error": f"Vitalの現在値を取得できません: {exc}"}
+        if str(reply.get("device_name") or "") != device_name:
+            return {
+                "ok": False,
+                "error": "Vitalの位置が読み取り中に変わりました。もう一度取得してください",
+            }
+        matching_parameters = [
+            row
+            for row in reply.get("parameters") or []
+            if isinstance(row, dict)
+            and str(row.get("name") or "") == parameter_name
+        ]
+        if not matching_parameters:
+            return {
+                "ok": False,
+                "error": "指定したパラメータはVitalから公開されていません",
+            }
+        if len(matching_parameters) > 1:
+            return {
+                "ok": False,
+                "error": "同名の公開パラメータが複数あるため、安全に対象を特定できません",
+            }
+        parameter = matching_parameters[0]
+        plan = create_vital_parameter_plan(
+            snapshot,
+            track_index=track.index,
+            device_index=device_index,
+            device_name=device_name,
+            parameter=parameter,
+            value=value,
+            item=item,
+        )
+        if plan.status == "blocked":
+            return {
+                "ok": False,
+                "error": (
+                    plan.conflicts[0].detail
+                    if plan.conflicts
+                    else "パラメータ変更を計画できません"
+                ),
+                "plan": plan.to_dict(),
+            }
+        current = parameter_view(parameter)
+        operation = plan.operations[0]
+        pending = {
+            "plan": plan,
+            "track_index": track.index,
+            "device_index": device_index,
+            "parameter_name": parameter_name,
+            "parameter_signature": parameter_signature(parameter),
+        }
+        self._pending_vital_parameter_plans[plan.plan_hash] = pending
+        return {
+            "ok": True,
+            "change_id": plan.plan_hash,
+            "track_index": track.index,
+            "track_name": track.name,
+            "device_index": device_index,
+            "device_name": device_name,
+            "parameter": current,
+            "target": dict(operation.arguments),
+            "plan": plan.to_dict(),
+            "applied_to_live": False,
+        }
+
+    def apply_vital_parameter(
+        self, change_id: str, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """明示承認された保留Planを一度だけ実行し、Vitalの値を読み戻す。"""
+        if not confirmed:
+            return {
+                "ok": False,
+                "error": "パラメータ変更内容を確認してから実行してください",
+            }
+        pending = self._pending_vital_parameter_plans.pop(change_id, None)
+        if pending is None:
+            return {
+                "ok": False,
+                "error": "パラメータ変更計画がありません。もう一度確認してください",
+            }
+        if not self._apply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "別のLive適用が実行中です"}
+        try:
+            try:
+                reply = self._coverage_inspector.device_parameters(
+                    int(pending["device_index"]), int(pending["track_index"])
+                )
+            except (LiveTransportError, LiveVersionUnsupportedError) as exc:
+                return {
+                    "ok": False,
+                    "error": f"実行直前のVital現在値を取得できません: {exc}",
+                }
+            if not is_vital_device(str(reply.get("device_name") or "")):
+                return {
+                    "ok": False,
+                    "error": "プレビュー後に対象デバイスがVitalではなくなりました。もう一度確認してください",
+                }
+            matching_parameters = [
+                row
+                for row in reply.get("parameters") or []
+                if isinstance(row, dict)
+                and str(row.get("name") or "") == pending["parameter_name"]
+            ]
+            parameter = (
+                matching_parameters[0] if len(matching_parameters) == 1 else None
+            )
+            try:
+                unchanged = (
+                    parameter is not None
+                    and parameter_signature(parameter)
+                    == pending["parameter_signature"]
+                )
+            except ValueError:
+                unchanged = False
+            if not unchanged:
+                return {
+                    "ok": False,
+                    "error": "プレビュー後にVitalの値または公開設定が変わりました。もう一度確認してください",
+                }
+            plan = pending["plan"]
+            try:
+                token = self._gate.approve(plan)
+            except ApprovalError as exc:
+                return {"ok": False, "error": exc.message}
+            receipt = self._sample_executor.execute(
+                plan, approved=True, approval_token=token
+            )
+            fresh_parameter: dict[str, Any] | None = None
+            try:
+                fresh = self._coverage_inspector.device_parameters(
+                    int(pending["device_index"]), int(pending["track_index"])
+                )
+                observed = next(
+                    (
+                        row
+                        for row in fresh.get("parameters") or []
+                        if isinstance(row, dict)
+                        and str(row.get("name") or "") == pending["parameter_name"]
+                    ),
+                    None,
+                )
+                if observed is not None:
+                    fresh_parameter = parameter_view(observed)
+            except (LiveTransportError, LiveVersionUnsupportedError, ValueError):
+                fresh_parameter = None
+            return {
+                "ok": receipt.status == "verified",
+                "receipt": receipt.to_dict(),
+                "parameter": fresh_parameter,
+                "partial": receipt.status == "partially_applied",
+                "musical_quality_claimed": False,
+            }
+        finally:
+            self._apply_lock.release()
+
     def measure_mix(self, path: str, candidate_id: str = "") -> dict[str, Any]:
         """Loudness and true peak of an exported file; per section with a candidate."""
         file = Path(path.strip().strip("'\"")).expanduser()
@@ -3091,7 +3635,92 @@ _COMPOSER_ROLE_PARTS = {
     "melody": "Lead",
     "arp": "Arp",
     "percussion": "Perc",
+    "guitar": "Guitar",
+    "horn": "Horn",
+    "vocal": "Vocal",
+    "hats": "Hats",
 }
+
+_PART_TO_COMPOSER_ROLE = {part: role for role, part in _COMPOSER_ROLE_PARTS.items()}
+
+
+def _merge_variant_parents(
+    arrangement: dict[str, Any] | None,
+    existing: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """arrangement.sound_variants から 変容先パート→親パート の対応表を構築する。"""
+    merged = dict(existing or {})
+    if not isinstance(arrangement, dict):
+        return merged
+    raw_sv = arrangement.get("sound_variants")
+    if not isinstance(raw_sv, dict):
+        return merged
+    for role, cfg in raw_sv.items():
+        if not isinstance(cfg, dict):
+            continue
+        role_key = str(role).strip().lower()
+        variant_part = str(cfg.get("variant_part") or "").strip()
+        if not role_key or not variant_part:
+            continue
+        canonical = _COMPOSER_ROLE_PARTS.get(role_key)
+        if canonical is None:
+            canonical = role_key.capitalize()
+        merged[variant_part] = canonical
+    return merged
+
+
+def _sound_variant_target_part(
+    arrangement: dict[str, Any] | None,
+    canonical_part: str,
+    section_name: str,
+) -> str:
+    """指定セクションが arrangement.sound_variants の対象なら variant_part を返す。"""
+    if not isinstance(arrangement, dict):
+        return canonical_part
+    raw_sv = arrangement.get("sound_variants")
+    if not isinstance(raw_sv, dict) or not raw_sv:
+        return canonical_part
+    role_key = _PART_TO_COMPOSER_ROLE.get(canonical_part, canonical_part.lower())
+    cfg = raw_sv.get(role_key)
+    if not isinstance(cfg, dict):
+        return canonical_part
+    variant_part = str(cfg.get("variant_part") or "").strip()
+    if not variant_part:
+        return canonical_part
+    raw_secs = cfg.get("sections")
+    if not isinstance(raw_secs, (list, tuple, set)):
+        return canonical_part
+    sec_low = section_name.strip().lower()
+    if any(str(s).strip().lower() == sec_low for s in raw_secs):
+        return variant_part
+    return canonical_part
+
+
+def _active_roles_for_section(
+    arrangement: dict[str, Any] | None, section_name: str | None
+) -> frozenset[str] | None:
+    """arrangement.activity に指定されたセクションの有効 compose role 集合を返す。
+
+    arrangement 未指定、activity 未定義、または対象セクションが activity に
+    載っていない場合は None を返し、従来どおり他パートを変更しない。
+    """
+    if not isinstance(arrangement, dict) or not section_name:
+        return None
+    activity = arrangement.get("activity")
+    if not isinstance(activity, dict) or not activity:
+        return None
+    sec_key = section_name.strip().lower()
+    if not sec_key:
+        return None
+    for raw_sec, raw_roles in activity.items():
+        if str(raw_sec).strip().lower() != sec_key:
+            continue
+        if not isinstance(raw_roles, (list, tuple)):
+            return None
+        return frozenset(
+            str(r).strip().lower() for r in raw_roles if str(r).strip()
+        )
+    return None
 
 _PITCHED_ENGINES = frozenset({"bass", "chords", "melody", "arp"})
 _LONG_NOTE_MIN_BEATS = 1.5
@@ -3242,8 +3871,196 @@ def _apply_songspec_context(
             enriched["swing"] = spec.groove.swing
         if "syncopation" not in enriched and spec.groove.syncopation is not None:
             enriched["syncopation"] = spec.groove.syncopation
+    if (spec.elements or spec.section_elements) and "element_spec" not in enriched:
+        role_str = str(enriched.get("role") or "")
+        elem = _resolve_effective_element_spec(
+            spec.elements,
+            spec.section_elements,
+            role_str,
+            str(enriched.get("section_name") or ""),
+        )
+        if elem and role_str.strip().lower() == "melody" and elem.get("motif") is False:
+            # motif: false は未指定と同一リクエスト（後方互換）として扱う
+            elem.pop("motif", None)
+        if elem:
+            enriched["element_spec"] = elem
+            if elem.get("ghost_notes") is True and "velocity_min" not in enriched:
+                # ゴーストノート（velocity <= 40）が _validate_result の既定下限 65 で弾かれないよう下限を下げる
+                enriched["velocity_min"] = 20
+    if spec.arrangement:
+        _apply_arrangement_constraints(
+            enriched,
+            spec.arrangement,
+            role=str(enriched.get("role") or ""),
+            section_name=str(enriched.get("section_name") or ""),
+        )
     _fill_pitch_range(enriched)
     return enriched
+
+
+def _apply_arrangement_constraints(
+    enriched: dict[str, Any],
+    arrangement: dict[str, Any],
+    *,
+    role: str,
+    section_name: str,
+) -> None:
+    """SongSpec.arrangement の density と call_response を constraints へ受け渡す。"""
+    role_key = role.strip().lower()
+    if not role_key:
+        return
+    density = arrangement.get("density")
+    if (
+        isinstance(density, dict)
+        and role_key in density
+        and "max_notes_per_bar" not in enriched
+    ):
+        enriched["max_notes_per_bar"] = int(density[role_key])
+    sec_key = section_name.strip().lower()
+    call_response = arrangement.get("call_response")
+    if (
+        isinstance(call_response, list)
+        and sec_key
+        and "call_response_role" not in enriched
+    ):
+        for entry in call_response:
+            if not isinstance(entry, dict):
+                continue
+            target_sections = {
+                str(s).strip().lower() for s in (entry.get("sections") or ()) if str(s).strip()
+            }
+            if sec_key not in target_sections:
+                continue
+            if str(entry.get("call") or "").strip().lower() == role_key:
+                enriched["call_response_role"] = "call"
+                break
+            if str(entry.get("response") or "").strip().lower() == role_key:
+                enriched["call_response_role"] = "response"
+                break
+
+
+_ROLE_ELEMENT_ALIASES: dict[str, str] = {
+    "stab": "chords",
+    "lead": "melody",
+    "perc": "percussion",
+    "kick": "drums",
+    "snare": "drums",
+    "hats": "drums",
+    "openhat": "drums",
+}
+
+
+def _resolve_songspec_element(
+    elements: dict[str, dict[str, Any]], role: str
+) -> dict[str, Any] | None:
+    """対象ロールに対応する SongSpec.elements の仕様辞書を返す。"""
+    key = role.strip().lower()
+    if not key:
+        return None
+    if key in elements:
+        return dict(elements[key])
+    alias = _ROLE_ELEMENT_ALIASES.get(key)
+    if alias and alias in elements:
+        return dict(elements[alias])
+    return None
+
+
+def _resolve_effective_element_spec(
+    elements: dict[str, dict[str, Any]],
+    section_elements: dict[str, dict[str, dict[str, Any]]],
+    role: str,
+    section_name: str,
+) -> dict[str, Any] | None:
+    """elements[パート] に section_elements[セクション][パート] を上書き合成して返す。"""
+    base = _resolve_songspec_element(elements, role)
+    sec_override: dict[str, Any] | None = None
+    sec_key = section_name.strip().lower()
+    if sec_key and section_elements:
+        for raw_sec, parts in section_elements.items():
+            if str(raw_sec).strip().lower() == sec_key:
+                sec_override = _resolve_songspec_element(parts, role)
+                break
+    if base is None and sec_override is None:
+        return None
+    merged: dict[str, Any] = {}
+    if base:
+        merged.update(base)
+    if sec_override:
+        merged.update(sec_override)
+    return merged or None
+
+
+_SLIDE_DOWN_KEYSWITCH_PITCH = 29
+_EZBASS_RESERVED_PITCHES = frozenset({24, 25, 29, 30, 31, 32})
+_SLIDE_DOWN_MIN_VELOCITY = 100
+
+
+def _avoid_ezbass_keyswitch_collision(
+    notes: tuple[MidiNote, ...], beats_per_bar: int = 4
+) -> tuple[MidiNote, ...]:
+    """EZbass 予約集合 {24, 25, 29, 30, 31, 32} の音楽ノートをオクターブ上（+12）へ移す。"""
+    keyswitch_positions = [
+        (h.start_beats + h.duration_beats / 2.0, h.duration_beats / 2.0)
+        for h in notes
+        if h.pitch != _SLIDE_DOWN_KEYSWITCH_PITCH
+        and h.velocity >= _SLIDE_DOWN_MIN_VELOCITY
+        and abs(h.start_beats - round(h.start_beats / beats_per_bar) * beats_per_bar) < 1e-6
+    ]
+
+    def _is_existing_keyswitch(note: MidiNote) -> bool:
+        return any(
+            abs(note.start_beats - ks_start) < 1e-6
+            and abs(note.duration_beats - ks_duration) < 1e-6
+            for ks_start, ks_duration in keyswitch_positions
+        )
+
+    remapped = tuple(
+        MidiNote(
+            pitch=note.pitch + 12,
+            start_beats=note.start_beats,
+            duration_beats=note.duration_beats,
+            velocity=note.velocity,
+        )
+        if note.pitch in _EZBASS_RESERVED_PITCHES
+        and not (note.pitch == _SLIDE_DOWN_KEYSWITCH_PITCH and _is_existing_keyswitch(note))
+        else note
+        for note in notes
+    )
+    return tuple(sorted(remapped, key=lambda item: (item.start_beats, item.pitch)))
+
+
+def _inject_slide_down_keyswitches(
+    notes: tuple[MidiNote, ...], beats_per_bar: int = 4
+) -> tuple[MidiNote, ...]:
+    """EZbass の Slide Down キースイッチ（pitch 29）を小節頭かつ強拍ノートの後半へ決定論的に配置する。"""
+    injected: list[MidiNote] = list(notes)
+    for note in notes:
+        if note.pitch == _SLIDE_DOWN_KEYSWITCH_PITCH:
+            continue
+        if note.velocity < _SLIDE_DOWN_MIN_VELOCITY:
+            continue
+        nearest_bar_beat = round(note.start_beats / beats_per_bar) * beats_per_bar
+        if abs(note.start_beats - nearest_bar_beat) >= 1e-6:
+            continue
+        half_duration = note.duration_beats / 2.0
+        ks_start = note.start_beats + half_duration
+        # 再利用クリップ等で同一位置・長さのキースイッチが既にあれば2重挿入をスキップする
+        if any(
+            existing.pitch == _SLIDE_DOWN_KEYSWITCH_PITCH
+            and abs(existing.start_beats - ks_start) < 1e-6
+            and abs(existing.duration_beats - half_duration) < 1e-6
+            for existing in injected
+        ):
+            continue
+        injected.append(
+            MidiNote(
+                pitch=_SLIDE_DOWN_KEYSWITCH_PITCH,
+                start_beats=ks_start,
+                duration_beats=half_duration,
+                velocity=note.velocity,
+            )
+        )
+    return tuple(sorted(injected, key=lambda item: (item.start_beats, item.pitch)))
 
 
 def _fill_pitch_range(enriched: dict[str, Any]) -> None:
@@ -3281,7 +4098,12 @@ def _midi_composition_request(
 
 
 def _notes_from_candidate(candidate: MidiCandidate) -> list[list[dict[str, Any]]]:
-    return [[note.to_dict() for note in clip.notes] for clip in candidate.clips]
+    # 計画側（_plan_tracks × _plan_clips）と同じくパート順・クリップ順で照合する
+    return [
+        [note.to_dict() for note in clip.notes]
+        for part in candidate.parts
+        for clip in candidate.clips_for_part(part)
+    ]
 
 
 def _notes_from_plan(plan: Any) -> list[list[dict[str, Any]]]:
@@ -3292,6 +4114,116 @@ def _notes_from_plan(plan: Any) -> list[list[dict[str, Any]]]:
         for operation in plan.operations
         if operation.op == OP_REPLACE_CLIP_NOTES
     ]
+
+
+def _planned_devices_summary(candidate: MidiCandidate, plan: Any) -> dict[str, dict[str, Any]]:
+    """適用プランに含まれるパート別デバイスと elements プロファイルをまとめる。"""
+    from kihachi_mcp.knowledge.part_sounds import element_instrument_recipe
+    from kihachi_mcp.models.live_contract import OP_LOAD_LIVE_DEVICE, OP_LOAD_PLUGIN
+
+    index_to_part: dict[int, str] = {}
+    for operation in plan.operations:
+        if operation.op == OP_CREATE_MIDI_TRACK:
+            track_index = operation.target.get("track_index")
+            name = str(operation.arguments.get("name") or "")
+            for part in candidate.parts:
+                if f" {part} " in name:
+                    if isinstance(track_index, int):
+                        index_to_part[track_index] = part
+                    break
+    devices: dict[str, dict[str, Any]] = {}
+    for operation in plan.operations:
+        if operation.op == OP_LOAD_PLUGIN:
+            track_index = operation.target.get("track_index")
+            part = index_to_part.get(track_index) if isinstance(track_index, int) else None
+            if not part:
+                continue
+            devices[part] = {
+                "device": str(operation.arguments.get("name") or ""),
+                "source": str(operation.arguments.get("source") or ""),
+                "plugin": True,
+            }
+            continue
+        if operation.op != OP_LOAD_LIVE_DEVICE:
+            continue
+        track_index = operation.target.get("track_index")
+        part = index_to_part.get(track_index) if isinstance(track_index, int) else None
+        if not part:
+            continue
+        device_name = str(operation.arguments.get("device_name") or "")
+        entry: dict[str, Any] = {"device": device_name}
+        override = element_instrument_recipe(part, candidate.elements)
+        if override is not None and override[1].device == device_name:
+            entry["profile"] = override[0]
+        devices[part] = entry
+    return devices
+
+
+def _plugin_receipt_details(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """適用レシートからプラグインのロード結果・パラメータ読み戻し値・警告を抽出する。"""
+    from kihachi_mcp.models.live_contract import OP_LOAD_PLUGIN, OP_SET_PLUGIN_PARAM
+
+    by_track: dict[int, dict[str, Any]] = {}
+    warnings: list[str] = []
+    for item in getattr(receipt, "readback", None) or []:
+        observed = getattr(item, "observed", None) or {}
+        if item.op == OP_LOAD_PLUGIN:
+            t_idx = int(observed.get("track_index", -1))
+            by_track[t_idx] = {
+                "track_index": t_idx,
+                "device_name": str(observed.get("device_name") or ""),
+                "requested_name": str(observed.get("requested_name") or ""),
+                "source": str(observed.get("source") or ""),
+                "params": [],
+            }
+        elif item.op == OP_SET_PLUGIN_PARAM:
+            t_idx = int(observed.get("track_index", -1))
+            if observed.get("matched") is False:
+                warn = str(observed.get("warning") or "")
+                if warn:
+                    warnings.append(warn)
+                continue
+            entry = by_track.setdefault(
+                t_idx,
+                {
+                    "track_index": t_idx,
+                    "device_name": str(observed.get("device_name") or ""),
+                    "requested_name": "",
+                    "source": "",
+                    "params": [],
+                },
+            )
+            entry["params"].append(
+                {
+                    "param_name": str(observed.get("param_name") or ""),
+                    "parameter_index": observed.get("parameter_index"),
+                    "value": observed.get("value"),
+                    "display_value": str(observed.get("display_value") or ""),
+                }
+            )
+    return list(by_track.values()), warnings
+
+
+def _mix_receipt_details(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """適用レシートからトラック別の目標 dB と音量読み戻し値を抽出する。"""
+    from kihachi_mcp.models.live_contract import OP_SET_TRACK_VOLUME
+
+    volumes: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for item in getattr(receipt, "readback", None) or []:
+        if item.op != OP_SET_TRACK_VOLUME:
+            continue
+        observed = getattr(item, "observed", None) or {}
+        volumes.append(
+            {
+                "track_index": int(observed.get("track_index", -1)),
+                "part": str(observed.get("part") or ""),
+                "target_db": observed.get("target_db"),
+                "target_volume": observed.get("target_volume"),
+                "volume": observed.get("volume"),
+            }
+        )
+    return volumes, warnings
 
 
 def _apply_summary(
@@ -3319,6 +4251,7 @@ def _apply_summary(
         "candidate_tempo": candidate.brief.tempo.value,
         "change_tempo": change_tempo,
         "new_tracks": create_tracks,
+        "planned_devices": _planned_devices_summary(candidate, plan),
         "clip_count": len(replace_ops),
         "note_count": candidate.note_count(),
         "note_counts": {

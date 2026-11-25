@@ -12,8 +12,13 @@ from typing import Any
 from kihachi_mcp.models.live_contract import SCHEMA_VERSION
 from kihachi_mcp.models.live_state import LiveStateSnapshot
 from kihachi_mcp.services.live_transport import (
+    ERROR_RESPONSE_TOO_LARGE,
+    ERROR_TOO_LARGE,
+    METHOD_GET_ARRANGEMENT_TRACK_SUMMARY,
     METHOD_GET_DEVICE_PARAMETERS,
     METHOD_GET_DRUM_RACK_SUMMARY,
+    METHOD_GET_LOCATOR_SUMMARY,
+    METHOD_GET_SESSION_TRACK_CLIPS,
     METHOD_GET_STATE,
     METHOD_PING,
     PROTOCOL_VERSION,
@@ -96,15 +101,26 @@ class LiveStateInspector:
         are never reported as verified.
         """
         request_id = self._next_request_id()
-        payload = self._exchange(
-            METHOD_GET_STATE,
-            request_id,
-            {
-                "include_arrangement": include_arrangement,
-                "count_session_notes": count_session_notes,
-                "include_session_clips": include_session_clips,
-            },
-        )
+        try:
+            payload = self._exchange(
+                METHOD_GET_STATE,
+                request_id,
+                {
+                    "include_arrangement": include_arrangement,
+                    "count_session_notes": count_session_notes,
+                    "include_session_clips": include_session_clips,
+                },
+            )
+        except LiveTransportError as exc:
+            if exc.code not in (ERROR_RESPONSE_TOO_LARGE, ERROR_TOO_LARGE) or (
+                not include_arrangement and not include_session_clips
+            ):
+                raise
+            payload = self._snapshot_chunked(
+                include_arrangement=include_arrangement,
+                count_session_notes=count_session_notes,
+                include_session_clips=include_session_clips,
+            )
         snapshot = LiveStateSnapshot.from_dict(payload)
         major = _major_version(snapshot.live_version)
         if major is not None and major < MIN_SUPPORTED_LIVE_MAJOR:
@@ -113,6 +129,56 @@ class LiveStateInspector:
                 f"minimum {MIN_SUPPORTED_LIVE_MAJOR}; KIHACHI will not mutate it"
             )
         return snapshot
+
+    def _snapshot_chunked(
+        self,
+        include_arrangement: bool,
+        count_session_notes: bool,
+        include_session_clips: bool,
+    ) -> dict[str, Any]:
+        """大規模 Set で単一返信が上限を超えた場合、トラック単位で分割取得する。"""
+        base = self._exchange(
+            METHOD_GET_STATE,
+            self._next_request_id(),
+            {
+                "include_arrangement": False,
+                "count_session_notes": False,
+                "include_session_clips": False,
+            },
+        )
+        tracks = list(base.get("tracks") or [])
+        if include_session_clips:
+            session_clips: list[dict[str, Any]] = []
+            for track in tracks:
+                track_index = int(track.get("index", 0))
+                chunk = self._exchange(
+                    METHOD_GET_SESSION_TRACK_CLIPS,
+                    self._next_request_id(),
+                    {
+                        "track_index": track_index,
+                        "count_session_notes": count_session_notes,
+                    },
+                )
+                session_clips.extend(chunk.get("session_clips") or [])
+            base["session_clips"] = session_clips
+        if include_arrangement:
+            arrangement_clips: list[dict[str, Any]] = []
+            for track in tracks:
+                track_index = int(track.get("index", 0))
+                chunk = self._exchange(
+                    METHOD_GET_ARRANGEMENT_TRACK_SUMMARY,
+                    self._next_request_id(),
+                    {"track_index": track_index},
+                )
+                arrangement_clips.extend(chunk.get("arrangement_clips") or [])
+            base["arrangement_clips"] = arrangement_clips
+            locator_res = self._exchange(
+                METHOD_GET_LOCATOR_SUMMARY,
+                self._next_request_id(),
+                {},
+            )
+            base["locators"] = list(locator_res.get("locators") or [])
+        return base
 
     def device_parameters(
         self, device_index: int, track_index: int | None = None, displays: bool = False

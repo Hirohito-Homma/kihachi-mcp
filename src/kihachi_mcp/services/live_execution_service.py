@@ -19,11 +19,15 @@ The order of checks matters and is intentional:
 """
 
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
 from kihachi_mcp.models.live_contract import (
+    OP_LOAD_PLUGIN,
     OP_PLACE_ARRANGEMENT_CLIP,
+    OP_SET_PLUGIN_PARAM,
+    OP_SET_TRACK_VOLUME,
     STATUS_APPROVAL_REQUIRED,
     STATUS_BLOCKED,
     STATUS_PARTIALLY_APPLIED,
@@ -46,6 +50,8 @@ from kihachi_mcp.services.live_state_inspector import (
     LiveVersionUnsupportedError,
 )
 from kihachi_mcp.services.live_transport import (
+    ERROR_DISCONNECTED,
+    ERROR_OPERATION_FAILED,
     METHOD_APPLY_OPERATION,
     LiveTransport,
     LiveTransportError,
@@ -55,6 +61,9 @@ from kihachi_mcp.services.live_transport import (
 )
 
 _FLOAT_TOLERANCE = 1e-6
+_PLUGIN_FLOAT_TOLERANCE = 1e-3
+_DEFAULT_PLUGIN_TIMEOUT_SECONDS = 30.0
+_DEFAULT_PLUGIN_POLL_INTERVAL = 0.5
 
 
 class LiveExecutionService:
@@ -66,12 +75,23 @@ class LiveExecutionService:
         inspector: LiveStateInspector | None = None,
         approval_gate: ApprovalGate | None = None,
         request_id_factory: Callable[[], str] | None = None,
+        plugin_remote: Callable[..., Any] | None = None,
+        plugin_timeout_seconds: float = _DEFAULT_PLUGIN_TIMEOUT_SECONDS,
+        plugin_poll_interval: float = _DEFAULT_PLUGIN_POLL_INTERVAL,
+        clock: Callable[[], float] | None = None,
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self._transport: LiveTransport = transport or NullLiveTransport()
         self._inspector = inspector or LiveStateInspector(self._transport)
         self._gate = approval_gate or ApprovalGate()
         self._sequence = 0
         self._request_id_factory = request_id_factory or self._default_request_id
+        self._plugin_remote = plugin_remote
+        self._plugin_timeout_seconds = float(plugin_timeout_seconds)
+        self._plugin_poll_interval = float(plugin_poll_interval)
+        self._clock = clock or time.monotonic
+        self._sleeper = sleeper or time.sleep
+        self._plugin_cache: dict[int, dict[str, Any]] = {}
 
     def execute(
         self,
@@ -275,6 +295,12 @@ class LiveExecutionService:
         )
 
     def _apply_one(self, operation: LiveMutationOperation) -> dict[str, Any]:
+        if operation.op == OP_LOAD_PLUGIN:
+            return self._apply_load_plugin(operation)
+        if operation.op == OP_SET_PLUGIN_PARAM:
+            return self._apply_set_plugin_param(operation)
+        if operation.op == OP_SET_TRACK_VOLUME:
+            return self._apply_set_track_volume(operation)
         request_id = self._request_id_factory()
         message = build_message(
             METHOD_APPLY_OPERATION,
@@ -285,6 +311,270 @@ class LiveExecutionService:
         result = decode_response(response, request_id)
         observed = result.get("observed")
         return dict(observed) if isinstance(observed, dict) else {}
+
+    def _resolve_plugin_remote(self) -> Callable[..., Any]:
+        if self._plugin_remote is not None:
+            return self._plugin_remote
+        from kihachi_mcp.services.abletongpt_kits import RemoteScriptSocket
+
+        return RemoteScriptSocket.from_config().call
+
+    def _call_plugin_remote(
+        self, remote: Callable[..., Any], command: str, **params: Any
+    ) -> Any:
+        from kihachi_mcp.services.abletongpt_kits import KitLoadError
+
+        try:
+            return remote(command, **params)
+        except KitLoadError as exc:
+            raise LiveTransportError(ERROR_DISCONNECTED, str(exc)) from exc
+
+    def _get_track_devices(
+        self, remote: Callable[..., Any], track_index: int
+    ) -> list[dict[str, Any]]:
+        observed = self._call_plugin_remote(
+            remote, "get_track_devices", track_index=track_index
+        )
+        devices = observed.get("devices", []) if isinstance(observed, dict) else []
+        return [d for d in devices if isinstance(d, dict)]
+
+    def _locate_user_library_preset(
+        self, remote: Callable[..., Any], target_name: str
+    ) -> tuple[list[str], str] | None:
+        stem = _strip_preset_ext(target_name)
+        queue: list[list[str]] = [[]]
+        calls = 0
+        while queue and calls < 64:
+            path = queue.pop(0)
+            calls += 1
+            try:
+                listing = self._call_plugin_remote(
+                    remote,
+                    "browse_presets",
+                    category="user_library",
+                    path=list(path),
+                    max_items=1000,
+                )
+            except LiveTransportError:
+                return None
+            items = listing.get("items", []) if isinstance(listing, dict) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_name = str(item.get("name", "")).strip()
+                if not item_name:
+                    continue
+                if item.get("is_folder"):
+                    if len(path) < 3:
+                        queue.append([*path, item_name])
+                    continue
+                if item.get("is_loadable") and (
+                    item_name == target_name or _strip_preset_ext(item_name) == stem
+                ):
+                    return list(path), item_name
+        return None
+
+    def _apply_load_plugin(self, operation: LiveMutationOperation) -> dict[str, Any]:
+        remote = self._resolve_plugin_remote()
+        track_index = int(operation.target["track_index"])
+        source = str(operation.arguments.get("source") or "raw")
+        name = str(operation.arguments.get("name") or "")
+        path = [str(p) for p in (operation.arguments.get("path") or [])]
+        category = "user_library" if source == "preset" else "plugins"
+
+        before_devices = self._get_track_devices(remote, track_index)
+        before_count = len(before_devices)
+
+        resolved_path, resolved_name = list(path), name
+        if source == "preset" and not resolved_path:
+            located = self._locate_user_library_preset(remote, name)
+            if located is not None:
+                resolved_path, resolved_name = located
+
+        load_error = ""
+        try:
+            remote(
+                "load_preset",
+                timeout=self._plugin_timeout_seconds,
+                track_index=track_index,
+                category=category,
+                path=resolved_path,
+                name=resolved_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - 非同期ロードのためポーリングで最終判定する
+            load_error = str(exc)
+
+        deadline = self._clock() + self._plugin_timeout_seconds
+        loaded_device: dict[str, Any] | None = None
+        while True:
+            after_devices = self._get_track_devices(remote, track_index)
+            if len(after_devices) > before_count:
+                loaded_device = after_devices[-1]
+                break
+            if self._clock() >= deadline:
+                break
+            self._sleeper(self._plugin_poll_interval)
+
+        if loaded_device is None:
+            detail = (
+                load_error
+                or f"plugin '{name}' load timed out after {self._plugin_timeout_seconds:g}s"
+            )
+            raise LiveTransportError(ERROR_OPERATION_FAILED, detail)
+
+        device_index = int(loaded_device.get("index", max(len(after_devices) - 1, 0)))
+        device_name = str(
+            loaded_device.get("name")
+            or loaded_device.get("class_display_name")
+            or name
+        )
+        parameters = [
+            p for p in (loaded_device.get("parameters") or []) if isinstance(p, dict)
+        ]
+        self._plugin_cache[track_index] = {
+            "device_index": device_index,
+            "device_name": device_name,
+            "parameters": parameters,
+        }
+        return {
+            "track_index": track_index,
+            "device_index": device_index,
+            "device_name": device_name,
+            "requested_name": name,
+            "source": source,
+            "parameters_count": len(parameters),
+            "parameter_names": [str(p.get("name") or "") for p in parameters],
+        }
+
+    def _apply_set_plugin_param(self, operation: LiveMutationOperation) -> dict[str, Any]:
+        remote = self._resolve_plugin_remote()
+        track_index = int(operation.target["track_index"])
+        param_name = str(operation.arguments.get("param_name") or "")
+        value = float(operation.arguments.get("value", 0.0))
+
+        cached = self._plugin_cache.get(track_index)
+        if cached is None:
+            devices = self._get_track_devices(remote, track_index)
+            target_idx = int(operation.target.get("device_index", 0))
+            dev = (
+                devices[target_idx]
+                if 0 <= target_idx < len(devices)
+                else (devices[0] if devices else None)
+            )
+            if dev is None:
+                raise LiveTransportError(
+                    ERROR_OPERATION_FAILED,
+                    f"no plugin device found on track {track_index}",
+                )
+            cached = {
+                "device_index": int(dev.get("index", target_idx)),
+                "device_name": str(dev.get("name") or ""),
+                "parameters": [
+                    p for p in (dev.get("parameters") or []) if isinstance(p, dict)
+                ],
+            }
+            self._plugin_cache[track_index] = cached
+
+        device_index = int(cached["device_index"])
+        device_name = str(cached["device_name"])
+        parameters: list[dict[str, Any]] = cached["parameters"]
+
+        matched_param = next(
+            (p for p in parameters if str(p.get("name") or "") == param_name),
+            None,
+        )
+        if matched_param is None:
+            lowered = param_name.strip().lower()
+            matched_param = next(
+                (
+                    p
+                    for p in parameters
+                    if str(p.get("name") or "").strip().lower() == lowered
+                ),
+                None,
+            )
+
+        if matched_param is None:
+            warning = (
+                f"パラメータ '{param_name}' がデバイス '{device_name}' に見つかりません"
+            )
+            return {
+                "track_index": track_index,
+                "device_index": device_index,
+                "device_name": device_name,
+                "param_name": param_name,
+                "matched": False,
+                "warning": warning,
+            }
+
+        param_index = int(matched_param["index"])
+        self._call_plugin_remote(
+            remote,
+            "set_device_parameter",
+            track_index=track_index,
+            device_index=device_index,
+            parameter_index=param_index,
+            value=value,
+        )
+        refreshed_devices = self._get_track_devices(remote, track_index)
+        refreshed_dev = next(
+            (d for d in refreshed_devices if int(d.get("index", -1)) == device_index),
+            refreshed_devices[device_index]
+            if 0 <= device_index < len(refreshed_devices)
+            else None,
+        )
+        readback_value = value
+        display_value = ""
+        if isinstance(refreshed_dev, dict):
+            refreshed_param = next(
+                (
+                    p
+                    for p in (refreshed_dev.get("parameters") or [])
+                    if isinstance(p, dict) and int(p.get("index", -1)) == param_index
+                ),
+                None,
+            )
+            if refreshed_param is not None:
+                if "value" in refreshed_param:
+                    readback_value = float(refreshed_param["value"])
+                display_value = str(refreshed_param.get("display_value") or "")
+
+        return {
+            "track_index": track_index,
+            "device_index": device_index,
+            "device_name": device_name,
+            "param_name": str(matched_param.get("name") or param_name),
+            "parameter_index": param_index,
+            "value": readback_value,
+            "display_value": display_value,
+            "matched": True,
+        }
+
+    def _apply_set_track_volume(self, operation: LiveMutationOperation) -> dict[str, Any]:
+        """AbletonGPT Remote Script 経由でトラック音量を設定し、読み戻し値を返す。"""
+        remote = self._resolve_plugin_remote()
+        track_index = int(operation.target["track_index"])
+        volume = float(operation.arguments["volume"])
+        target_db = float(operation.arguments.get("volume_db", 0.0))
+        part = str(operation.arguments.get("part") or "")
+        observed = self._call_plugin_remote(
+            remote,
+            "set_track_volume",
+            track_index=track_index,
+            volume=volume,
+        )
+        readback_volume = (
+            float(observed["volume"])
+            if isinstance(observed, dict) and "volume" in observed
+            else volume
+        )
+        return {
+            "track_index": track_index,
+            "part": part,
+            "target_db": target_db,
+            "target_volume": volume,
+            "volume": readback_volume,
+        }
 
     def _safe_fingerprint(self) -> str:
         """Return the post-execution fingerprint, or empty if Live is gone."""
@@ -337,12 +627,22 @@ class LiveExecutionService:
         return f"apply-{self._sequence:06d}"
 
 
-def _values_match(expected: Any, observed: Any) -> bool:
+def _strip_preset_ext(name: str) -> str:
+    lowered = name.lower()
+    for ext in (".adv", ".vstpreset", ".adg"):
+        if lowered.endswith(ext):
+            return name[: -len(ext)]
+    return name
+
+
+def _values_match(
+    expected: Any, observed: Any, float_tolerance: float = _FLOAT_TOLERANCE
+) -> bool:
     """Compare one readback field, tolerating float representation."""
     if isinstance(expected, bool) or isinstance(observed, bool):
         return bool(expected) == bool(observed)
     if isinstance(expected, int | float) and isinstance(observed, int | float):
-        return abs(float(expected) - float(observed)) <= _FLOAT_TOLERANCE
+        return abs(float(expected) - float(observed)) <= float_tolerance
     return expected == observed
 
 
@@ -350,8 +650,25 @@ def _compare_readback(
     operation: LiveMutationOperation, observed: dict[str, Any]
 ) -> list[LiveReadbackMismatch]:
     """Return every expected field Live did not confirm."""
+    if operation.op == OP_SET_PLUGIN_PARAM and observed.get("matched") is False:
+        # パラメータ名不一致は警告としてレシートに残し、ミスマッチ停止にはしない
+        return []
+    tolerance = (
+        _PLUGIN_FLOAT_TOLERANCE
+        if operation.op == OP_SET_PLUGIN_PARAM
+        else _FLOAT_TOLERANCE
+    )
     mismatches: list[LiveReadbackMismatch] = []
     for field_name, expected in operation.expected_readback.items():
+        if (
+            operation.op == OP_LOAD_PLUGIN
+            and field_name == "device_name"
+            and (
+                observed.get("requested_name") == expected
+                or _strip_preset_ext(str(expected)) == observed.get("device_name")
+            )
+        ):
+            continue
         if field_name not in observed:
             mismatches.append(
                 LiveReadbackMismatch(
@@ -362,7 +679,7 @@ def _compare_readback(
                 )
             )
             continue
-        if not _values_match(expected, observed[field_name]):
+        if not _values_match(expected, observed[field_name], float_tolerance=tolerance):
             mismatches.append(
                 LiveReadbackMismatch(
                     operation_id=operation.operation_id,

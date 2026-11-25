@@ -38,21 +38,36 @@ function authenticatedRequest(buffer) {
   return request;
 }
 
-function sendUnauthorized(buffer) {
-  let requestId = "";
+function extractRequestId(text) {
   try {
-    requestId = String(JSON.parse(buffer.toString("utf8")).request_id || "");
+    return String(JSON.parse(text).request_id || "");
   } catch (_error) {
-    requestId = "";
+    const match = /"request_id"\s*:\s*"([^"]*)"/.exec(String(text || ""));
+    return match ? match[1] : "";
   }
+}
+
+function sendErrorResponse(requestId, code, message) {
   const response = JSON.stringify({
     protocol: "kihachi.live",
     version: 1,
-    request_id: requestId,
+    request_id: String(requestId || ""),
     ok: false,
-    error: { code: "unauthorized", message: "session token rejected" },
+    error: { code: String(code || "protocol"), message: String(message || "") },
   });
-  socket.send(Buffer.from(response, "utf8"), REPLY_PORT, LOOPBACK);
+  socket.send(Buffer.from(response, "utf8"), REPLY_PORT, LOOPBACK, (error) => {
+    if (error) {
+      maxApi.outlet("status", `error response not sent: ${error.message}`);
+    }
+  });
+}
+
+function sendUnauthorized(buffer) {
+  sendErrorResponse(
+    extractRequestId(buffer.toString("utf8")),
+    "unauthorized",
+    "session token rejected",
+  );
 }
 
 socket.on("error", (error) => {
@@ -83,9 +98,26 @@ socket.on("message", (buffer, remote) => {
 });
 
 maxApi.addHandler("response", (jsonText) => {
-  const payload = Buffer.from(String(jsonText), "utf8");
+  const text = String(jsonText || "");
+  try {
+    JSON.parse(text);
+  } catch (_error) {
+    maxApi.outlet("status", "response is not valid JSON");
+    sendErrorResponse(
+      extractRequestId(text),
+      "protocol",
+      "Max device produced invalid JSON response",
+    );
+    return;
+  }
+  const payload = Buffer.from(text, "utf8");
   if (payload.length > MAX_DATAGRAM_BYTES) {
     maxApi.outlet("status", "response exceeds UDP safety limit");
+    sendErrorResponse(
+      extractRequestId(text),
+      "response_too_large",
+      `response of ${payload.length} bytes exceeds UDP safety limit (${MAX_DATAGRAM_BYTES})`,
+    );
     return;
   }
   socket.send(payload, REPLY_PORT, LOOPBACK, (error) => {

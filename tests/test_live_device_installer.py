@@ -9,7 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "Liveデバイスをインストール.command"
-NAMES = ("KIHACHI Live Device.amxd", "kihachi.device.js", "kihachi.bridge.js")
+NAMES = ("KIHACHI Live Device.amxd",)
+LEGACY_JS_NAMES = ("kihachi.device.js", "kihachi.bridge.js")
 
 
 def _run(library: Path, *, answer: str = "", yes: bool = False) -> str:
@@ -33,18 +34,24 @@ def test_installer_backs_up_changed_files_and_second_run_is_idempotent(
     destination.mkdir(parents=True)
     old_device = destination / "kihachi.device.js"
     old_device.write_text("user-owned old device", encoding="utf-8")
+    old_amxd = destination / "KIHACHI Live Device.amxd"
+    old_amxd.write_bytes(b"old-amxd")
 
     _run(library, yes=True)
     assert all(
         (destination / name).read_bytes() == (ROOT / "maxforlive" / name).read_bytes()
         for name in NAMES
     )
+    assert all(not (destination / name).exists() for name in LEGACY_JS_NAMES)
     backups = list((library / ".kihachi-backups").glob("*/kihachi.device.js"))
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == "user-owned old device"
+    amxd_backups = list((library / ".kihachi-backups").glob("*/KIHACHI Live Device.amxd"))
+    assert len(amxd_backups) == 1
+    assert amxd_backups[0].read_bytes() == b"old-amxd"
 
     output = _run(library, yes=True)
-    assert output.count("変更なし") == 3
+    assert output.count("変更なし") == len(NAMES)
     assert list((library / ".kihachi-backups").glob("*/kihachi.device.js")) == backups
 
 
@@ -103,6 +110,8 @@ def test_finder_folder_selection_handles_spaces(tmp_path: Path) -> None:
         assert (library / "Presets/Audio Effects/Max Audio Effect" / name).read_bytes() == (
             ROOT / "maxforlive" / name
         ).read_bytes()
+    for name in LEGACY_JS_NAMES:
+        assert not (library / "Presets/Audio Effects/Max Audio Effect" / name).exists()
 
 
 def test_cancelled_finder_selection_makes_no_changes(tmp_path: Path) -> None:

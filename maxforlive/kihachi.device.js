@@ -35,6 +35,8 @@ var REPLACE_SAMPLE_MIN_LIVE_MINOR = 4;
 
 var MANAGED_MARKER = "[KIHACHI]";
 var MANAGED_CLIP_PREFIX = "[K:";
+/* Max [js] の outlet は 32,767 バイトで切り捨てられるため、安全な上限を設ける。 */
+var MAX_OUTLET_BYTES = 30000;
 
 var sessionToken = null;
 var seenRequestIds = {};
@@ -216,28 +218,37 @@ function readScenes(song) {
     return scenes;
 }
 
+function readSessionTrackClips(trackIndex, sceneCount, countNotesInSlots) {
+    var clips = [];
+    for (var scene = 0; scene < sceneCount; scene += 1) {
+        var slot = liveApi(
+            "live_set tracks " + trackIndex + " clip_slots " + scene
+        );
+        if (!getProperty(slot, "has_clip")) {
+            continue;
+        }
+        var clip = liveApi(
+            "live_set tracks " + trackIndex + " clip_slots " + scene + " clip"
+        );
+        clips.push({
+            track_index: trackIndex,
+            scene_index: scene,
+            name: String(getProperty(clip, "name") || ""),
+            length_beats: Number(getProperty(clip, "length") || 0),
+            note_count: countNotesInSlots ? countNotes(clip) : 0,
+            is_midi: getProperty(clip, "is_midi_clip") ? true : false,
+            looping: getProperty(clip, "looping") ? true : false
+        });
+    }
+    return clips;
+}
+
 function readSessionClips(trackCount, sceneCount, countNotesInSlots) {
     var clips = [];
     for (var track = 0; track < trackCount; track += 1) {
-        for (var scene = 0; scene < sceneCount; scene += 1) {
-            var slot = liveApi(
-                "live_set tracks " + track + " clip_slots " + scene
-            );
-            if (!getProperty(slot, "has_clip")) {
-                continue;
-            }
-            var clip = liveApi(
-                "live_set tracks " + track + " clip_slots " + scene + " clip"
-            );
-            clips.push({
-                track_index: track,
-                scene_index: scene,
-                name: String(getProperty(clip, "name") || ""),
-                length_beats: Number(getProperty(clip, "length") || 0),
-                note_count: countNotesInSlots ? countNotes(clip) : 0,
-                is_midi: getProperty(clip, "is_midi_clip") ? true : false,
-                looping: getProperty(clip, "looping") ? true : false
-            });
+        var trackClips = readSessionTrackClips(track, sceneCount, countNotesInSlots);
+        for (var index = 0; index < trackClips.length; index += 1) {
+            clips.push(trackClips[index]);
         }
     }
     return clips;
@@ -374,7 +385,7 @@ function readState(options) {
     var includeArrangement = !options || options.include_arrangement !== false;
     var countSessionNotes = !options || options.count_session_notes !== false;
     var includeSessionClips = !options || options.include_session_clips !== false;
-    return {
+    var state = {
         schema_version: SCHEMA_VERSION,
         live_version: liveVersionString(),
         set_name: String(getProperty(song, "name") || ""),
@@ -393,6 +404,11 @@ function readState(options) {
         devices: readDevices(),
         master_device_names: readMasterDevices()
     };
+    /* Omitted, never empty, when not read: an empty list means "no locators". */
+    if (includeArrangement) {
+        state.locators = readLocatorSummary();
+    }
+    return state;
 }
 
 function readMasterDevices() {
@@ -1845,17 +1861,43 @@ function applyArrangementClipAndRespond(requestId, operation) {
 
 /* ------------------------------------------------------------------ dispatch */
 
+function utf8ByteLength(text) {
+    /* ES5 環境で文字列の UTF-8 バイト長を計測する。 */
+    var bytes = 0;
+    for (var i = 0; i < text.length; i += 1) {
+        var code = text.charCodeAt(i);
+        if (code < 0x80) {
+            bytes += 1;
+        } else if (code < 0x800) {
+            bytes += 2;
+        } else if (code >= 0xd800 && code <= 0xdbff) {
+            bytes += 4;
+            i += 1;
+        } else {
+            bytes += 3;
+        }
+    }
+    return bytes;
+}
+
 function respondOk(requestId, result) {
-    outlet(
-        0,
-        JSON.stringify({
-            protocol: PROTOCOL_NAME,
-            version: PROTOCOL_VERSION,
-            request_id: requestId,
-            ok: true,
-            result: result
-        })
-    );
+    var encoded = JSON.stringify({
+        protocol: PROTOCOL_NAME,
+        version: PROTOCOL_VERSION,
+        request_id: requestId,
+        ok: true,
+        result: result
+    });
+    var byteLength = utf8ByteLength(encoded);
+    if (byteLength > MAX_OUTLET_BYTES) {
+        respondError(
+            requestId,
+            "response_too_large",
+            "response is " + byteLength + " bytes, over Max outlet limit " + MAX_OUTLET_BYTES
+        );
+        return;
+    }
+    outlet(0, encoded);
 }
 
 function respondError(requestId, code, message) {
@@ -1906,6 +1948,19 @@ function handle(request) {
     }
     if (request.method === "get_state") {
         respondOk(requestId, readState(request.payload || {}));
+        return;
+    }
+    if (request.method === "get_session_track_clips") {
+        var sessionPayload = request.payload || {};
+        var songForSession = songApi();
+        var sceneCount = countChildren(songForSession, "scenes");
+        respondOk(requestId, {
+            session_clips: readSessionTrackClips(
+                Number(sessionPayload.track_index),
+                sceneCount,
+                sessionPayload.count_session_notes !== false
+            )
+        });
         return;
     }
     if (request.method === "get_arrangement_summary") {

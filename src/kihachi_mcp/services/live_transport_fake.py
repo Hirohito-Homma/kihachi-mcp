@@ -40,8 +40,11 @@ from kihachi_mcp.services.live_transport import (
     ERROR_OPERATION_FAILED,
     ERROR_PROTOCOL,
     METHOD_APPLY_OPERATION,
+    METHOD_GET_ARRANGEMENT_TRACK_SUMMARY,
     METHOD_GET_DEVICE_PARAMETERS,
     METHOD_GET_DRUM_RACK_SUMMARY,
+    METHOD_GET_LOCATOR_SUMMARY,
+    METHOD_GET_SESSION_TRACK_CLIPS,
     METHOD_GET_STATE,
     METHOD_PING,
     PROTOCOL_NAME,
@@ -164,6 +167,47 @@ class FakeLiveTransport:
             return self._ok(request_id, self._ping())
         if method == METHOD_GET_STATE:
             return self._ok(request_id, self.snapshot_payload(payload))
+        if method == METHOD_GET_SESSION_TRACK_CLIPS:
+            track_index = int(payload.get("track_index") or 0)
+            count_notes = payload.get("count_session_notes") is not False
+            full = self.snapshot_payload(
+                {
+                    "include_arrangement": False,
+                    "include_session_clips": True,
+                    "count_session_notes": count_notes,
+                }
+            )
+            return self._ok(
+                request_id,
+                {
+                    "session_clips": [
+                        clip
+                        for clip in full["session_clips"]
+                        if clip["track_index"] == track_index
+                    ]
+                },
+            )
+        if method == METHOD_GET_ARRANGEMENT_TRACK_SUMMARY:
+            track_index = int(payload.get("track_index") or 0)
+            full = self.snapshot_payload(
+                {
+                    "include_arrangement": True,
+                    "include_session_clips": False,
+                    "count_session_notes": False,
+                }
+            )
+            return self._ok(
+                request_id,
+                {
+                    "arrangement_clips": [
+                        clip
+                        for clip in full["arrangement_clips"]
+                        if clip["track_index"] == track_index
+                    ]
+                },
+            )
+        if method == METHOD_GET_LOCATOR_SUMMARY:
+            return self._ok(request_id, {"locators": list(self.live_set.locators)})
         if method == METHOD_GET_DRUM_RACK_SUMMARY:
             return self._ok(request_id, self._drum_rack_summary(payload))
         if method == METHOD_GET_DEVICE_PARAMETERS:
@@ -200,7 +244,7 @@ class FakeLiveTransport:
         }
 
     def _device_parameters(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Answer from the parameter table real Live gave, per device name."""
+        """実機由来の表とテスト中の設定値からデバイスパラメータを返す。"""
         index = int(payload.get("track_index") or 0)
         position = int(payload.get("device_index") or 0)
         track = next((item for item in self.live_set.tracks if item["index"] == index), None)
@@ -209,14 +253,26 @@ class FakeLiveTransport:
             return self._failure(request_id, ERROR_OPERATION_FAILED, f"no device {position}")
         name = names[position]
         known = self.live_set.device_parameters.get(name) or {}
+        stored = ((track or {}).get("device_parameters") or {}).get(str(position), {})
+        parameters = []
+        for item in known.get("parameters") or []:
+            current = item.get("default")
+            parameter_name = str(item.get("name") or "")
+            if parameter_name in stored:
+                saved = stored[parameter_name]
+                choices = [str(choice) for choice in item.get("value_items") or []]
+                low = float(item.get("min") or 0.0)
+                high = float(item.get("max") or 0.0)
+                if isinstance(saved, str) and saved in choices:
+                    current = low + choices.index(saved)
+                else:
+                    current = low + float(saved) * (high - low)
+            parameters.append({**item, "value": current})
         reply: dict[str, Any] = {
             "device_index": position,
             "device_name": name,
             "class_name": str(known.get("class_name") or ""),
-            "parameters": [
-                {**item, "value": item.get("default")}
-                for item in known.get("parameters") or []
-            ],
+            "parameters": parameters,
         }
         if name == "Compressor":
             reply["sidechain"] = {

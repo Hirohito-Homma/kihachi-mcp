@@ -367,3 +367,72 @@ def test_the_handshake_filename_is_stable_across_platforms() -> None:
 
     assert macos.name == "live-bridge.json"
     assert windows.name == "live-bridge.json"
+
+
+def test_snapshot_falls_back_to_chunked_reads_when_reply_exceeds_max_bytes() -> None:
+    """単一 get_state が response_too_large を返した場合でも分割取得で完結する。"""
+    from kihachi_mcp.services.live_state_inspector import LiveStateInspector
+    from kihachi_mcp.services.live_transport import (
+        ERROR_RESPONSE_TOO_LARGE,
+        METHOD_GET_STATE,
+    )
+    from kihachi_mcp.services.live_transport_fake import (
+        FakeArrangementClip,
+        FakeLiveSet,
+        FakeLiveTransport,
+        FakeSessionClip,
+    )
+
+    live_set = FakeLiveSet()
+    live_set.add_track("Kick")
+    live_set.add_track("Bass")
+    for t in range(len(live_set.tracks)):
+        live_set.session_clips[(t, 0)] = FakeSessionClip(
+            name=f"Clip-{t}", length_beats=16.0
+        )
+        live_set.arrangement_clips.append(
+            FakeArrangementClip(
+                track_index=t, name=f"Arr-{t}", start_beats=0.0, length_beats=16.0
+            )
+        )
+    live_set.locators = [{"name": "Intro", "time": 0.0}]
+
+    class OversizedFullGetStateTransport:
+        def __init__(self, inner: FakeLiveTransport) -> None:
+            self._inner = inner
+            self.methods: list[str] = []
+
+        def request(self, message: dict) -> dict:
+            method = str(message.get("method") or "")
+            payload = message.get("payload") or {}
+            self.methods.append(method)
+            if method == METHOD_GET_STATE and (
+                payload.get("include_arrangement") is not False
+                or payload.get("include_session_clips") is not False
+            ):
+                return {
+                    "protocol": PROTOCOL_NAME,
+                    "version": PROTOCOL_VERSION,
+                    "request_id": message["request_id"],
+                    "ok": False,
+                    "error": {
+                        "code": ERROR_RESPONSE_TOO_LARGE,
+                        "message": "response exceeds Max outlet limit",
+                    },
+                }
+            return self._inner.request(message)
+
+    fake = FakeLiveTransport(live_set)
+    wrapped = OversizedFullGetStateTransport(fake)
+    inspector = LiveStateInspector(transport=wrapped)
+    snapshot = inspector.snapshot(
+        include_arrangement=True,
+        count_session_notes=False,
+        include_session_clips=True,
+    )
+
+    assert len(snapshot.session_clips) == len(live_set.tracks)
+    assert len(snapshot.arrangement_clips) == len(live_set.tracks)
+    assert "get_session_track_clips" in wrapped.methods
+    assert "get_arrangement_track_summary" in wrapped.methods
+    assert "get_locator_summary" in wrapped.methods

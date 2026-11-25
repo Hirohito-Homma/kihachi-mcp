@@ -45,7 +45,7 @@ MAX_REQUEST_BYTES = 60_000
 # A UDP datagram cannot exceed 65,507 bytes.
 MAX_RESPONSE_BYTES = 60_000
 DEFAULT_TIMEOUT_SECONDS = 5.0
-MAX_PLAN_OPERATIONS = 512
+MAX_PLAN_OPERATIONS = 2048
 
 _logger = logging.getLogger("kihachi.live.bridge")
 

@@ -195,7 +195,9 @@ def test_every_python_method_is_handled_by_the_device(source: str) -> None:
 
 
 def test_every_python_operation_is_handled_by_the_device(source: str) -> None:
-    for op in SUPPORTED_OPS:
+    from kihachi_mcp.models.live_contract import REMOTE_SCRIPT_OPS
+
+    for op in SUPPORTED_OPS - REMOTE_SCRIPT_OPS:
         assert f'op === "{op}"' in source, op
 
 
@@ -290,3 +292,122 @@ def test_the_device_source_avoids_es6_syntax(source: str) -> None:
     assert not re.search(r"\blet\s+\w+\s*=", code)
     assert "=>" not in code
     assert "`" not in code
+
+
+def test_device_respond_ok_emits_error_when_exceeding_max_outlet_bytes() -> None:
+    """respondOk が Max outlet 上限を超える場合は即時に response_too_large JSON を返す。"""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const outputs = [];
+const sandbox = {{
+  autowatch: 0,
+  inlets: 0,
+  outlets: 0,
+  outlet: (idx, ...args) => outputs.push({{ idx, args }}),
+  LiveAPI: function () {{}},
+}};
+vm.runInNewContext(fs.readFileSync({str(DEVICE_SOURCE)!r}, "utf8"), sandbox);
+sandbox.respondOk("req-big", {{ blob: "x".repeat(35000) }});
+if (outputs.length !== 1) throw new Error("expected 1 outlet call");
+const reply = JSON.parse(outputs[0].args[0]);
+if (reply.ok !== false || reply.request_id !== "req-big" || reply.error.code !== "response_too_large") {{
+  throw new Error("unexpected reply: " + outputs[0].args[0]);
+}}
+"""
+    subprocess.run([node, "-e", script], check=True, timeout=10)
+
+
+def test_bridge_emits_immediate_error_json_on_invalid_or_oversized_response() -> None:
+    """kihachi.bridge.js が不正 JSON または 60KB 超の返信を受けた際に黙殺せず即エラー JSON を返す。"""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const Module = require("module");
+const sent = [];
+const handlers = {{}};
+const fakeMaxApi = {{
+  outlet: () => {{}},
+  addHandler: (name, fn) => {{ handlers[name] = fn; }},
+}};
+const fakeSocket = {{
+  on: () => {{}},
+  bind: () => {{}},
+  send: (buf, port, host, cb) => {{ sent.push(buf.toString("utf8")); if (cb) cb(null); }},
+  close: () => {{}},
+}};
+const fakeRequire = (name) => {{
+  if (name === "max-api") return fakeMaxApi;
+  if (name === "dgram") return {{ createSocket: () => fakeSocket }};
+  return require(name);
+}};
+const fn = new Function("require", "process", fs.readFileSync({str(BRIDGE_SOURCE)!r}, "utf8"));
+fn(fakeRequire, {{ platform: "darwin", on: () => {{}} }});
+
+handlers.response('{{"protocol":"kihachi.live","version":1,"request_id":"req-cut","ok":true,"result":');
+handlers.response(JSON.stringify({{ protocol: "kihachi.live", version: 1, request_id: "req-huge", ok: true, result: {{ data: "a".repeat(65000) }} }}));
+
+if (sent.length !== 2) throw new Error("expected 2 immediate error replies, got " + sent.length);
+const r1 = JSON.parse(sent[0]);
+const r2 = JSON.parse(sent[1]);
+if (r1.ok !== false || r1.request_id !== "req-cut" || r1.error.code !== "protocol") {{
+  throw new Error("unexpected r1: " + sent[0]);
+}}
+if (r2.ok !== false || r2.request_id !== "req-huge" || r2.error.code !== "response_too_large") {{
+  throw new Error("unexpected r2: " + sent[1]);
+}}
+"""
+    subprocess.run([node, "-e", script], check=True, timeout=10)
+
+
+def test_amxd_embeds_matching_js_sources() -> None:
+    """配布用 .amxd が最新の kihachi.device.js / kihachi.bridge.js を Freeze 構造（flag / code 登録含む）で内包していること。"""
+    from scripts.build_amxd import (
+        check_amxd_sync,
+        extract_amxd_dire_metadata,
+        extract_patcher_json,
+    )
+
+    maxforlive_dir = DEVICE_SOURCE.parent
+    amxd_path = maxforlive_dir / "KIHACHI Live Device.amxd"
+    assert amxd_path.is_file()
+    assert check_amxd_sync(amxd_path, maxforlive_dir) == []
+
+    amxd_bytes = amxd_path.read_bytes()
+    dire_meta = extract_amxd_dire_metadata(amxd_bytes)
+    assert dire_meta["kihachi.device.js"]["flag"] == 0x0
+    assert dire_meta["kihachi.bridge.js"]["flag"] == 0x8
+
+    patch = extract_patcher_json(amxd_bytes)
+    project = patch["patcher"]["project"]
+    assert project["readonly"] == 1
+    assert project["contents"]["code"] == {
+        "kihachi.device.js": {"kind": "javascript", "local": 1},
+        "kihachi.bridge.js": {"kind": "javascript", "local": 1},
+    }
+
+
+def test_check_amxd_sync_detects_missing_code_registration_and_wrong_flag(tmp_path: Path) -> None:
+    """check_amxd_sync が dire.flag 不一致や patcher.project.contents.code 欠落を検知すること。"""
+    from scripts.build_amxd import check_amxd_sync
+
+    maxforlive_dir = DEVICE_SOURCE.parent
+    for js_name in ("kihachi.device.js", "kihachi.bridge.js"):
+        (tmp_path / js_name).write_bytes((maxforlive_dir / js_name).read_bytes())
+
+    # 壊した Freeze .amxd（contents.code 欠落 + flag=0 のままのケースを模倣）
+    amxd_path = tmp_path / "KIHACHI Live Device.amxd"
+    raw = (maxforlive_dir / "KIHACHI Live Device.amxd").read_bytes()
+    mutated = raw.replace(b'"code": {', b'"xode": {')
+    assert mutated != raw
+    amxd_path.write_bytes(mutated)
+
+    errors = check_amxd_sync(amxd_path, tmp_path)
+    assert any("contents.code" in err for err in errors)
+

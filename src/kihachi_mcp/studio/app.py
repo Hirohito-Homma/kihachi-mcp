@@ -1005,6 +1005,8 @@ def _workflow_get(handler: Any, runtime: StudioRuntime, parsed: Any) -> bool:
         handler._send_json(runtime.live_capabilities())
     elif parsed.path == "/api/ableton/plan":
         handler._send_json(runtime.ableton_plan(candidate_id or runtime.selected_id()))
+    elif parsed.path == "/api/ableton/vital-parameters":
+        handler._send_json(runtime.list_vital_parameters())
     else:
         return False
     return True
@@ -1081,6 +1083,32 @@ def _workflow_post(
         handler._send_json(
             runtime.read_device(str(body.get("track") or ""), int(body.get("device_index") or 0))
         )
+    elif path == "/api/ableton/vital-parameters/preview":
+        try:
+            track_index = int(body["track_index"])
+            device_index = int(body["device_index"])
+        except (KeyError, TypeError, ValueError):
+            handler._send_json(
+                {"ok": False, "error": "トラックとデバイスを選択してください"},
+                400,
+            )
+            return True
+        handler._send_json(
+            runtime.preview_vital_parameter(
+                track_index,
+                device_index,
+                str(body.get("parameter_name") or ""),
+                value=body.get("value"),
+                item=body.get("item"),
+            )
+        )
+    elif path == "/api/ableton/vital-parameters/apply":
+        handler._send_json(
+            runtime.apply_vital_parameter(
+                str(body.get("change_id") or ""),
+                confirmed=bool(body.get("confirmed")),
+            )
+        )
     elif path == "/api/ableton/master":
         handler._send_json(
             runtime.apply_master(
@@ -1141,6 +1169,29 @@ def _workflow_post(
             )
         )
     elif path == "/api/midi/adopt-preview":
+        raw_elements = body.get("elements")
+        if raw_elements is None and isinstance(body.get("songspec"), dict):
+            raw_elements = body["songspec"].get("elements")
+        raw_section_elements = body.get("section_elements")
+        if raw_section_elements is None and isinstance(body.get("songspec"), dict):
+            raw_section_elements = body["songspec"].get("section_elements")
+        raw_arrangement = body.get("arrangement")
+        if raw_arrangement is None and isinstance(body.get("songspec"), dict):
+            raw_arrangement = body["songspec"].get("arrangement")
+        raw_sections = body.get("sections")
+        raw_tempo = body.get("tempo")
+        if raw_tempo is None and isinstance(body.get("songspec"), dict):
+            raw_tempo = body["songspec"].get("tempo")
+        parsed_tempo: int | None = None
+        if raw_tempo is not None and raw_tempo != 0:
+            if isinstance(raw_tempo, bool):
+                handler._send_json({"ok": False, "error": "invalid tempo"}, status=400)
+                return True
+            try:
+                parsed_tempo = int(raw_tempo)
+            except (TypeError, ValueError):
+                handler._send_json({"ok": False, "error": "invalid tempo"}, status=400)
+                return True
         handler._send_json(
             runtime.propose_composer_adoption(
                 str(body.get("candidate_id") or ""),
@@ -1148,6 +1199,13 @@ def _workflow_post(
                 int(body.get("pattern_bars") or 0),
                 body.get("notes") if isinstance(body.get("notes"), list) else [],
                 section_name=str(body["section_name"]) if body.get("section_name") else None,
+                elements=raw_elements if isinstance(raw_elements, dict) else None,
+                arrangement=raw_arrangement if isinstance(raw_arrangement, dict) else None,
+                sections=raw_sections if isinstance(raw_sections, list) else None,
+                section_elements=(
+                    raw_section_elements if isinstance(raw_section_elements, dict) else None
+                ),
+                tempo=parsed_tempo,
             )
         )
     else:

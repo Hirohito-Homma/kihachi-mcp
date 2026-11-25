@@ -140,6 +140,8 @@ class ProviderMIDIComposer:
                     f" Build the chords from the tonic triad MIDI {root}, {root + third}, {root + 7} "
                     f"and other notes of the {c.key} scale only."
                 )
+        elif c.role.lower() == "hats":
+            prompt += " Use GM hi-hat pitches: 42 for closed hi-hat and 46 for open hi-hat."
         if c.chords_by_bar:
             prompt += " " + _progression_prompt_text(c)
         if c.section_name:
@@ -149,6 +151,14 @@ class ProviderMIDIComposer:
                     f" Its energy is {c.section_energy:.2f} on a 0..1 scale; "
                     "let density and dynamics follow it."
                 )
+        if c.element_spec:
+            elem_text = _element_prompt_text(c.role, c.element_spec)
+            if elem_text:
+                prompt += " " + elem_text
+        if c.max_notes_per_bar is not None:
+            prompt += " " + _density_prompt_text(c.role, c.element_spec, c.max_notes_per_bar)
+        if c.call_response_role:
+            prompt += " " + _call_response_prompt_text(c.call_response_role)
         if request.context_parts:
             prompt += " " + _context_prompt_text(request.context_parts)
         if request.few_shot_examples:
@@ -544,6 +554,218 @@ def _few_shot_prompt_text(examples: tuple[FewShotExample, ...]) -> str:
         "chords and section. Do not copy the example note for note."
     )
     return "\n".join(lines)
+
+
+def _element_prompt_text(role: str, element_spec: dict[str, Any]) -> str:
+    """SongSpec.elements のロール別仕様を検証可能なプロンプト指示文へ変換する。"""
+    role_key = role.strip().lower()
+    clauses: list[str] = []
+    consumed: set[str] = set()
+
+    if role_key == "bass":
+        if element_spec.get("technique") == "slap":
+            clauses.append(
+                "Play slap bass: use strong-attack short notes as the main groove "
+                "(duration 0.25-0.5 beats, velocity >= 95 for thumb/pop accents)."
+            )
+            consumed.add("technique")
+        if element_spec.get("ghost_notes") is True:
+            clauses.append(
+                "Include muted dead-note ghost notes at low velocity "
+                "(<= 40, duration <= 0.25 beats) inside rhythmic pockets."
+            )
+            consumed.add("ghost_notes")
+        if element_spec.get("octave_pops") is True:
+            clauses.append(
+                "Use octave jumps (+12 semitones) on accented off-beat pops."
+            )
+            consumed.add("octave_pops")
+        figure = element_spec.get("figure")
+        if figure == "entrance_hit":
+            clauses.append(
+                "Bass figure (entrance_hit): place one strong accented root note on beat 1 "
+                "of the section (duration >= 1.0 beat, high velocity >= 100), "
+                "and leave the rest of the section as rests only (at most 2 additional notes total)."
+            )
+            consumed.add("figure")
+        elif figure == "hit_and_dots":
+            clauses.append(
+                "Bass figure (hit_and_dots): repeat a per-bar pattern placing a strong accented note "
+                "on beat 1 and 2 short notes (duration <= 0.25 beats) in the second half of each bar."
+            )
+            consumed.add("figure")
+        elif figure == "sparse_calls":
+            clauses.append(
+                "Bass figure (sparse_calls): use a 2-bar unit pattern: a strong accented note "
+                "on beat 1, followed by rests, and then 2 short notes (duration <= 0.25 beats)."
+            )
+            consumed.add("figure")
+        elif figure == "sparse_hits":
+            clauses.append(
+                "Bass figure (sparse_hits): in a 4-bar section, place strong sustained root notes "
+                "(duration >= 1.5 beats, high velocity >= 100) on beat 1 (start 0.0) and beat 9 (start 8.0), "
+                "a short note on beat 15 (start 14.0, duration <= 0.5 beats), and a longer note on beat 16 "
+                "(start 15.0, duration >= 0.75 beats); leave all other beats as rests."
+            )
+            consumed.add("figure")
+        if element_spec.get("ending") == "rise":
+            clauses.append(
+                "Bass ending (rise): in the final bar ONLY, place exactly 4 short notes "
+                "strictly on the eighth-note offbeats (the 2nd, 4th, 6th, and 8th eighth-note "
+                "positions: beats 1.5, 2.5, 3.5, and 4.5, with all on-beats rested), "
+                "ascending in pitch through chord tones; place no other notes in that bar."
+            )
+            consumed.add("ending")
+        if "slide_down" in element_spec:
+            # slide_down キースイッチは採用後の決定論的処理で挿入するため LLM プロンプトへは出さない
+            consumed.add("slide_down")
+    elif role_key == "guitar":
+        if element_spec.get("technique") == "cutting_16th":
+            clauses.append(
+                "Play 16th-note funk cutting guitar: tight 16th-note rhythmic chops "
+                "with crisp rests between strums."
+            )
+            consumed.add("technique")
+        if element_spec.get("muted") is True:
+            clauses.append(
+                "Keep muted chops staccato (duration <= 0.25 beats) "
+                "with occasional accented open hits (velocity >= 90)."
+            )
+            consumed.add("muted")
+        if element_spec.get("chop_pattern") is True:
+            clauses.append(
+                "Use chop-focused clustered 16th-note phrasing: "
+                "limit to at most 12 notes per bar; "
+                "make around 70% of notes short chops (duration <= 0.25 beats); "
+                "never play straight continuous 16th notes — arrange chops in clusters of 2 to 4 notes "
+                "with at least one 16th-note rest between clusters; "
+                "allow at most 1 sustained stab (duration 1.0-2.0 beats) per bar, placed only on beat 1; "
+                "and place accents on the start of each cluster and on strong beats."
+            )
+            consumed.add("chop_pattern")
+            # sustain_stabs と同時指定時は chop_pattern を優先し、sustain_stabs は無効化する
+            if "sustain_stabs" in element_spec:
+                consumed.add("sustain_stabs")
+        elif element_spec.get("sustain_stabs") is True:
+            clauses.append(
+                "Use sustained chord stabs and spacious rhythmic phrasing: "
+                "limit to at most 12 notes per bar; "
+                "make at least 40% of events sustained chord stabs (simultaneous chord tones, duration 1.0-2.0 beats); "
+                "keep muted single-note chops (duration <= 0.25 beats) to at most 30% of notes; "
+                "never place more than 4 consecutive 16th notes; "
+                "and place accents on beats 1 and 3 and their 'and' off-beats."
+            )
+            consumed.add("sustain_stabs")
+    elif role_key == "horn":
+        if element_spec.get("role") == "stabs_and_riffs":
+            clauses.append(
+                "Play horn section stabs and short riffs: punchy syncopated stabs "
+                "(duration 0.25-0.5 beats, velocity >= 95) and brief call-and-response riffs."
+            )
+            consumed.add("role")
+    elif role_key == "vocal":
+        if element_spec.get("effect") == "vocoder":
+            clauses.append(
+                "Write a vocoder/talkbox-style vocal melody: clear sustained notes "
+                "(duration 0.5-1.5 beats) with step-wise or pentatonic phrasing and breathing space."
+            )
+            consumed.add("effect")
+    elif role_key == "percussion":
+        if element_spec.get("style") == "big_beats":
+            clauses.append(
+                "Play big, spacious percussion groove: limit to at most 4 hits per bar, "
+                "place accents mainly on strong beats (beats 1, 2, 3, 4 and occasional 8th off-beats), "
+                "avoid dense 16th-note rolls or consecutive 16th-note fills, and use longer note durations (0.5-1.0 beats)."
+            )
+            consumed.add("style")
+    elif role_key == "hats":
+        if element_spec.get("style") == "big_beats":
+            clauses.append(
+                "Play big, steady hi-hat groove using pitch 42 (closed hat) and occasional pitch 46 (open hat): "
+                "stick primarily to 8th-note or quarter-note pulse (at most 8 hits per bar), "
+                "avoid busy 16th-note rolls or rapid consecutive 16th-note chatter, "
+                "keep a clear backbeat/off-beat feel, "
+                "keep 8th off-beat velocities at or below 60% of strong beats, "
+                "and place open hat (pitch 46) only at the end of a bar."
+            )
+            consumed.add("style")
+    elif role_key == "arp":
+        if element_spec.get("style") == "sparse":
+            clauses.append(
+                "Play a sparse, supportive arpeggio: "
+                "limit to at most 8 notes per bar; "
+                "allow at most 4 consecutive 16th notes, followed by at least an 8th-note rest; "
+                "limit octave-or-wider leaps to at most 2 per bar; "
+                "and trace chord tones only without turning into a prominent standalone melody."
+            )
+            consumed.add("style")
+    elif role_key == "melody":
+        if element_spec.get("motif") is True:
+            clauses.append(
+                "Build the melody around a short 2-4 note motif, repeating it and "
+                "developing it by varying only its ending or rhythm (do not invent "
+                "new material in every bar); "
+                "center pitches on chord tones (target at least 70% chord tones); "
+                "after any leap of a 4th or wider (>= 5 semitones), resolve in the "
+                "opposite direction by stepwise motion (1-2 semitones); "
+                "and shape phrases in 2-bar units with a rest at the end of each 2-bar phrase."
+            )
+            consumed.add("motif")
+        elif "motif" in element_spec and element_spec.get("motif") is False:
+            consumed.add("motif")
+        if element_spec.get("phrasing") == "contrast":
+            clauses.append(
+                "Melodic phrasing (contrast): include at least 2 sustained notes "
+                "(duration >= 1.0 beat) per phrase, always include rests inside the phrase, "
+                "and limit consecutive short notes to at most 4 notes in a row."
+            )
+            consumed.add("phrasing")
+
+    remaining = [f"{k}={v}" for k, v in element_spec.items() if k not in consumed]
+    if remaining:
+        prefix = (
+            f"Additional '{role}' element constraints"
+            if clauses
+            else f"Element style constraints for '{role}'"
+        )
+        clauses.append(f"{prefix}: {', '.join(remaining)}.")
+    return " ".join(clauses)
+
+
+def _element_max_notes_per_bar(role: str, element_spec: dict[str, Any]) -> int | None:
+    """elements の style 指定が持つ 1小節あたり最大音数上限を返す（未定義時は None）。"""
+    if not element_spec:
+        return None
+    role_key = role.strip().lower()
+    if role_key == "guitar" and (
+        element_spec.get("chop_pattern") is True or element_spec.get("sustain_stabs") is True
+    ):
+        return 12
+    if role_key == "percussion" and element_spec.get("style") == "big_beats":
+        return 4
+    if role_key == "hats" and element_spec.get("style") == "big_beats":
+        return 8
+    if role_key == "arp" and element_spec.get("style") == "sparse":
+        return 8
+    return None
+
+
+def _density_prompt_text(
+    role: str, element_spec: dict[str, Any], max_notes_per_bar: int
+) -> str:
+    """arrangement.density と elements の併用時、小さい方の上限をプロンプト指示へ変換する。"""
+    elem_max = _element_max_notes_per_bar(role, element_spec)
+    effective = min(max_notes_per_bar, elem_max) if elem_max is not None else max_notes_per_bar
+    return f"Strictly limit density to at most {effective} notes per bar."
+
+
+def _call_response_prompt_text(call_response_role: str) -> str:
+    """call_response の役割に応じた拍位置指定プロンプトを返す。"""
+    if call_response_role == "call":
+        return "Call-and-response (CALL): place phrases on beats 1-2 of each bar and rest on beats 3-4."
+    if call_response_role == "response":
+        return "Call-and-response (RESPONSE): respond briefly only on beats 3-4 of each bar and rest on beats 1-2."
+    return ""
 
 
 def _rescue_transpose(

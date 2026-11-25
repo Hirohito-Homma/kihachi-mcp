@@ -21,6 +21,30 @@ from typing import Any
 CATEGORY_INSTRUMENT = "instrument"
 CATEGORY_EFFECT = "audio_effect"
 
+PLUGIN_SOURCE_PRESET = "preset"
+PLUGIN_SOURCE_RAW = "raw"
+PLUGIN_SOURCES = frozenset({PLUGIN_SOURCE_PRESET, PLUGIN_SOURCE_RAW})
+
+
+@dataclass(frozen=True)
+class PluginDeviceSpec:
+    """外部プラグイン（または User Library .adv プリセット）のロード仕様。"""
+
+    source: str
+    name: str
+    path: tuple[str, ...] = ()
+    params: tuple[tuple[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON 互換辞書へシリアライズする。"""
+        return {
+            "instrument": "plugin",
+            "source": self.source,
+            "name": self.name,
+            "path": list(self.path),
+            "params": dict(self.params),
+        }
+
 
 @dataclass(frozen=True)
 class LiveStockDevice:
@@ -120,6 +144,37 @@ def resolve(device_name: str, available: frozenset[str]) -> str:
             "no substitute will be chosen automatically"
         )
     return device_name
+
+
+def resolve_plugin_spec(spec: dict[str, Any]) -> PluginDeviceSpec:
+    """elements のプラグイン指定を検証し PluginDeviceSpec を返す。"""
+    source = str(spec.get("source") or "").strip().lower()
+    if source not in PLUGIN_SOURCES:
+        raise LiveDeviceUnavailableError(
+            f"unsupported plugin source '{source}'; expected 'preset' or 'raw'"
+        )
+    name = str(spec.get("name") or "").strip()
+    if not name:
+        raise LiveDeviceUnavailableError("plugin 'name' is required")
+    raw_path = spec.get("path")
+    if raw_path is None:
+        path: tuple[str, ...] = ()
+    elif isinstance(raw_path, (list, tuple)):
+        path = tuple(str(p).strip() for p in raw_path if str(p).strip())
+    else:
+        raise LiveDeviceUnavailableError("plugin 'path' must be a list of folder names")
+    if source == PLUGIN_SOURCE_RAW and not path:
+        raise LiveDeviceUnavailableError(
+            f"plugin '{name}' with source='raw' requires a non-empty 'path'"
+        )
+    raw_params = spec.get("params")
+    if raw_params is None:
+        params: tuple[tuple[str, Any], ...] = ()
+    elif isinstance(raw_params, dict):
+        params = tuple((str(k), v) for k, v in raw_params.items())
+    else:
+        raise LiveDeviceUnavailableError("plugin 'params' must be a mapping")
+    return PluginDeviceSpec(source=source, name=name, path=path, params=params)
 
 
 def catalogue() -> list[dict[str, Any]]:

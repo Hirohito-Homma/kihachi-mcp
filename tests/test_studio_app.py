@@ -13,6 +13,7 @@ import pytest
 import soundfile as sf
 from test_studio_workflow import SMOKE_TEST, _studio
 
+from kihachi_mcp.models.live_contract import managed_track_name
 from kihachi_mcp.services.live_transport_fake import (
     FakeArrangementClip,
     FakeLiveSet,
@@ -22,6 +23,36 @@ from kihachi_mcp.services.reference_library import ReferenceLibrary
 from kihachi_mcp.services.sample_catalog import SampleCatalog
 from kihachi_mcp.services.studio_runtime import StudioRuntime
 from kihachi_mcp.studio.app import STATIC_DIR, StudioApp, _handler_for
+
+_VITAL_PARAMETERS = {
+    "class_name": "PluginDevice",
+    "parameters": [
+        {
+            "name": "Device On",
+            "min": 0.0,
+            "max": 1.0,
+            "is_quantized": True,
+            "value_items": ["Off", "On"],
+            "default": 1.0,
+        },
+        {
+            "name": "Filter 1 Cutoff",
+            "min": 0.0,
+            "max": 1.0,
+            "is_quantized": False,
+            "value_items": [],
+            "default": 0.25,
+        },
+        {
+            "name": "Oscillator Mode",
+            "min": 0.0,
+            "max": 2.0,
+            "is_quantized": True,
+            "value_items": ["Classic", "Wavetable", "Sample"],
+            "default": 0.0,
+        },
+    ],
+}
 
 
 @pytest.fixture()
@@ -215,6 +246,183 @@ def test_sample_replacement_http_requires_preview_and_confirmation(tmp_path: Pat
         thread.join(timeout=3)
 
 
+def test_vital_parameter_http_is_managed_previewed_confirmed_and_single_use(
+    tmp_path: Path,
+) -> None:
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": _VITAL_PARAMETERS},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Bass deadbeef"))
+    managed["device_names"] = ["Vital"]
+    unmanaged = live.add_track("User Lead")
+    unmanaged["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=SampleCatalog(tmp_path / "samples.sqlite3"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, listed = _call(port, "GET", "/api/ableton/vital-parameters")
+        assert status == 200
+        assert listed["ok"] is True and listed["live_changed"] is False
+        assert [row["track_name"] for row in listed["devices"]] == [
+            managed["name"]
+        ]
+        assert listed["devices"][0]["configured"] is True
+        _status, unmanaged_preview = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/preview",
+            {
+                "track_index": unmanaged["index"],
+                "device_index": 0,
+                "parameter_name": "Filter 1 Cutoff",
+                "value": 0.75,
+            },
+        )
+        assert unmanaged_preview["ok"] is False
+
+        status, preview = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/preview",
+            {
+                "track_index": managed["index"],
+                "device_index": 0,
+                "parameter_name": "Filter 1 Cutoff",
+                "value": 0.75,
+            },
+        )
+        assert status == 200 and preview["ok"] is True
+        assert preview["applied_to_live"] is False
+        assert "device_parameters" not in managed
+
+        _status, refused = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": False},
+        )
+        assert refused["ok"] is False
+        assert "device_parameters" not in managed
+
+        _status, applied = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": True},
+        )
+        assert applied["ok"] is True
+        assert applied["receipt"]["status"] == "verified"
+        assert applied["parameter"]["normalized_value"] == 0.75
+        assert managed["device_parameters"]["0"]["Filter 1 Cutoff"] == 0.75
+
+        _status, replayed = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": True},
+        )
+        assert replayed["ok"] is False
+
+        _status, item_preview = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/preview",
+            {
+                "track_index": managed["index"],
+                "device_index": 0,
+                "parameter_name": "Oscillator Mode",
+                "item": "Wavetable",
+            },
+        )
+        _status, item_applied = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": item_preview["change_id"], "confirmed": True},
+        )
+        assert item_applied["ok"] is True
+        assert item_applied["parameter"]["current_item"] == "Wavetable"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_vital_parameter_apply_refuses_a_value_changed_after_preview(
+    tmp_path: Path,
+) -> None:
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": _VITAL_PARAMETERS},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Pad deadbeef"))
+    managed["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+    preview = runtime.preview_vital_parameter(
+        managed["index"],
+        0,
+        "Filter 1 Cutoff",
+        value=0.75,
+    )
+    managed["device_parameters"] = {"0": {"Filter 1 Cutoff": 0.4}}
+
+    result = runtime.apply_vital_parameter(preview["change_id"], confirmed=True)
+
+    assert result["ok"] is False
+    assert "プレビュー後" in result["error"]
+    assert managed["device_parameters"]["0"]["Filter 1 Cutoff"] == 0.4
+
+
+def test_unconfigured_vital_returns_configure_guidance(tmp_path: Path) -> None:
+    only_device_on = {
+        "class_name": "PluginDevice",
+        "parameters": [_VITAL_PARAMETERS["parameters"][0]],
+    }
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": only_device_on},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Lead deadbeef"))
+    managed["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+
+    result = runtime.list_vital_parameters()
+
+    assert result["ok"] is True
+    assert result["devices"][0]["configured"] is False
+    assert ".vstpreset" in result["devices"][0]["guidance"]
+
+
+def test_vital_preview_rejects_duplicate_parameter_names(tmp_path: Path) -> None:
+    duplicated = json.loads(json.dumps(_VITAL_PARAMETERS))
+    duplicated["parameters"].append(dict(duplicated["parameters"][1]))
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": duplicated},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Bass deadbeef"))
+    managed["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+
+    result = runtime.preview_vital_parameter(
+        managed["index"],
+        0,
+        "Filter 1 Cutoff",
+        value=0.75,
+    )
+
+    assert result["ok"] is False
+    assert "同名" in result["error"]
+
+
 def test_sample_replacement_rejects_unlisted_bundled_asset(studio) -> None:
     port, _runtime, _live = studio
     status, response = _call(
@@ -339,6 +547,35 @@ def test_composer_adoption_uses_existing_revision_approval_flow(studio) -> None:
     )
     assert accepted["selected_candidate_id"] != candidate_id
     assert live.tracks == []
+
+
+def test_composer_adoption_route_applies_tempo_when_given(studio) -> None:
+    port, runtime, _live = studio
+    candidate_id = runtime.generate(SMOKE_TEST, seed=3)["candidate"]["candidate_id"]
+    constraints = {"key": "Dm", "tempo": 122, "bars": 2, "role": "bass", "syncopation": 0.8}
+    _status, generated = _call(port, "POST", "/api/midi/compose", {"constraints": constraints})
+    _status, proposal = _call(
+        port,
+        "POST",
+        "/api/midi/adopt-preview",
+        {
+            "candidate_id": candidate_id,
+            "role": "bass",
+            "pattern_bars": 2,
+            "notes": generated["notes"],
+            "tempo": 122,
+        },
+    )
+    assert proposal["ok"] is True
+    _status, accepted = _call(
+        port,
+        "POST",
+        "/api/revision/decide",
+        {"revision_id": proposal["revision"]["revision_id"], "accept": True},
+    )
+    adopted = runtime.get_candidate(accepted["selected_candidate_id"])
+    assert adopted is not None
+    assert adopted.brief.tempo.value == 122
 
 
 def test_measure_route_reads_audio_files_only(studio, tmp_path: Path) -> None:

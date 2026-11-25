@@ -565,6 +565,35 @@
       <ul id="revision-history"></ul>
     </section>
 
+    <section id="vital-params-view">
+      <h2>Vitalパラメータ</h2>
+      <p class="sub">KIHACHI管理トラック上のVitalがLiveへ公開しているパラメータだけを操作します。最初に変更内容を確認し、明示承認した1回だけLiveへ送り、値を読み戻します。</p>
+      <div class="actions">
+        <button id="vital-params-refresh" class="secondary" type="button">Vitalを再取得</button>
+      </div>
+      <p id="vital-params-status" class="sub" role="status">まだVitalを取得していません。</p>
+      <div id="vital-params-controls" class="hidden">
+        <div class="grid">
+          <label>対象Vital<select id="vital-device-select"></select></label>
+          <label>パラメータ<select id="vital-param-select"></select></label>
+          <label id="vital-param-number-label">値（0〜1）
+            <input id="vital-param-number" type="number" min="0" max="1" step="0.001">
+          </label>
+          <label id="vital-param-item-label" class="hidden">設定
+            <select id="vital-param-item"></select>
+          </label>
+        </div>
+        <p id="vital-param-current" class="sub"></p>
+        <p id="vital-params-guidance" class="warn"></p>
+        <div class="actions">
+          <button id="vital-params-preview" class="secondary" type="button">変更内容を確認</button>
+          <button id="vital-params-apply" type="button" disabled>この内容でVitalを変更</button>
+        </div>
+        <div id="vital-params-summary"></div>
+        <div id="vital-params-result"></div>
+      </div>
+    </section>
+
     <section id="apply-view">
       <h2>Liveへ適用</h2>
       <p id="live-plan-pending" role="status" class="sub">パート計画の保留はありません。Liveには送っていません。</p>
@@ -712,7 +741,14 @@
     </section>
   </main>
   <script>
-    const state = { candidate: null, poll: null, applying: false, masterRetune: false };
+    const state = {
+      candidate: null,
+      poll: null,
+      applying: false,
+      masterRetune: false,
+      vitalDevices: [],
+      vitalChangeId: ""
+    };
     let pendingRevision = null;
     const $ = (id) => document.getElementById(id);
 
@@ -2032,6 +2068,160 @@
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     }
+
+    function selectedVitalDevice() {
+      return state.vitalDevices[Number($("vital-device-select").value)] || null;
+    }
+
+    function selectedVitalParameter() {
+      const device = selectedVitalDevice();
+      const name = $("vital-param-select").value;
+      return (device?.parameters || []).find((row) => row.name === name) || null;
+    }
+
+    function invalidateVitalPreview() {
+      state.vitalChangeId = "";
+      $("vital-params-apply").disabled = true;
+      $("vital-params-summary").innerHTML = "";
+      $("vital-params-result").innerHTML = "";
+    }
+
+    function renderVitalParameterControl() {
+      const parameter = selectedVitalParameter();
+      invalidateVitalPreview();
+      if (!parameter) {
+        $("vital-param-current").textContent = "公開パラメータがありません。";
+        $("vital-params-preview").disabled = true;
+        return;
+      }
+      const quantized = parameter.is_quantized && (parameter.value_items || []).length;
+      $("vital-param-number-label").classList.toggle("hidden", !!quantized);
+      $("vital-param-item-label").classList.toggle("hidden", !quantized);
+      if (quantized) {
+        $("vital-param-item").innerHTML = parameter.value_items.map((item) =>
+          `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`
+        ).join("");
+        $("vital-param-item").value = parameter.current_item || parameter.value_items[0];
+        $("vital-param-current").textContent = `現在値: ${parameter.current_item || "不明"}`;
+      } else {
+        const current = Number(parameter.normalized_value || 0);
+        $("vital-param-number").value = current.toFixed(3);
+        $("vital-param-current").textContent = `現在値: ${current.toFixed(3)}（正規化 0〜1）`;
+      }
+      $("vital-params-preview").disabled = !!selectedVitalDevice()?.frozen;
+    }
+
+    function renderVitalDevice() {
+      const device = selectedVitalDevice();
+      invalidateVitalPreview();
+      if (!device) {
+        $("vital-params-controls").classList.add("hidden");
+        return;
+      }
+      $("vital-param-select").innerHTML = (device.parameters || []).map((parameter) =>
+        `<option value="${escapeHtml(parameter.name)}">${escapeHtml(parameter.name)}</option>`
+      ).join("");
+      $("vital-params-guidance").textContent = device.frozen
+        ? "このトラックはフリーズ中です。解除してから操作してください。"
+        : (device.guidance || "");
+      renderVitalParameterControl();
+    }
+
+    async function loadVitalParameters() {
+      const button = $("vital-params-refresh");
+      button.disabled = true;
+      $("vital-params-status").textContent = "LiveからVitalを読み取っています…";
+      invalidateVitalPreview();
+      try {
+        const result = await getJson("/api/ableton/vital-parameters");
+        if (!result.ok) {
+          state.vitalDevices = [];
+          $("vital-params-controls").classList.add("hidden");
+          $("vital-params-status").textContent = result.error || "Vitalを取得できませんでした。";
+          return;
+        }
+        state.vitalDevices = result.devices || [];
+        if (!state.vitalDevices.length) {
+          $("vital-params-controls").classList.add("hidden");
+          $("vital-params-status").textContent = "KIHACHI管理トラック上にVitalがありません。Liveは変更していません。";
+          return;
+        }
+        $("vital-device-select").innerHTML = state.vitalDevices.map((device, index) =>
+          `<option value="${index}">${escapeHtml(device.track_name)} / Vital #${device.device_index}</option>`
+        ).join("");
+        $("vital-params-controls").classList.remove("hidden");
+        $("vital-params-status").textContent = `${state.vitalDevices.length}台のVitalを取得しました。Liveは変更していません。`;
+        renderVitalDevice();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    $("vital-params-refresh").onclick = loadVitalParameters;
+    $("vital-device-select").onchange = renderVitalDevice;
+    $("vital-param-select").onchange = renderVitalParameterControl;
+    $("vital-param-number").oninput = invalidateVitalPreview;
+    $("vital-param-item").onchange = invalidateVitalPreview;
+
+    $("vital-params-preview").onclick = async () => {
+      const device = selectedVitalDevice();
+      const parameter = selectedVitalParameter();
+      if (!device || !parameter) return;
+      const body = {
+        track_index: device.track_index,
+        device_index: device.device_index,
+        parameter_name: parameter.name
+      };
+      if (parameter.is_quantized && (parameter.value_items || []).length) {
+        body.item = $("vital-param-item").value;
+      } else {
+        const value = Number($("vital-param-number").value);
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          $("vital-params-summary").innerHTML = '<p class="bad">値は0から1で指定してください。</p>';
+          return;
+        }
+        body.value = value;
+      }
+      $("vital-params-preview").disabled = true;
+      const result = await getJson("/api/ableton/vital-parameters/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      $("vital-params-preview").disabled = false;
+      if (!result.ok) {
+        $("vital-params-summary").innerHTML = `<p class="bad">${escapeHtml(result.error || "変更を計画できません")}</p>`;
+        return;
+      }
+      state.vitalChangeId = result.change_id;
+      const target = result.target.item ?? Number(result.target.value).toFixed(3);
+      const current = result.parameter.current_item ?? Number(result.parameter.normalized_value).toFixed(3);
+      $("vital-params-summary").innerHTML = `
+        <p><b>${escapeHtml(result.track_name)} / Vital #${result.device_index}</b></p>
+        <p>${escapeHtml(result.parameter.name)}: ${escapeHtml(current)} → ${escapeHtml(target)}</p>
+        <p class="sub">これはプレビューです。Liveはまだ変更していません。</p>
+      `;
+      $("vital-params-apply").disabled = false;
+    };
+
+    $("vital-params-apply").onclick = async () => {
+      if (!state.vitalChangeId) return;
+      $("vital-params-apply").disabled = true;
+      $("vital-params-result").innerHTML = "<p>Vitalへ送信し、読み戻しています…</p>";
+      const result = await getJson("/api/ableton/vital-parameters/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ change_id: state.vitalChangeId, confirmed: true })
+      });
+      state.vitalChangeId = "";
+      const receipt = result.receipt || {};
+      const observed = (receipt.readback || [])[0]?.observed || {};
+      $("vital-params-result").innerHTML = `
+        <p>結果: <b>${escapeHtml(receipt.status || "未実行")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}</p>
+        <p>読み戻し: ${escapeHtml(observed.parameter_name || "")} = ${escapeHtml(observed.item ?? observed.normalized_value ?? "不明")}</p>
+        ${(receipt.mismatches || []).map((row) => `<p class="warn">${escapeHtml(row.field_name)}: 計画 ${escapeHtml(JSON.stringify(row.expected))} / Live ${escapeHtml(JSON.stringify(row.observed))}</p>`).join("")}
+      `;
+    };
 
     function renderRetuneParts(candidate) {
       const parts = Object.keys(candidate.used_pitches || {});

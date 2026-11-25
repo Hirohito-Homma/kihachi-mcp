@@ -12,6 +12,9 @@ PROTOCOL_VERSION = 1
 
 METHOD_PING = "ping"
 METHOD_GET_STATE = "get_state"
+METHOD_GET_SESSION_TRACK_CLIPS = "get_session_track_clips"
+METHOD_GET_ARRANGEMENT_TRACK_SUMMARY = "get_arrangement_track_summary"
+METHOD_GET_LOCATOR_SUMMARY = "get_locator_summary"
 METHOD_GET_DRUM_RACK_SUMMARY = "get_drum_rack_summary"
 METHOD_GET_DEVICE_PARAMETERS = "get_device_parameters"
 METHOD_APPLY_OPERATION = "apply_operation"
@@ -20,6 +23,9 @@ SUPPORTED_METHODS = frozenset(
     {
         METHOD_PING,
         METHOD_GET_STATE,
+        METHOD_GET_SESSION_TRACK_CLIPS,
+        METHOD_GET_ARRANGEMENT_TRACK_SUMMARY,
+        METHOD_GET_LOCATOR_SUMMARY,
         METHOD_GET_DRUM_RACK_SUMMARY,
         METHOD_GET_DEVICE_PARAMETERS,
         METHOD_APPLY_OPERATION,
@@ -32,6 +38,7 @@ ERROR_DISCONNECTED = "disconnected"
 ERROR_PROTOCOL = "protocol"
 ERROR_UNAUTHORIZED = "unauthorized"
 ERROR_TOO_LARGE = "too_large"
+ERROR_RESPONSE_TOO_LARGE = "response_too_large"
 ERROR_DUPLICATE = "duplicate_request"
 ERROR_OPERATION_FAILED = "operation_failed"
 

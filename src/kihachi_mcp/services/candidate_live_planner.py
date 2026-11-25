@@ -13,6 +13,8 @@ from kihachi_mcp.knowledge.part_sounds import (
     PART_INSTRUMENTS,
     PART_MIX,
     SIDECHAIN_DUCKING,
+    element_instrument_recipe,
+    element_plugin_spec,
 )
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
 from kihachi_mcp.models.live_contract import (
@@ -22,12 +24,15 @@ from kihachi_mcp.models.live_contract import (
     OP_CREATE_SESSION_CLIP,
     OP_LOAD_DRUM_PAD_SAMPLE,
     OP_LOAD_LIVE_DEVICE,
+    OP_LOAD_PLUGIN,
     OP_PLACE_ARRANGEMENT_CLIP,
     OP_REPLACE_CLIP_NOTES,
     OP_SET_DEVICE_PARAMETER,
+    OP_SET_PLUGIN_PARAM,
     OP_SET_SIDECHAIN_SOURCE,
     OP_SET_TEMPO,
     OP_SET_TRACK_MIXER,
+    OP_SET_TRACK_VOLUME,
     canonical_hash,
     managed_clip_name,
     managed_track_name,
@@ -73,6 +78,9 @@ _TRACK_COLORS = {
     "Vocal": "25",
     "FX": "26",
 }
+# Live の仕様上、128パラメータ超の VST3 等で raw ロード時に Device On しか公開しないプラグイン。
+_RAW_UNEXPANDED_PLUGINS: frozenset[str] = frozenset({"vital"})
+
 _SHORT_ID_RE = re.compile(r"[0-9a-f]{8}")
 
 
@@ -448,6 +456,25 @@ class CandidateLivePlanner:
         )
 
 
+def db_to_live_volume(db: float) -> float:
+    """dB 値を Ableton Live ミキサー音量パラメータ（0.0〜1.0）へ変換する。
+
+    変換式（Live ミキサー仕様: 0.0 dB = 0.85、+6.0 dB = 1.0、-70.0 dB 以下 = 0.0）:
+    - db <= -70.0: 0.0
+    - -70.0 < db <= 0.0: 0.85 * (10.0 ** (db / 20.0))
+    - 0.0 < db < 6.0: 0.85 + 0.15 * (db / 6.0)
+    - db >= 6.0: 1.0
+    """
+    val = float(db)
+    if val <= -70.0:
+        return 0.0
+    if val >= 6.0:
+        return 1.0
+    if val > 0.0:
+        return 0.85 + 0.15 * (val / 6.0)
+    return 0.85 * (10.0 ** (val / 20.0))
+
+
 class _Builder:
     def __init__(
         self,
@@ -490,6 +517,7 @@ class _Builder:
             self._plan_drum_samples(tracks)
         scenes = self._plan_scenes()
         self._plan_clips(tracks, scenes)
+        self._plan_mix_volumes(tracks)
         if self._conflicts:
             return [], self._conflicts, self._warnings
         return self._operations, self._conflicts, self._warnings
@@ -736,7 +764,7 @@ class _Builder:
             return [], self._conflicts, self._warnings
         available = self._snapshot.available_device_names()
         for part in self._candidate.parts:
-            chain = PART_EFFECTS.get(part)
+            chain = PART_EFFECTS.get(part) or PART_EFFECTS.get(self._parent_part(part))
             if not chain:
                 continue
             name = managed_track_name(f"KIHACHI {part} {self._short_id}")
@@ -774,7 +802,7 @@ class _Builder:
         if self._conflicts:
             return [], self._conflicts, self._warnings
         for part in parts:
-            chain = PART_EFFECTS.get(part)
+            chain = PART_EFFECTS.get(part) or PART_EFFECTS.get(self._parent_part(part))
             if not chain:
                 self._conflicts.append(
                     LiveConflict("unknown_part", f"{part} のエフェクトのレシピがありません")
@@ -893,14 +921,15 @@ class _Builder:
         if self._conflicts:
             return [], self._conflicts, self._warnings
         for part in self._candidate.parts:
-            if part not in PART_MIX:
+            mix_part = part if part in PART_MIX else self._parent_part(part)
+            if mix_part not in PART_MIX:
                 continue
             name = managed_track_name(f"KIHACHI {part} {self._short_id}")
             existing = self._snapshot.track_by_name(name)
             if existing is None:
                 self._warnings.append(f"{name} が無いのでMIXしません")
                 continue
-            volume_db, panning = PART_MIX[part]
+            volume_db, panning = PART_MIX[mix_part]
             self._operations.append(
                 LiveMutationOperation(
                     operation_id=self._next_id(OP_SET_TRACK_MIXER),
@@ -955,6 +984,53 @@ class _Builder:
         )
         self._warnings.append(f"Setテンポを {current:g} から {target:g} BPM へ変更します")
 
+    def _plan_mix_volumes(self, tracks: list[dict[str, Any]]) -> None:
+        """arrangement.mix が候補に保持されている場合、パート別トラックの音量 op を生成する。"""
+        mix = getattr(self._candidate, "mix", None)
+        if not isinstance(mix, dict) or not mix:
+            return
+        track_by_part = {track["part"]: track for track in tracks}
+        for part_name, raw_db in mix.items():
+            track = track_by_part.get(part_name)
+            if track is None:
+                self._warnings.append(
+                    f"arrangement.mix のパート '{part_name}' は候補に存在しないため音量を変更しません"
+                )
+                continue
+            target_db = max(-24.0, min(12.0, float(raw_db)))
+            volume = round(db_to_live_volume(target_db), 6)
+            self._operations.append(
+                LiveMutationOperation(
+                    operation_id=self._next_id(OP_SET_TRACK_VOLUME),
+                    op=OP_SET_TRACK_VOLUME,
+                    target={"track_index": track["index"]},
+                    arguments={
+                        "volume": volume,
+                        "volume_db": target_db,
+                        "part": part_name,
+                    },
+                    preconditions=[
+                        LivePrecondition("not_recording"),
+                        LivePrecondition(
+                            "track_name_at_index",
+                            {"track_index": track["index"], "name": track["name"]},
+                        ),
+                    ],
+                    destructive=False,
+                    expected_readback={
+                        "track_index": track["index"],
+                        "volume": volume,
+                    },
+                )
+            )
+
+    def _parent_part(self, part: str) -> str:
+        """sound_variants の変容先パートであれば親パート名を返し、通常パートはそのまま返す。"""
+        variants = getattr(self._candidate, "variant_parents", None)
+        if isinstance(variants, dict):
+            return variants.get(part, part)
+        return part
+
     def _plan_tracks(self) -> list[dict[str, Any]]:
         planned: list[dict[str, Any]] = []
         for part in self._candidate.parts:
@@ -976,6 +1052,9 @@ class _Builder:
                 continue
             index = self._next_track_index
             self._next_track_index += 1
+            color = _TRACK_COLORS.get(part) or _TRACK_COLORS.get(
+                self._parent_part(part), "14"
+            )
             self._operations.append(
                 LiveMutationOperation(
                     operation_id=self._next_id(OP_CREATE_MIDI_TRACK),
@@ -983,7 +1062,7 @@ class _Builder:
                     target={"track_index": index},
                     arguments={
                         "name": name,
-                        "color": _TRACK_COLORS[part],
+                        "color": color,
                         "index": index,
                     },
                     preconditions=[
@@ -1012,15 +1091,39 @@ class _Builder:
     def _plan_devices(self, tracks: list[dict[str, Any]]) -> None:
         available = self._snapshot.available_device_names()
         recipe = self._sound_recipe()
+        elements = getattr(self._candidate, "elements", None)
         for track in tracks:
             if track["device_names"] or track["part"] in self._external_kit_parts:
                 continue
-            part_recipe = recipe.parts.get(track["part"]) if recipe else None
+            source_part = self._parent_part(track["part"])
+            try:
+                plugin_spec = element_plugin_spec(source_part, elements)
+            except live_device_catalog.LiveDeviceUnavailableError as exc:
+                self._conflicts.append(
+                    LiveConflict(
+                        kind="plugin_unavailable",
+                        detail=f"{track['name']} のプラグイン指定が不正です（標準デバイスへ差し替えません）: {exc}",
+                        target={"track": track["name"], "part": track["part"]},
+                    )
+                )
+                continue
+            if plugin_spec is not None:
+                self._plan_plugin_device(track, plugin_spec)
+                continue
+            override = element_instrument_recipe(source_part, elements)
+            if override is not None:
+                self._plan_recipe_chain(track, (override[1],), available)
+                continue
+            part_recipe = (
+                (recipe.parts.get(track["part"]) or recipe.parts.get(source_part))
+                if recipe
+                else None
+            )
             if part_recipe is not None:
                 self._plan_recipe_chain(track, part_recipe.chain, available)
                 continue
-            device_name = live_device_catalog.suggest_instrument(track["part"])
-            patch = PART_INSTRUMENTS.get(track["part"])
+            device_name = live_device_catalog.suggest_instrument(source_part)
+            patch = PART_INSTRUMENTS.get(source_part)
             if patch is not None and patch.device == device_name:
                 self._plan_recipe_chain(track, (patch,), available)
                 continue
@@ -1056,6 +1159,81 @@ class _Builder:
                 )
             )
             track["device_names"] = [device_name]
+
+    def _plan_plugin_device(
+        self,
+        track: dict[str, Any],
+        plugin_spec: live_device_catalog.PluginDeviceSpec,
+    ) -> None:
+        """外部プラグイン（または .adv プリセット）のロードとパラメータ設定を計画する。"""
+        if (
+            plugin_spec.source == live_device_catalog.PLUGIN_SOURCE_RAW
+            and plugin_spec.name.strip().lower() in _RAW_UNEXPANDED_PLUGINS
+            and any(p_name.strip().lower() != "device on" for p_name, _ in plugin_spec.params)
+        ):
+            self._warnings.append(
+                f"{track['name']} の '{plugin_spec.name}' は source='raw' ロード時に "
+                "Live が 'Device On' 以外のパラメータを公開しないため、params 指定が効かない可能性があります。"
+                "Configure 済み .vstpreset を使った source='preset' を推奨します"
+            )
+        self._operations.append(
+            LiveMutationOperation(
+                operation_id=self._next_id(OP_LOAD_PLUGIN),
+                op=OP_LOAD_PLUGIN,
+                target={"track_index": track["index"], "track": track["name"]},
+                arguments={
+                    "track": track["name"],
+                    "source": plugin_spec.source,
+                    "name": plugin_spec.name,
+                    "path": list(plugin_spec.path),
+                },
+                preconditions=[
+                    LivePrecondition("not_recording"),
+                    LivePrecondition(
+                        "track_name_at_index",
+                        {"track_index": track["index"], "name": track["name"]},
+                    ),
+                ],
+                destructive=False,
+                expected_readback={
+                    "track_index": track["index"],
+                    "device_name": plugin_spec.name,
+                    "device_index": 0,
+                },
+            )
+        )
+        for param_name, param_value in plugin_spec.params:
+            self._operations.append(
+                LiveMutationOperation(
+                    operation_id=self._next_id(OP_SET_PLUGIN_PARAM),
+                    op=OP_SET_PLUGIN_PARAM,
+                    target={
+                        "track_index": track["index"],
+                        "track": track["name"],
+                        "device_index": 0,
+                    },
+                    arguments={
+                        "track": track["name"],
+                        "param_name": param_name,
+                        "value": param_value,
+                        "device_name": plugin_spec.name,
+                    },
+                    preconditions=[
+                        LivePrecondition("not_recording"),
+                        LivePrecondition(
+                            "track_name_at_index",
+                            {"track_index": track["index"], "name": track["name"]},
+                        ),
+                    ],
+                    destructive=False,
+                    expected_readback={
+                        "track_index": track["index"],
+                        "param_name": param_name,
+                        "value": param_value,
+                    },
+                )
+            )
+        track["device_names"] = [plugin_spec.name]
 
     def _sound_recipe(self):
         brief = getattr(self._candidate, "brief", None)

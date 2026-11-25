@@ -1,5 +1,7 @@
 """Execution guarantees: approval, fingerprints, idempotency, and readback."""
 
+from dataclasses import replace
+
 from live_fixtures import (
     approved_run,
     empty_live_set,
@@ -11,6 +13,7 @@ from live_fixtures import (
 )
 
 from kihachi_mcp.models.live_contract import (
+    OP_SET_TEMPO,
     STATUS_APPROVAL_REQUIRED,
     STATUS_BLOCKED,
     STATUS_PARTIALLY_APPLIED,
@@ -18,6 +21,8 @@ from kihachi_mcp.models.live_contract import (
     STATUS_VERIFICATION_FAILED,
     STATUS_VERIFIED,
 )
+from kihachi_mcp.models.live_mutation import LiveMutationOperation
+from kihachi_mcp.services.live_bridge import MAX_PLAN_OPERATIONS
 from kihachi_mcp.services.live_execution_service import LiveExecutionService
 from kihachi_mcp.services.live_transport import (
     ERROR_DISCONNECTED,
@@ -347,3 +352,54 @@ def test_an_existing_set_keeps_user_tracks_clips_and_arrangement_untouched() -> 
     assert live.scenes[0]["name"] == "My Scene"
     assert len(live.arrangement_clips) == 1
     assert live.arrangement_clips[0].name == "My Arrangement Clip"
+
+
+def _tempo_operations(count: int) -> list[LiveMutationOperation]:
+    """指定件数のテンポ設定操作を生成する。"""
+    return [
+        LiveMutationOperation(
+            operation_id=f"op-tempo-{idx:04d}",
+            op=OP_SET_TEMPO,
+            arguments={"tempo": 110.0},
+            expected_readback={"tempo": 110.0},
+        )
+        for idx in range(count)
+    ]
+
+
+def test_plan_with_734_operations_succeeds_without_hitting_safety_limit() -> None:
+    """734操作の適用計画が操作数上限で停止せず検証完了すること。"""
+    transport = FakeLiveTransport(empty_live_set(tempo=120.0))
+    subject_gate = gate()
+    base_plan = planner().create_session_plan(project_plan(), snapshot_of(transport))
+    plan = replace(base_plan, operations=_tempo_operations(734))
+    token = subject_gate.approve(plan)
+
+    receipt = executor(transport, subject_gate).execute(
+        plan, approved=True, approval_token=token
+    )
+
+    assert receipt.status == STATUS_VERIFIED
+    assert len(receipt.completed_operations) == 734
+    assert receipt.mismatches == []
+
+
+def test_plan_over_2048_operations_is_blocked() -> None:
+    """2049操作以上の適用計画が従来どおりブロックされエラーメッセージを返すこと。"""
+    assert MAX_PLAN_OPERATIONS == 2048
+    transport = FakeLiveTransport(empty_live_set(tempo=120.0))
+    subject_gate = gate()
+    base_plan = planner().create_session_plan(project_plan(), snapshot_of(transport))
+    plan = replace(base_plan, operations=_tempo_operations(MAX_PLAN_OPERATIONS + 1))
+    token = subject_gate.approve(plan)
+
+    receipt = executor(transport, subject_gate).execute(
+        plan, approved=True, approval_token=token
+    )
+
+    assert receipt.status == STATUS_BLOCKED
+    assert (
+        receipt.error
+        == f"the plan has {MAX_PLAN_OPERATIONS + 1} operations, over the {MAX_PLAN_OPERATIONS} operation safety limit"
+    )
+    assert transport.applied_operation_ids == []

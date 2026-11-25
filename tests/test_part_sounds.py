@@ -61,7 +61,7 @@ def test_dial_readings_convert_to_the_positions_live_showed() -> None:
 
 
 def test_every_part_has_an_effect_chain_and_patches_match_the_instrument() -> None:
-    assert set(PART_EFFECTS) == set(PART_ORDER)
+    assert set(PART_ORDER) <= set(PART_EFFECTS)
     for part, patch in PART_INSTRUMENTS.items():
         assert patch.device == live_device_catalog.suggest_instrument(part)
 
@@ -219,8 +219,22 @@ def test_master_is_refused_while_live_records() -> None:
 def test_the_limiter_ends_the_chain_below_zero() -> None:
     limiter = MASTER_CHAIN[-1]
     assert limiter.device == "Limiter"
+    mode = next(s for s in limiter.settings if s.parameter == "Mode")
     ceiling = next(s for s in limiter.settings if s.parameter == "Ceiling")
+    input_gain = next(s for s in limiter.settings if s.parameter == "Input Gain")
+    assert mode.item == "True Peak"
     assert ceiling.value < 0.9  # below -1.0 dB in Live's reading
+    assert input_gain == at("Limiter", "Input Gain", 4.0)
+
+
+def test_bass_eq_high_pass_is_set_to_32_hz() -> None:
+    """Bass の EQ Eight の 1 Frequency A が 32 Hz（High Pass 12dB）であることを検証する。"""
+    bass_eq = PART_EFFECTS["Bass"][0]
+    assert bass_eq.device == "EQ Eight"
+    filter_type = next(s for s in bass_eq.settings if s.parameter == "1 Filter Type A")
+    freq = next(s for s in bass_eq.settings if s.parameter == "1 Frequency A")
+    assert filter_type.item == "High Pass 12dB"
+    assert freq == at("EQ Eight", "1 Frequency A", 32)
 
 
 def test_effects_are_refused_while_live_plays() -> None:
@@ -229,3 +243,31 @@ def test_effects_are_refused_while_live_plays() -> None:
     plan = CandidateLivePlanner().create_effects_plan(candidate, snapshot_of(transport))
     assert plan.status == "blocked"
     assert plan.operations == []
+
+
+def test_bass_mut_effects_chain_matches_spec() -> None:
+    """BassMut の PART_EFFECTS が EQ Eight(32Hz) -> Auto Filter -> Saturator(Analog Clip) -> Compressor であること。"""
+    chain = PART_EFFECTS["BassMut"]
+    assert [d.device for d in chain] == [
+        "EQ Eight",
+        "Auto Filter",
+        "Saturator",
+        "Compressor",
+    ]
+    eq, auto_filter, saturator, _comp = chain
+    assert next(s for s in eq.settings if s.parameter == "1 Frequency A") == at(
+        "EQ Eight", "1 Frequency A", 32
+    )
+    env_amt = next(s for s in auto_filter.settings if s.parameter == "Env Amount")
+    assert env_amt.value > 0.5  # 正方向のエンベロープ追従
+    sat_type = next(s for s in saturator.settings if s.parameter == "Type")
+    sat_drive = next(s for s in saturator.settings if s.parameter == "Drive")
+    bass_sat = next(d for d in PART_EFFECTS["Bass"] if d.device == "Saturator")
+    bass_drive = next(s for s in bass_sat.settings if s.parameter == "Drive")
+    assert sat_type.item == "Analog Clip"
+    assert sat_drive.value > bass_drive.value
+
+
+def test_pad_mix_level_is_reduced_for_balance() -> None:
+    """Pad のミックス音量が -21.0 dB 以下に抑えられていること（層3 v2 バランス調整）。"""
+    assert PART_MIX["Pad"][0] <= -21.0

@@ -1,6 +1,6 @@
 """Reviewable MIDI candidates that are the single source for preview and Live."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Self
 
 from kihachi_mcp.models.live_contract import canonical_hash
@@ -24,7 +24,7 @@ class CandidateClip:
     notes: tuple[MidiNote, ...]
 
     def __post_init__(self) -> None:
-        if self.part not in (*STUDIO_PARTS, *OPTIONAL_STUDIO_PARTS):
+        if not str(self.part).strip():
             raise ValueError(f"unsupported part '{self.part}'")
         if self.start_bar < 1 or self.length_bars < 1:
             raise ValueError("clip bar range is invalid")
@@ -74,22 +74,43 @@ class MidiCandidate:
     brief: ProductionBrief
     clips: tuple[CandidateClip, ...]
     parent_candidate_id: str = ""
+    # SongSpec.elements の引き継ぎ（空時は to_dict() に出力せず後方互換を維持）
+    elements: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # arrangement.mix の引き継ぎ（空時は to_dict() に出力せず後方互換を維持）
+    mix: dict[str, float] = field(default_factory=dict)
+    # arrangement.sound_variants 由来の変容先パート→親パート対応表（空時は出力しない）
+    variant_parents: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
             raise ValueError("candidate_id must not be empty")
         parts = {clip.part for clip in self.clips}
-        if not set(STUDIO_PARTS) <= parts or not parts <= {
+        covered_parts = parts | {
+            self.variant_parents[part] for part in parts if part in self.variant_parents
+        }
+        allowed_parts = {
             *STUDIO_PARTS,
             *OPTIONAL_STUDIO_PARTS,
-        }:
+            *self.variant_parents.keys(),
+        }
+        if not set(STUDIO_PARTS) <= covered_parts or not parts <= allowed_parts:
             raise ValueError("a candidate must include Kick, Hats, Bass, and Stab")
 
     @property
     def parts(self) -> tuple[str, ...]:
         """Present parts in stable track order, including optional new voices."""
         present = {clip.part for clip in self.clips}
-        return tuple(part for part in PART_ORDER if part in present)
+        ordered: list[str] = []
+        children_by_parent: dict[str, list[str]] = {}
+        for variant_part, parent_part in self.variant_parents.items():
+            if variant_part in present and variant_part not in PART_ORDER:
+                children_by_parent.setdefault(parent_part, []).append(variant_part)
+        for part in PART_ORDER:
+            if part in present:
+                ordered.append(part)
+            ordered.extend(children_by_parent.get(part, ()))
+        ordered.extend(sorted(p for p in present if p not in ordered))
+        return tuple(ordered)
 
     @property
     def note_fingerprint(self) -> str:
@@ -153,7 +174,7 @@ class MidiCandidate:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the candidate for the UI and apply confirmation."""
-        return {
+        data: dict[str, Any] = {
             "candidate_id": self.candidate_id,
             "seed": self.seed,
             "parent_candidate_id": self.parent_candidate_id,
@@ -169,6 +190,15 @@ class MidiCandidate:
                 part: list(self.used_pitches(part)) for part in self.parts
             },
         }
+        if self.elements:
+            data["elements"] = {k: dict(v) for k, v in self.elements.items()}
+        if self.mix:
+            data["mix"] = {str(k): float(v) for k, v in self.mix.items()}
+        if self.variant_parents:
+            data["variant_parents"] = {
+                str(k): str(v) for k, v in self.variant_parents.items()
+            }
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -176,6 +206,9 @@ class MidiCandidate:
         brief_data = data.get("brief")
         if not isinstance(brief_data, dict):
             raise TypeError("candidate brief is missing")
+        raw_elements = data.get("elements")
+        raw_mix = data.get("mix")
+        raw_variants = data.get("variant_parents")
         return cls(
             candidate_id=str(data.get("candidate_id") or ""),
             seed=int(data.get("seed") or 0),
@@ -186,4 +219,29 @@ class MidiCandidate:
                 if isinstance(item, dict)
             ),
             parent_candidate_id=str(data.get("parent_candidate_id") or ""),
+            elements=(
+                {str(k).strip().lower(): dict(v) for k, v in raw_elements.items() if isinstance(v, dict)}
+                if isinstance(raw_elements, dict)
+                else {}
+            ),
+            mix=(
+                {
+                    str(k).strip(): float(v)
+                    for k, v in raw_mix.items()
+                    if str(k).strip()
+                    and not isinstance(v, bool)
+                    and isinstance(v, (int, float))
+                }
+                if isinstance(raw_mix, dict)
+                else {}
+            ),
+            variant_parents=(
+                {
+                    str(k).strip(): str(v).strip()
+                    for k, v in raw_variants.items()
+                    if str(k).strip() and str(v).strip()
+                }
+                if isinstance(raw_variants, dict)
+                else {}
+            ),
         )

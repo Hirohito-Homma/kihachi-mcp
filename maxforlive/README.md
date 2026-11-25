@@ -4,7 +4,26 @@
 
 ### 配布ファイル
 
-Maxで保存した実物の `KIHACHI Live Device.amxd` と、同じフォルダに置く `kihachi.device.js`・`kihachi.bridge.js` を同梱します。macOSではLiveを終了後、Finderで `scripts/Liveデバイスをインストール.command` を開き、Abletonの **User Libraryフォルダ** を選んでください。導入先を表示して確認を求め、異なる既存ファイルは `.kihachi-backups` に保存してから3ファイルを置きます。Intel Mac / Live 12.4.5の実機で動作確認済みです。Apple Siliconと別のMacでは未検証です。
+配布物は、Max の Freeze 構造（`mx@c` + `dlst`）を用いて `kihachi.device.js` と `kihachi.bridge.js` を内包した **`KIHACHI Live Device.amxd` 単体** です。「すべて集めて保存」等でプロジェクト内に `.amxd` 単体のみがコピーされた状態でも、外部 `.js` ファイルなしでブリッジ（UDP 17771）が起動します。
+
+macOS では Live を終了後、Finder で `scripts/Liveデバイスをインストール.command` を開き、Ableton の **User Library フォルダ**（または対象 Project フォルダ）を選んでください。導入先を表示して確認を求め、異なる既存 `.amxd` や旧バージョンの外部 `.js` が残っている場合は `.kihachi-backups` に退避してから最新の `KIHACHI Live Device.amxd` 単体を配置します。Intel Mac / Live 12.4.5 の実機で動作確認済みです。Apple Silicon と別の Mac では未検証です。
+
+### JS 正本の編集と `.amxd` への内包手順
+
+開発の正本は引き続き `maxforlive/kihachi.device.js` と `maxforlive/kihachi.bridge.js` です。`.js` ファイルを編集した後は、必ず次のコマンドで `.amxd` へ再内包し、整合性チェックとテストを実行してから配布してください。
+
+```bash
+uv run python scripts/build_amxd.py
+uv run python scripts/build_amxd.py --check
+uv run pytest tests/test_maxforlive_contract.py
+```
+
+再ビルド後、`scripts/Liveデバイスをインストール.command` を使って User Library と対象プロジェクト（例: `KIHACHI_TEST049 Project`）の両方へ反映します。
+
+```bash
+bash scripts/Liveデバイスをインストール.command --library "/Volumes/NO NAME/User Library/User Library" --yes
+bash scripts/Liveデバイスをインストール.command --library "/Volumes/NO NAME/Live14.3.５b/KIHACHI_TEST049 Project" --yes
+```
 
 パッチの編集・再構築が必要な開発者向け手順は下に残します。通信契約は [docs/MAXFORLIVE.md](../docs/MAXFORLIVE.md) を参照してください。
 

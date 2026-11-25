@@ -17,6 +17,7 @@ from kihachi_mcp.knowledge.part_sounds import (
     element_plugin_spec,
 )
 from kihachi_mcp.knowledge.sound_recipes import DeviceRecipe, recipe_for, tuned
+from kihachi_mcp.knowledge.vital_macros import estimate_vital_macros
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_LOCATOR,
     OP_CREATE_MIDI_TRACK,
@@ -1108,7 +1109,7 @@ class _Builder:
                 )
                 continue
             if plugin_spec is not None:
-                self._plan_plugin_device(track, plugin_spec)
+                self._plan_plugin_device(track, plugin_spec, source_part)
                 continue
             override = element_instrument_recipe(source_part, elements)
             if override is not None:
@@ -1164,12 +1165,40 @@ class _Builder:
         self,
         track: dict[str, Any],
         plugin_spec: live_device_catalog.PluginDeviceSpec,
+        source_part: str = "",
     ) -> None:
-        """外部プラグイン（または .adv プリセット）のロードとパラメータ設定を計画する。"""
+        """外部プラグイン（または .adv / .vstpreset プリセット）のロードとパラメータ設定を計画する。"""
+        effective_part = source_part or track["part"]
+        auto_estimate = _resolve_vital_auto_macros(
+            effective_part,
+            plugin_spec,
+            getattr(self._candidate, "elements", None),
+            getattr(self._candidate, "brief", None),
+        )
+        merged_params: list[tuple[str, float]] = []
+        if auto_estimate is not None:
+            explicit_map = dict(plugin_spec.params)
+            for macro_name, macro_val in auto_estimate["values"].items():
+                merged_params.append(
+                    (macro_name, float(explicit_map.get(macro_name, macro_val)))
+                )
+            for p_name, p_val in plugin_spec.params:
+                if p_name not in auto_estimate["values"]:
+                    merged_params.append((p_name, p_val))
+            summary = " / ".join(
+                f"{k}={v:.3f}" for k, v in merged_params if k in auto_estimate["values"]
+            )
+            self._warnings.append(
+                f"{track['name']} の Vital プリセット '{plugin_spec.name}' に "
+                f"Macro 1〜4 を自動推定します（{summary}）"
+            )
+        else:
+            merged_params = list(plugin_spec.params)
+
         if (
             plugin_spec.source == live_device_catalog.PLUGIN_SOURCE_RAW
             and plugin_spec.name.strip().lower() in _RAW_UNEXPANDED_PLUGINS
-            and any(p_name.strip().lower() != "device on" for p_name, _ in plugin_spec.params)
+            and any(p_name.strip().lower() != "device on" for p_name, _ in merged_params)
         ):
             self._warnings.append(
                 f"{track['name']} の '{plugin_spec.name}' は source='raw' ロード時に "
@@ -1202,7 +1231,7 @@ class _Builder:
                 },
             )
         )
-        for param_name, param_value in plugin_spec.params:
+        for param_name, param_value in merged_params:
             self._operations.append(
                 LiveMutationOperation(
                     operation_id=self._next_id(OP_SET_PLUGIN_PARAM),
@@ -1487,6 +1516,55 @@ class _Builder:
     def _next_id(self, op: str) -> str:
         self._sequence += 1
         return f"{self._sequence:03d}-{op}"
+
+
+_VITAL_ELEMENT_ALIASES: dict[str, str] = {
+    "stab": "chords",
+    "lead": "melody",
+    "perc": "percussion",
+}
+
+
+def _part_element_dict(
+    part: str, elements: dict[str, dict[str, Any]] | None
+) -> dict[str, Any]:
+    if not isinstance(elements, dict):
+        return {}
+    key = part.strip().lower()
+    spec = elements.get(key)
+    if not isinstance(spec, dict):
+        alias = _VITAL_ELEMENT_ALIASES.get(key)
+        spec = elements.get(alias) if alias else None
+    return dict(spec) if isinstance(spec, dict) else {}
+
+
+def _resolve_vital_auto_macros(
+    part: str,
+    plugin_spec: live_device_catalog.PluginDeviceSpec,
+    elements: dict[str, dict[str, Any]] | None,
+    brief: Any,
+) -> dict[str, Any] | None:
+    """Vital プリセット指定時に Macro 1〜4 自動推定を解決する。"""
+    part_spec = _part_element_dict(part, elements)
+    explicit_flag = part_spec.get("auto_macros")
+    if explicit_flag is False:
+        return None
+    is_vital_preset = (
+        plugin_spec.source == live_device_catalog.PLUGIN_SOURCE_PRESET
+        and "vital" in plugin_spec.name.strip().lower()
+    )
+    if explicit_flag is not True and not is_vital_preset:
+        return None
+    genre = str(brief.genre.value) if brief is not None else ""
+    mood = str(brief.mood.value) if brief is not None else ""
+    tone = tone_steps(brief) if brief is not None else {}
+    return estimate_vital_macros(
+        genre=genre,
+        part=part,
+        mood=mood,
+        tone=tone,
+        elements=part_spec,
+    )
 
 
 def tone_steps(brief: Any) -> dict[str, int]:

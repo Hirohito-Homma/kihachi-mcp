@@ -591,6 +591,69 @@
         </div>
         <div id="vital-params-summary"></div>
         <div id="vital-params-result"></div>
+
+        <hr style="margin: 18px 0; border: none; border-top: 1px solid var(--line);">
+        <h3>Macro 1〜4 一括推定（ジャンル・パート等から自動提案）</h3>
+        <p class="sub">Macro 1=Brightness / Macro 2=Length / Macro 3=Thickness / Macro 4=Grit の統一規約で値を推定します。未公開のMacroは安全にスキップします。</p>
+        <div class="grid">
+          <label>ジャンル
+            <select id="vital-est-genre">
+              <option value="mutation_funk">mutation_funk</option>
+              <option value="dub_techno">dub_techno</option>
+              <option value="house">house</option>
+              <option value="techno">techno</option>
+              <option value="funk">funk</option>
+              <option value="ambient">ambient</option>
+              <option value="synthwave">synthwave</option>
+              <option value="dnb">dnb</option>
+            </select>
+          </label>
+          <label>パート
+            <select id="vital-est-part">
+              <option value="Bass">Bass</option>
+              <option value="Lead">Lead</option>
+              <option value="Pad">Pad</option>
+              <option value="Stab">Stab</option>
+              <option value="Arp">Arp</option>
+              <option value="Guitar">Guitar</option>
+              <option value="Horn">Horn</option>
+              <option value="Vocal">Vocal</option>
+              <option value="Sub">Sub</option>
+            </select>
+          </label>
+          <label>ムード（任意）
+            <input id="vital-est-mood" type="text" placeholder="例: dark / 暗い / aggressive / warm">
+          </label>
+          <label>要素 elements（任意）
+            <input id="vital-est-elements" type="text" placeholder='例: slap, ghost_notes または {"slap": true}'>
+          </label>
+          <label>Tone: 明るさ（-2〜+2）
+            <select id="vital-est-tone-brightness">
+              <option value="-2">-2</option><option value="-1">-1</option><option value="0" selected>0</option><option value="1">+1</option><option value="2">+2</option>
+            </select>
+          </label>
+          <label>Tone: 長さ（-2〜+2）
+            <select id="vital-est-tone-length">
+              <option value="-2">-2</option><option value="-1">-1</option><option value="0" selected>0</option><option value="1">+1</option><option value="2">+2</option>
+            </select>
+          </label>
+          <label>Tone: 厚み（-2〜+2）
+            <select id="vital-est-tone-thickness">
+              <option value="-2">-2</option><option value="-1">-1</option><option value="0" selected>0</option><option value="1">+1</option><option value="2">+2</option>
+            </select>
+          </label>
+          <label>Tone: 歪み・アタック（-2〜+2）
+            <select id="vital-est-tone-grit">
+              <option value="-2">-2</option><option value="-1">-1</option><option value="0" selected>0</option><option value="1">+1</option><option value="2">+2</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="vital-est-preview" class="secondary" type="button">Macro 1〜4 を推定プレビュー</button>
+          <button id="vital-est-apply" type="button" disabled>この推定値でVitalを一括変更</button>
+        </div>
+        <div id="vital-est-summary"></div>
+        <div id="vital-est-result"></div>
       </div>
     </section>
 
@@ -747,7 +810,8 @@
       applying: false,
       masterRetune: false,
       vitalDevices: [],
-      vitalChangeId: ""
+      vitalChangeId: "",
+      vitalEstimateChangeId: ""
     };
     let pendingRevision = null;
     const $ = (id) => document.getElementById(id);
@@ -2079,6 +2143,31 @@
       return (device?.parameters || []).find((row) => row.name === name) || null;
     }
 
+    function invalidateVitalEstimatePreview() {
+      state.vitalEstimateChangeId = "";
+      $("vital-est-apply").disabled = true;
+      $("vital-est-summary").innerHTML = "";
+      $("vital-est-result").innerHTML = "";
+    }
+
+    function parseVitalElementsInput(text) {
+      const trimmed = String(text || "").trim();
+      if (!trimmed) return {};
+      if (trimmed.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return null;
+        }
+      }
+      const out = {};
+      for (const token of trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)) {
+        out[token] = true;
+      }
+      return out;
+    }
+
     function invalidateVitalPreview() {
       state.vitalChangeId = "";
       $("vital-params-apply").disabled = true;
@@ -2114,6 +2203,7 @@
     function renderVitalDevice() {
       const device = selectedVitalDevice();
       invalidateVitalPreview();
+      invalidateVitalEstimatePreview();
       if (!device) {
         $("vital-params-controls").classList.add("hidden");
         return;
@@ -2124,6 +2214,7 @@
       $("vital-params-guidance").textContent = device.frozen
         ? "このトラックはフリーズ中です。解除してから操作してください。"
         : (device.guidance || "");
+      $("vital-est-preview").disabled = !!device.frozen;
       renderVitalParameterControl();
     }
 
@@ -2219,6 +2310,98 @@
       $("vital-params-result").innerHTML = `
         <p>結果: <b>${escapeHtml(receipt.status || "未実行")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}</p>
         <p>読み戻し: ${escapeHtml(observed.parameter_name || "")} = ${escapeHtml(observed.item ?? observed.normalized_value ?? "不明")}</p>
+        ${(receipt.mismatches || []).map((row) => `<p class="warn">${escapeHtml(row.field_name)}: 計画 ${escapeHtml(JSON.stringify(row.expected))} / Live ${escapeHtml(JSON.stringify(row.observed))}</p>`).join("")}
+      `;
+    };
+
+    for (const id of [
+      "vital-est-genre",
+      "vital-est-part",
+      "vital-est-mood",
+      "vital-est-elements",
+      "vital-est-tone-brightness",
+      "vital-est-tone-length",
+      "vital-est-tone-thickness",
+      "vital-est-tone-grit"
+    ]) {
+      $(id).addEventListener("input", invalidateVitalEstimatePreview);
+      $(id).addEventListener("change", invalidateVitalEstimatePreview);
+    }
+
+    $("vital-est-preview").onclick = async () => {
+      const device = selectedVitalDevice();
+      if (!device) return;
+      const elements = parseVitalElementsInput($("vital-est-elements").value);
+      if (elements === null) {
+        $("vital-est-summary").innerHTML = '<p class="bad">elements のJSON形式が正しくありません。</p>';
+        return;
+      }
+      const body = {
+        track_index: device.track_index,
+        device_index: device.device_index,
+        genre: $("vital-est-genre").value,
+        part: $("vital-est-part").value,
+        mood: $("vital-est-mood").value.trim(),
+        tone: {
+          brightness: Number($("vital-est-tone-brightness").value),
+          length: Number($("vital-est-tone-length").value),
+          thickness: Number($("vital-est-tone-thickness").value),
+          grit: Number($("vital-est-tone-grit").value)
+        },
+        elements
+      };
+      $("vital-est-preview").disabled = true;
+      $("vital-est-result").innerHTML = "";
+      const result = await getJson("/api/ableton/vital-parameters/estimate-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      $("vital-est-preview").disabled = !!device.frozen;
+      const reasons = (result.estimate?.reasons || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+      const warnings = (result.warnings || []).map((line) => `<p class="warn">${escapeHtml(line)}</p>`).join("");
+      if (!result.ok) {
+        state.vitalEstimateChangeId = "";
+        $("vital-est-apply").disabled = true;
+        $("vital-est-summary").innerHTML = `
+          <p class="bad">${escapeHtml(result.error || "推定プレビューを作成できません")}</p>
+          ${warnings}
+          ${reasons ? `<p class="sub">推定根拠:</p><ul>${reasons}</ul>` : ""}
+        `;
+        return;
+      }
+      state.vitalEstimateChangeId = result.change_id;
+      const rows = (result.changes || []).map((row) =>
+        `<tr><td>${escapeHtml(row.parameter_name)}</td><td>${escapeHtml(row.role || "")}</td><td>${Number(row.current_value).toFixed(3)}</td><td><b>${Number(row.target_value).toFixed(3)}</b></td></tr>`
+      ).join("");
+      $("vital-est-summary").innerHTML = `
+        <p><b>${escapeHtml(result.track_name)} / Vital #${result.device_index}</b>（${(result.changes || []).length}件を変更）</p>
+        <table><thead><tr><th>Macro</th><th>役割</th><th>現在値</th><th>推定値</th></tr></thead><tbody>${rows}</tbody></table>
+        ${warnings}
+        ${reasons ? `<p class="sub">推定根拠:</p><ul>${reasons}</ul>` : ""}
+        <p class="sub">これはプレビューです。Liveはまだ変更していません。</p>
+      `;
+      $("vital-est-apply").disabled = false;
+    };
+
+    $("vital-est-apply").onclick = async () => {
+      if (!state.vitalEstimateChangeId) return;
+      $("vital-est-apply").disabled = true;
+      $("vital-est-result").innerHTML = "<p>Vitalへ一括送信し、読み戻しています…</p>";
+      const result = await getJson("/api/ableton/vital-parameters/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ change_id: state.vitalEstimateChangeId, confirmed: true })
+      });
+      state.vitalEstimateChangeId = "";
+      const receipt = result.receipt || {};
+      const readbackRows = (receipt.readback || []).map((entry) => {
+        const obs = entry.observed || {};
+        return `<li>${escapeHtml(obs.parameter_name || "")} = ${escapeHtml(obs.item ?? obs.normalized_value ?? "不明")}</li>`;
+      }).join("");
+      $("vital-est-result").innerHTML = `
+        <p>結果: <b>${escapeHtml(receipt.status || "未実行")}</b>${result.error ? ` <span class="bad">${escapeHtml(result.error)}</span>` : ""}</p>
+        ${readbackRows ? `<ul>${readbackRows}</ul>` : ""}
         ${(receipt.mismatches || []).map((row) => `<p class="warn">${escapeHtml(row.field_name)}: 計画 ${escapeHtml(JSON.stringify(row.expected))} / Live ${escapeHtml(JSON.stringify(row.observed))}</p>`).join("")}
       `;
     };

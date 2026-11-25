@@ -359,3 +359,89 @@ def test_plugin_raw_vital_with_params_emits_preset_recommendation_warning(
     preview = runtime.apply_preview(cid)
     assert preview["ok"] is True
     assert any("source='preset'" in w and "Vital" in w for w in preview["warnings"])
+
+
+def test_vital_preset_auto_estimates_macros_and_respects_explicit_override(
+    tmp_path: Path,
+) -> None:
+    """Vital プリセット指定時に Macro 1〜4 が自動推定され、明示 params が優先されること。"""
+    remote = _FakeRemoteScript(
+        polls_before_appear=1,
+        loaded_device_name="Vital",
+        user_library_tree={
+            (): [{"name": "Presets", "is_folder": True, "is_loadable": False}],
+            ("Presets",): [
+                {
+                    "name": "KIHACHI Vital Bass.vstpreset",
+                    "is_folder": False,
+                    "is_loadable": True,
+                }
+            ],
+        },
+    )
+    remote._params = [
+        {"index": 0, "name": "Device On", "value": 1.0, "display_value": "On"},
+        {"index": 1, "name": "Macro 1", "value": 0.0, "display_value": "0.0%"},
+        {"index": 2, "name": "Macro 2", "value": 0.0, "display_value": "0.0%"},
+        {"index": 3, "name": "Macro 3", "value": 0.0, "display_value": "0.0%"},
+        {"index": 4, "name": "Macro 4", "value": 0.0, "display_value": "0.0%"},
+    ]
+    runtime, _ = _studio_with_remote(tmp_path, remote)
+    cid = _make_candidate_with_elements(
+        runtime,
+        {
+            "bass": {
+                "instrument": "plugin",
+                "source": "preset",
+                "name": "KIHACHI Vital Bass.vstpreset",
+                "slap": True,
+                "params": {"Macro 1": 0.25},
+            }
+        },
+    )
+
+    preview = runtime.apply_preview(cid)
+    assert preview["ok"] is True
+    planned_bass = preview["summary"]["planned_devices"]["Bass"]
+    assert planned_bass["device"] == "KIHACHI Vital Bass.vstpreset"
+    assert set(planned_bass["auto_macros"].keys()) == {
+        "Macro 1",
+        "Macro 2",
+        "Macro 3",
+        "Macro 4",
+    }
+    # 明示指定した Macro 1 は 0.25 が優先される
+    assert planned_bass["auto_macros"]["Macro 1"] == 0.25
+    assert any("Macro 1〜4 を自動推定します" in w for w in preview["warnings"])
+
+    result = runtime.apply(cid, confirmed=True)
+    assert result["ok"] is True
+    assert result["receipt"]["status"] == STATUS_VERIFIED
+    applied_map = {
+        p["param_name"]: p["value"] for p in result["plugin_devices"][0]["params"]
+    }
+    assert applied_map == planned_bass["auto_macros"]
+
+
+def test_vital_preset_auto_macros_can_be_disabled_explicitly(tmp_path: Path) -> None:
+    """auto_macros=False 指定時は Vital プリセットでも Macro 自動補完しないこと。"""
+    remote = _FakeRemoteScript(loaded_device_name="Vital")
+    runtime, _ = _studio_with_remote(tmp_path, remote)
+    cid = _make_candidate_with_elements(
+        runtime,
+        {
+            "pad": {
+                "instrument": "plugin",
+                "source": "preset",
+                "name": "KIHACHI Vital Pad.vstpreset",
+                "auto_macros": False,
+            }
+        },
+    )
+    preview = runtime.apply_preview(cid)
+    assert preview["ok"] is True
+    param_ops = [
+        op for op in preview["plan"]["operations"] if op["op"] == OP_SET_PLUGIN_PARAM
+    ]
+    assert param_ops == []
+    assert "auto_macros" not in preview["summary"]["planned_devices"]["Pad"]

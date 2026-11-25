@@ -1102,6 +1102,29 @@ def _workflow_post(
                 item=body.get("item"),
             )
         )
+    elif path == "/api/ableton/vital-parameters/estimate-preview":
+        try:
+            track_index = int(body["track_index"])
+            device_index = int(body["device_index"])
+        except (KeyError, TypeError, ValueError):
+            handler._send_json(
+                {"ok": False, "error": "トラックとデバイスを選択してください"},
+                400,
+            )
+            return True
+        raw_tone = body.get("tone")
+        raw_elements = body.get("elements")
+        handler._send_json(
+            runtime.preview_vital_macro_estimate(
+                track_index,
+                device_index,
+                genre=str(body.get("genre") or ""),
+                part=str(body.get("part") or ""),
+                mood=str(body.get("mood") or ""),
+                tone=raw_tone if isinstance(raw_tone, dict) else None,
+                elements=raw_elements if isinstance(raw_elements, dict) else None,
+            )
+        )
     elif path == "/api/ableton/vital-parameters/apply":
         handler._send_json(
             runtime.apply_vital_parameter(

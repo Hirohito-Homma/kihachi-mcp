@@ -423,6 +423,172 @@ def test_vital_preview_rejects_duplicate_parameter_names(tmp_path: Path) -> None
     assert "同名" in result["error"]
 
 
+def test_vital_macro_estimate_preview_and_apply_flow(tmp_path: Path) -> None:
+    macro_device = {
+        "class_name": "PluginDevice",
+        "parameters": [
+            {
+                "name": "Device On",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 1.0,
+                "is_quantized": True,
+                "value_items": ["Off", "On"],
+            },
+            {
+                "name": "Macro 1",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.0,
+                "is_quantized": False,
+                "value_items": [],
+            },
+            {
+                "name": "Macro 2",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.0,
+                "is_quantized": False,
+                "value_items": [],
+            },
+            {
+                "name": "Macro 4",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.0,
+                "is_quantized": False,
+                "value_items": [],
+            },
+        ],
+    }
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": macro_device},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Bass deadbeef"))
+    managed["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+    app = StudioApp(
+        runtime=runtime,
+        reference_library=ReferenceLibrary(tmp_path / "references"),
+        sample_catalog=SampleCatalog(tmp_path / "samples.sqlite3"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(app))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, preview = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/estimate-preview",
+            {
+                "track_index": managed["index"],
+                "device_index": 0,
+                "genre": "mutation_funk",
+                "part": "Bass",
+                "mood": "aggressive",
+                "tone": {"brightness": 1, "grit": 1},
+                "elements": {"slap": True},
+            },
+        )
+        assert status == 200
+        assert preview["ok"] is True
+        assert preview["applied_to_live"] is False
+        assert preview["skipped_unexposed"] == ["Macro 3"]
+        assert [row["parameter_name"] for row in preview["changes"]] == [
+            "Macro 1",
+            "Macro 2",
+            "Macro 4",
+        ]
+        assert "device_parameters" not in managed
+
+        # 未承認では適用しない
+        _status, refused = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": False},
+        )
+        assert refused["ok"] is False
+        assert "device_parameters" not in managed
+
+        # 明示承認で一括適用＆全対象 readback 一致
+        _status, applied = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": True},
+        )
+        assert applied["ok"] is True
+        assert applied["receipt"]["status"] == "verified"
+        assert len(applied["parameters"]) == 3
+        for row in preview["changes"]:
+            name = row["parameter_name"]
+            assert managed["device_parameters"]["0"][name] == row["target_value"]
+
+        # 同一 change_id の再実行は拒否
+        _status, replayed = _call(
+            port,
+            "POST",
+            "/api/ableton/vital-parameters/apply",
+            {"change_id": preview["change_id"], "confirmed": True},
+        )
+        assert replayed["ok"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_vital_macro_batch_apply_refuses_when_one_macro_changed_after_preview(
+    tmp_path: Path,
+) -> None:
+    macro_device = {
+        "class_name": "PluginDevice",
+        "parameters": [
+            {
+                "name": "Macro 1",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.1,
+                "is_quantized": False,
+                "value_items": [],
+            },
+            {
+                "name": "Macro 2",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.2,
+                "is_quantized": False,
+                "value_items": [],
+            },
+        ],
+    }
+    live = FakeLiveSet(
+        live_version="12.4.3",
+        device_parameters={"Vital": macro_device},
+    )
+    managed = live.add_track(managed_track_name("KIHACHI Lead deadbeef"))
+    managed["device_names"] = ["Vital"]
+    runtime, _live = _studio(tmp_path, live=live)
+
+    preview = runtime.preview_vital_macro_estimate(
+        managed["index"],
+        0,
+        genre="dub_techno",
+        part="Lead",
+    )
+    assert preview["ok"] is True
+    # プレビュー後に Macro 2 のみ手動変更された場合
+    managed["device_parameters"] = {"0": {"Macro 2": 0.9}}
+
+    result = runtime.apply_vital_parameter(preview["change_id"], confirmed=True)
+    assert result["ok"] is False
+    assert "プレビュー後" in result["error"]
+    assert "Macro 1" not in managed["device_parameters"]["0"]
+
+
 def test_sample_replacement_rejects_unlisted_bundled_asset(studio) -> None:
     port, _runtime, _live = studio
     status, response = _call(

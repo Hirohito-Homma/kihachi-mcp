@@ -18,6 +18,7 @@ from kihachi_mcp.knowledge.part_sounds import (
     SIDECHAIN_DUCKING,
 )
 from kihachi_mcp.knowledge.sound_recipes import recipe_for
+from kihachi_mcp.knowledge.vital_macros import VITAL_MACRO_ROLES, estimate_vital_macros
 from kihachi_mcp.models.live_contract import (
     OP_CREATE_MIDI_TRACK,
     canonical_hash,
@@ -105,6 +106,7 @@ from kihachi_mcp.services.studio_workflow import (
 )
 from kihachi_mcp.services.vital_parameters import (
     VITAL_CONFIGURE_GUIDANCE,
+    create_vital_batch_plan,
     create_vital_parameter_plan,
     is_vital_device,
     parameter_signature,
@@ -2918,6 +2920,122 @@ class StudioRuntime:
             "applied_to_live": False,
         }
 
+    def preview_vital_macro_estimate(
+        self,
+        track_index: int,
+        device_index: int,
+        *,
+        genre: str = "",
+        part: str = "",
+        mood: str = "",
+        tone: dict[str, Any] | None = None,
+        elements: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """ジャンル・パート等から Macro 1〜4 を推定し、一括変更の保留Planを作成する。"""
+        try:
+            snapshot = self._coverage_inspector.snapshot()
+        except LiveTransportError as exc:
+            return {
+                "ok": False,
+                "error": f"{exc.code}: {exc.message}",
+                "error_code": exc.code,
+            }
+        except LiveVersionUnsupportedError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        track = next(
+            (row for row in snapshot.tracks if row.index == track_index), None
+        )
+        if track is None or not track.is_managed:
+            return {
+                "ok": False,
+                "error": "KIHACHIが作成したトラック上のVitalだけ操作できます",
+            }
+        if not 0 <= device_index < len(track.device_names):
+            return {"ok": False, "error": "指定したデバイスがありません"}
+        device_name = track.device_names[device_index]
+        if not is_vital_device(device_name):
+            return {"ok": False, "error": "指定位置のデバイスがVitalではありません"}
+        try:
+            reply = self._coverage_inspector.device_parameters(
+                device_index, track.index
+            )
+        except (LiveTransportError, LiveVersionUnsupportedError) as exc:
+            return {"ok": False, "error": f"Vitalの現在値を取得できません: {exc}"}
+        if str(reply.get("device_name") or "") != device_name:
+            return {
+                "ok": False,
+                "error": "Vitalの位置が読み取り中に変わりました。もう一度取得してください",
+            }
+
+        estimate = estimate_vital_macros(
+            genre=genre,
+            part=part,
+            mood=mood,
+            tone=tone,
+            elements=elements,
+        )
+        raw_parameters = [
+            row for row in reply.get("parameters") or [] if isinstance(row, dict)
+        ]
+        plan, details = create_vital_batch_plan(
+            snapshot,
+            track_index=track.index,
+            device_index=device_index,
+            device_name=device_name,
+            parameters=raw_parameters,
+            target_values=estimate["values"],
+        )
+        if plan.status == "blocked":
+            return {
+                "ok": False,
+                "error": (
+                    plan.conflicts[0].detail
+                    if plan.conflicts
+                    else "パラメータ一括変更を計画できません"
+                ),
+                "estimate": estimate,
+                "skipped_unexposed": details["skipped_unexposed"],
+                "skipped_unchanged": details["skipped_unchanged"],
+                "warnings": list(plan.warnings),
+                "plan": plan.to_dict(),
+                "applied_to_live": False,
+            }
+
+        pending = {
+            "plan": plan,
+            "track_index": track.index,
+            "device_index": device_index,
+            "parameter_signatures": {
+                item["parameter_name"]: item["parameter_signature"]
+                for item in details["changes"]
+            },
+        }
+        self._pending_vital_parameter_plans[plan.plan_hash] = pending
+        return {
+            "ok": True,
+            "change_id": plan.plan_hash,
+            "track_index": track.index,
+            "track_name": track.name,
+            "device_index": device_index,
+            "device_name": device_name,
+            "estimate": estimate,
+            "changes": [
+                {
+                    "parameter_name": item["parameter_name"],
+                    "role": VITAL_MACRO_ROLES.get(item["parameter_name"], ""),
+                    "current_value": item["current_value"],
+                    "target_value": item["target_value"],
+                }
+                for item in details["changes"]
+            ],
+            "skipped_unexposed": details["skipped_unexposed"],
+            "skipped_unchanged": details["skipped_unchanged"],
+            "warnings": list(plan.warnings),
+            "plan": plan.to_dict(),
+            "applied_to_live": False,
+        }
+
     def apply_vital_parameter(
         self, change_id: str, confirmed: bool = False
     ) -> dict[str, Any]:
@@ -2950,28 +3068,37 @@ class StudioRuntime:
                     "ok": False,
                     "error": "プレビュー後に対象デバイスがVitalではなくなりました。もう一度確認してください",
                 }
-            matching_parameters = [
-                row
-                for row in reply.get("parameters") or []
-                if isinstance(row, dict)
-                and str(row.get("name") or "") == pending["parameter_name"]
-            ]
-            parameter = (
-                matching_parameters[0] if len(matching_parameters) == 1 else None
+            expected_signatures: dict[str, str] = dict(
+                pending.get("parameter_signatures") or {}
             )
-            try:
-                unchanged = (
-                    parameter is not None
-                    and parameter_signature(parameter)
-                    == pending["parameter_signature"]
-                )
-            except ValueError:
-                unchanged = False
-            if not unchanged:
-                return {
-                    "ok": False,
-                    "error": "プレビュー後にVitalの値または公開設定が変わりました。もう一度確認してください",
+            if not expected_signatures and pending.get("parameter_name"):
+                expected_signatures = {
+                    str(pending["parameter_name"]): str(pending["parameter_signature"])
                 }
+            raw_params = [
+                row for row in reply.get("parameters") or [] if isinstance(row, dict)
+            ]
+            for param_name, expected_sig in expected_signatures.items():
+                matching_parameters = [
+                    row
+                    for row in raw_params
+                    if str(row.get("name") or "") == param_name
+                ]
+                parameter = (
+                    matching_parameters[0] if len(matching_parameters) == 1 else None
+                )
+                try:
+                    unchanged = (
+                        parameter is not None
+                        and parameter_signature(parameter) == expected_sig
+                    )
+                except ValueError:
+                    unchanged = False
+                if not unchanged:
+                    return {
+                        "ok": False,
+                        "error": "プレビュー後にVitalの値または公開設定が変わりました。もう一度確認してください",
+                    }
             plan = pending["plan"]
             try:
                 token = self._gate.approve(plan)
@@ -2980,28 +3107,34 @@ class StudioRuntime:
             receipt = self._sample_executor.execute(
                 plan, approved=True, approval_token=token
             )
-            fresh_parameter: dict[str, Any] | None = None
+            fresh_parameters: list[dict[str, Any]] = []
             try:
                 fresh = self._coverage_inspector.device_parameters(
                     int(pending["device_index"]), int(pending["track_index"])
                 )
-                observed = next(
-                    (
-                        row
-                        for row in fresh.get("parameters") or []
-                        if isinstance(row, dict)
-                        and str(row.get("name") or "") == pending["parameter_name"]
-                    ),
-                    None,
-                )
-                if observed is not None:
-                    fresh_parameter = parameter_view(observed)
+                fresh_rows = [
+                    row
+                    for row in fresh.get("parameters") or []
+                    if isinstance(row, dict)
+                ]
+                for param_name in expected_signatures:
+                    observed = next(
+                        (
+                            row
+                            for row in fresh_rows
+                            if str(row.get("name") or "") == param_name
+                        ),
+                        None,
+                    )
+                    if observed is not None:
+                        fresh_parameters.append(parameter_view(observed))
             except (LiveTransportError, LiveVersionUnsupportedError, ValueError):
-                fresh_parameter = None
+                fresh_parameters = []
             return {
                 "ok": receipt.status == "verified",
                 "receipt": receipt.to_dict(),
-                "parameter": fresh_parameter,
+                "parameter": fresh_parameters[0] if len(fresh_parameters) == 1 else None,
+                "parameters": fresh_parameters,
                 "partial": receipt.status == "partially_applied",
                 "musical_quality_claimed": False,
             }
@@ -4119,7 +4252,12 @@ def _notes_from_plan(plan: Any) -> list[list[dict[str, Any]]]:
 def _planned_devices_summary(candidate: MidiCandidate, plan: Any) -> dict[str, dict[str, Any]]:
     """適用プランに含まれるパート別デバイスと elements プロファイルをまとめる。"""
     from kihachi_mcp.knowledge.part_sounds import element_instrument_recipe
-    from kihachi_mcp.models.live_contract import OP_LOAD_LIVE_DEVICE, OP_LOAD_PLUGIN
+    from kihachi_mcp.knowledge.vital_macros import VITAL_MACRO_NAMES
+    from kihachi_mcp.models.live_contract import (
+        OP_LOAD_LIVE_DEVICE,
+        OP_LOAD_PLUGIN,
+        OP_SET_PLUGIN_PARAM,
+    )
 
     index_to_part: dict[int, str] = {}
     for operation in plan.operations:
@@ -4143,6 +4281,21 @@ def _planned_devices_summary(candidate: MidiCandidate, plan: Any) -> dict[str, d
                 "source": str(operation.arguments.get("source") or ""),
                 "plugin": True,
             }
+            continue
+        if operation.op == OP_SET_PLUGIN_PARAM:
+            track_index = operation.target.get("track_index")
+            part = index_to_part.get(track_index) if isinstance(track_index, int) else None
+            param_name = str(operation.arguments.get("param_name") or "")
+            if (
+                part
+                and part in devices
+                and devices[part].get("plugin") is True
+                and "vital" in str(devices[part].get("device") or "").lower()
+                and param_name in VITAL_MACRO_NAMES
+            ):
+                devices[part].setdefault("auto_macros", {})[param_name] = operation.arguments.get(
+                    "value"
+                )
             continue
         if operation.op != OP_LOAD_LIVE_DEVICE:
             continue
